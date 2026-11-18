@@ -133,9 +133,8 @@ public:
         std::function<void()> clearNoteDraft;
         std::function<DrawNoteCommitResult(const DrawNoteEditInput&, uint64_t, juce::String)> commitDrawNote;
         std::function<void(const DrawNoteCommitResult&, const std::vector<Note>&, int)> applyDrawNoteResult;
-        // 第三参 affectedRange 来自 ToolHandler 编辑时计算的精确范围，用于
-        // undo/redo 时只重渲染该范围（而不是 segments 列表反推的并集 = 全长）。
-        std::function<ContentCommitSnapshot(const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)> commitNotesAndSegments;
+        // Uses the revision captured by beginNoteDraft for note-based correction edits.
+        std::function<bool(uint64_t, const std::vector<Note>&, F0FrameRange)> commitNoteCorrectionDraft;
         std::function<bool(uint64_t, int, NoteResizeEdge, double, double,
                            const std::vector<PitchCorrectionSegment>&, F0FrameRange, juce::String)>
             commitNoteResize;

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlOriginAction.h"
 
-#include "Content/ContentEditCommands.h"
-#include "Utils/AppLogger.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
 #include "Utils/PitchShiftEditAction.h"
@@ -11,114 +9,71 @@
 #include "Utils/TimeGridEditAction.h"
 #include "Utils/VolumeEnvelopeEditAction.h"
 
+#include <juce_events/juce_events.h>
 #include <algorithm>
+#include <utility>
 
 namespace OpenTune {
 
 // ---- ControlOriginAction ----------------------------------------------------------------------------
 
-ControlOriginAction::ControlOriginAction(std::shared_ptr<ControlHistory> history, std::string undoId,
-                                         juce::String description, std::vector<Inner> inner)
-    : history_(std::move(history))
-    , undoId_(std::move(undoId))
+ControlOriginAction::ControlOriginAction(std::string undoId, juce::String description, std::vector<Inner> inner)
+    : undoId_(std::move(undoId))
     , description_(std::move(description))
     , inner_(std::move(inner))
 {
-    if (history_ != nullptr) {
-        history_->add(this);
-    }
-}
-
-ControlOriginAction::~ControlOriginAction()
-{
-    if (history_ != nullptr)
-        history_->remove(this);
+    jassert(std::all_of(inner_.begin(), inner_.end(), [](const Inner& inner) { return inner.action != nullptr; }));
 }
 
 void ControlOriginAction::undo()
 {
-    bool executed = false;
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
-        executed = apply(*it, true) || executed;
-    lastStepTookEffect_ = executed;
+        it->action->undo();
 }
 
 void ControlOriginAction::redo()
 {
-    bool executed = false;
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     for (auto& inner : inner_)
-        executed = apply(inner, false) || executed;
-    lastStepTookEffect_ = executed;
+        inner.action->redo();
+}
+
+bool ControlOriginAction::replayStructure(UndoReplayState& state, bool undo) const
+{
+    auto candidate = state;
+    if (undo) {
+        for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
+            if (!it->action->replayStructure(candidate, true))
+                return false;
+    } else {
+        for (const auto& inner : inner_)
+            if (!inner.action->replayStructure(candidate, false))
+                return false;
+    }
+    state = std::move(candidate);
+    return true;
 }
 
 bool ControlOriginAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
 {
     return std::any_of(inner_.begin(), inner_.end(), [trackIdentity, placementId](const Inner& inner) {
-        return inner.action != nullptr && inner.action->retainsRetiredPlacement(trackIdentity, placementId);
+        return inner.action->retainsRetiredPlacement(trackIdentity, placementId);
     });
 }
 
 bool ControlOriginAction::retainsRetiredContent(ContentKey key) const
 {
     return std::any_of(inner_.begin(), inner_.end(), [key](const Inner& inner) {
-        return inner.action != nullptr && inner.action->retainsRetiredContent(key);
-    });
-}
-
-bool ControlOriginAction::dependsOnTrackIdentity(uint64_t identity) const
-{
-    return std::any_of(inner_.begin(), inner_.end(), [identity](const Inner& inner) {
-        return inner.action != nullptr && inner.action->dependsOnTrackIdentity(identity);
-    });
-}
-
-bool ControlOriginAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return std::any_of(inner_.begin(), inner_.end(), [trackIdentity, placementId](const Inner& inner) {
-        return inner.action != nullptr && inner.action->dependsOnPlacement(trackIdentity, placementId);
+        return inner.action->retainsRetiredContent(key);
     });
 }
 
 bool ControlOriginAction::dependsOnContent(ContentKey key) const
 {
     return std::any_of(inner_.begin(), inner_.end(), [key](const Inner& inner) {
-        return inner.content == key
-            || (inner.action != nullptr && inner.action->dependsOnContent(key));
+        return inner.action->dependsOnContent(key);
     });
-}
-
-bool ControlOriginAction::dependenciesExist() const
-{
-    return std::all_of(inner_.begin(), inner_.end(), [](const Inner& inner) {
-        return inner.action != nullptr && inner.action->dependenciesExist();
-    });
-}
-
-bool ControlOriginAction::apply(Inner& inner, bool undo)
-{
-    if (inner.action == nullptr || masked(inner.content, inner.aspect))
-        return false;
-    if (inner.aspect == ControlContentAspect::PitchShift && inner.pitchShift && inner.commands != nullptr
-        && masked(inner.content, ControlContentAspect::NotesAndPitch)) {
-        // PitchShiftEditAction would put back the notes it saved; the notes of the content were replaced
-        // since by a change without an undo entry. ContentEditCommands::commitPitchShiftEdit() sets the
-        // settings and scales the current notes, as the pitch-shift dialog does; its new action is not kept.
-        // It applies nothing and returns null when the content has no pitch curve or already has a shift of
-        // the same total cents; this step then changes nothing.
-        const auto applied = inner.commands->commitPitchShiftEdit(inner.content, undo ? inner.pitchShift->first
-                                                                                      : inner.pitchShift->second);
-        if (applied == nullptr) {
-            AppLogger::logNoThrow(juce::String("control API: the ") + (undo ? "undo" : "redo")
-                                  + " of a pitch shift changed nothing (no pitch curve, or the shift is already set)");
-            return false;
-        }
-        return true;
-    }
-    if (undo)
-        inner.action->undo();
-    else
-        inner.action->redo();
-    return true;
 }
 
 std::vector<std::string> ControlOriginAction::innerActionNames() const
@@ -127,31 +82,6 @@ std::vector<std::string> ControlOriginAction::innerActionNames() const
     for (const auto& inner : inner_)
         names.push_back(inner.name);
     return names;
-}
-
-bool ControlOriginAction::unsafe() const
-{
-    return std::any_of(inner_.begin(), inner_.end(), [](const Inner& inner) {
-        return inner.action != nullptr && controlIsUnsafeUndoAction(*inner.action);
-    });
-}
-
-void ControlOriginAction::mask(const ContentKey& content, ControlContentAspect aspect)
-{
-    // A pitch shift's action restores the notes as well, so a change of the notes concerns it too.
-    const bool touches = std::any_of(inner_.begin(), inner_.end(), [&](const Inner& inner) {
-        return inner.content == content
-               && (inner.aspect == aspect
-                   || (aspect == ControlContentAspect::NotesAndPitch && inner.aspect == ControlContentAspect::PitchShift
-                       && inner.pitchShift.has_value()));
-    });
-    if (touches && !masked(content, aspect))
-        masked_.emplace_back(content, aspect);
-}
-
-bool ControlOriginAction::masked(const ContentKey& content, ControlContentAspect aspect) const
-{
-    return std::find(masked_.begin(), masked_.end(), std::make_pair(content, aspect)) != masked_.end();
 }
 
 // ---- ControlHistory ---------------------------------------------------------------------------------
@@ -223,10 +153,8 @@ ControlHistory::Entry ControlHistory::describe(const UndoManager& manager, const
     if (const auto* origin = dynamic_cast<const ControlOriginAction*>(&action)) {
         entry.undoId = origin->undoId();
         entry.control = true;
-        entry.unsafe = origin->unsafe();
         return entry;
     }
-    entry.unsafe = controlIsUnsafeUndoAction(action);
     const auto* known = findUiEntry(action, index);
     if (known != nullptr)
         entry.undoId = known->undoId;
@@ -249,10 +177,8 @@ std::string ControlHistory::assignUndoId(const UndoManager& manager, const UndoA
     return known.undoId;
 }
 
-void ControlHistory::onChangeWithoutEntry(UndoManager& manager, const ContentKey& content, ControlContentAspect aspect)
+void ControlHistory::onChangeWithoutEntry(UndoManager& manager)
 {
-    for (auto* action : actions_)
-        action->mask(content, aspect);
     // UndoManager::clearRedo() (hook): discards the entries after the cursor, as addAction() does.
     manager.clearRedo();
 }
@@ -262,22 +188,7 @@ void ControlHistory::record(UndoManager& manager, std::unique_ptr<ControlOriginA
     manager.addAction(std::move(action));
 }
 
-void ControlHistory::add(ControlOriginAction* action)
-{
-    actions_.push_back(action);
-}
-
-void ControlHistory::remove(ControlOriginAction* action)
-{
-    actions_.erase(std::remove(actions_.begin(), actions_.end(), action), actions_.end());
-}
-
 // ---- Undo actions of OpenTune -------------------------------------------------------------------------
-
-bool controlIsUnsafeUndoAction(const UndoAction& action)
-{
-    return dynamic_cast<const DeletePlacementAction*>(&action) != nullptr;
-}
 
 std::string controlUndoActionName(const UndoAction& action)
 {

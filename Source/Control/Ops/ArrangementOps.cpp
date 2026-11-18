@@ -205,7 +205,7 @@ PushedEntry pushEntry(ControlOpContext& context, const std::shared_ptr<ControlHi
     const auto description = name.value_or(inner.front().action->getDescription());
     pushed.undoId = history->nextUndoId(context.instanceShort());
     pushed.description = description.toStdString();
-    auto action = std::make_unique<ControlOriginAction>(history, pushed.undoId, description, std::move(inner));
+    auto action = std::make_unique<ControlOriginAction>(pushed.undoId, description, std::move(inner));
     pushed.names = action->innerActionNames();
     history->record(context.processor().getUndoManager(), std::move(action));
     return pushed;

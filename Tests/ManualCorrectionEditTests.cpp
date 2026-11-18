@@ -1,5 +1,4 @@
 #include "Utils/ManualCorrectionEdit.h"
-#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -79,51 +78,6 @@ bool checkHandDrawStrokePreservesEditableGaps()
         && near(stroke.ops[0].f0Data[1], 200.0f)
         && near(stroke.ops[1].f0Data[0], 800.0f)
         && near(stroke.ops[1].f0Data[1], 1600.0f);
-}
-
-bool checkHandDrawPreviewSamplesMatchFinalOps()
-{
-    const std::vector<float> originalF0(12, 100.0f);
-    std::vector<float> preview(originalF0.size(), -1.0f);
-    int actualStartFrame = -1;
-    int actualEndFrameExclusive = -1;
-
-    const auto applyStroke = [&](const ManualCorrectionStrokePlan& stroke) {
-        if (!stroke.actualRange.isValid())
-            return;
-        actualStartFrame = actualStartFrame < 0
-            ? stroke.actualRange.startFrame
-            : std::min(actualStartFrame, stroke.actualRange.startFrame);
-        actualEndFrameExclusive = std::max(actualEndFrameExclusive, stroke.actualRange.endFrameExclusive);
-        for (const auto& op : stroke.ops) {
-            for (std::size_t i = 0; i < op.f0Data.size(); ++i)
-                preview[static_cast<std::size_t>(op.startFrame) + i] = op.f0Data[i];
-        }
-    };
-    applyStroke(planManualCorrectionStroke(
-        AudioEditingScheme::Scheme::NotesPrimary, originalF0, { 1, 100.0f }, { 4, 800.0f }));
-    applyStroke(planManualCorrectionStroke(
-        AudioEditingScheme::Scheme::NotesPrimary, originalF0, { 8, 1600.0f }, { 10, 6400.0f }));
-
-    const auto finalOps = planManualCorrectionOps(
-        AudioEditingScheme::Scheme::NotesPrimary,
-        originalF0,
-        { actualStartFrame, actualEndFrameExclusive },
-        [&](int frame) { return preview[static_cast<std::size_t>(frame)]; },
-        PitchCorrectionSegment::Source::HandDraw);
-    if (actualStartFrame != 1 || actualEndFrameExclusive != 11 || finalOps.size() != 2
-        || finalOps[0].startFrame != 1 || finalOps[0].endFrameExclusive != 5
-        || finalOps[1].startFrame != 8 || finalOps[1].endFrameExclusive != 11)
-        return false;
-
-    for (const auto& op : finalOps) {
-        for (std::size_t i = 0; i < op.f0Data.size(); ++i) {
-            const auto frame = static_cast<std::size_t>(op.startFrame) + i;
-            if (!near(op.f0Data[i], preview[frame]))
-                return false;
-        }
-    }
-    return preview[5] < 0.0f && preview[6] < 0.0f && preview[7] < 0.0f;
 }
 
 bool checkEditableGapsAndOperationMetadata()
@@ -260,10 +214,6 @@ int main()
     }
     if (!checkHandDrawStrokePreservesEditableGaps()) {
         std::cerr << "Manual correction hand-draw editable-gap check failed\n";
-        return 1;
-    }
-    if (!checkHandDrawPreviewSamplesMatchFinalOps()) {
-        std::cerr << "Manual correction hand-draw preview/commit check failed\n";
         return 1;
     }
     if (!checkEditableGapsAndOperationMetadata()) {

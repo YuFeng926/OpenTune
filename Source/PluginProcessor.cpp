@@ -505,10 +505,7 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
 #if JucePlugin_Build_Standalone
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
     undoManager_.setHistoryPrunedCallback([this] {
-#if defined(OPENTUNE_ENABLE_CONTROL_API)
-        if (controlService_ != nullptr && standaloneContentRepository_ != nullptr)
-            controlService_->synchronizeHistory(undoManager_, standaloneContentRepository_->getContentEpoch());
-#endif
+        synchronizeStandaloneHistory();
         scheduleReclaimSweep();
     });
 #endif
@@ -3244,6 +3241,7 @@ bool OpenTuneAudioProcessor::getPlacementById(int trackId,
 
 std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int trackId, int placementIndex, double splitSeconds)
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     if (trackId < 0 || trackId >= MAX_TRACKS) {
         AppLogger::log("Split rejected: invalid trackId=" + juce::String(trackId));
         return std::nullopt;
@@ -3444,6 +3442,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
                                                                     uint64_t trailingPlacementId,
                                                                     int targetPlacementIndex)
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     if (trackId < 0 || trackId >= MAX_TRACKS) {
         AppLogger::log("Merge rejected: invalid trackId=" + juce::String(trackId));
         return std::nullopt;
@@ -3592,6 +3591,7 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
 
 std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId, int placementIndex)
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     StandaloneArrangement::Placement placement;
     if (!standaloneArrangement_->getPlacementByIndex(trackId, placementIndex, placement)) {
         return std::nullopt;
@@ -3618,6 +3618,7 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
 
 bool OpenTuneAudioProcessor::deleteTrack(int trackId, int visibleTrackCount)
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     auto* arrangement = standaloneArrangement_.get();
     auto* repository = standaloneContentRepository_.get();
     if (arrangement == nullptr || repository == nullptr || visibleTrackCount <= 1
@@ -3628,7 +3629,6 @@ bool OpenTuneAudioProcessor::deleteTrack(int trackId, int visibleTrackCount)
     if (trackIdentity == 0)
         return false;
 
-    std::vector<std::pair<uint64_t, uint64_t>> placements;
     std::vector<ContentKey> contents;
     const auto addContent = [&contents](ContentKey key) {
         if (key.isValid() && std::find(contents.begin(), contents.end(), key) == contents.end())
@@ -3639,32 +3639,22 @@ bool OpenTuneAudioProcessor::deleteTrack(int trackId, int visibleTrackCount)
         StandaloneArrangement::Placement placement;
         if (!arrangement->getPlacementByIndex(trackId, index, placement))
             continue;
-        placements.emplace_back(trackIdentity, placement.placementId);
         addContent(placement.contentKey);
     }
     for (const auto& retired : arrangement->getRetiredPlacements()) {
         if (retired.trackIdentity != trackIdentity)
             continue;
-        placements.emplace_back(trackIdentity, retired.placementId);
         addContent(retired.contentKey);
     }
 
     if (!arrangement->removeTrackAndShift(trackId, visibleTrackCount))
         return false;
 
-    undoManager_.pruneForTrackDeletion(
-        trackIdentity, placements, contents,
-        [arrangement](ContentKey key) { return arrangement->referencesContentActive(key); });
-
-#if defined(OPENTUNE_ENABLE_CONTROL_API)
-    if (controlService_ != nullptr)
-        controlService_->synchronizeHistory(undoManager_, repository->getContentEpoch());
-#endif
-
     for (const auto key : contents)
         if (!arrangement->referencesContentActive(key))
             repository->retireClip(key);
 
+    settleStandaloneHistory();
     scheduleReclaimSweep();
     notifyPlacementChanged();
     return true;
@@ -3672,7 +3662,7 @@ bool OpenTuneAudioProcessor::deleteTrack(int trackId, int visibleTrackCount)
 
 void OpenTuneAudioProcessor::scheduleReclaimSweep()
 {
-    jassert(juce::MessageManager::getInstanceWithoutCreating() != nullptr);
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     triggerAsyncUpdate();
 }
 
@@ -3742,7 +3732,9 @@ void OpenTuneAudioProcessor::pollReturnedExternalEdit()
 #if JucePlugin_Build_Standalone
 void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 {
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
     cancelPendingUpdate();
+    settleStandaloneHistory();
 
     const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
     for (const auto& entry : retiredPlacements) {
@@ -3756,13 +3748,6 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         if (standaloneArrangement_->referencesContentAnyState(key)
             || undoManager_.retainsRetiredContent(key)) {
             continue;
-        }
-
-        if (undoManager_.pruneForContentRelease(key) > 0) {
-#if defined(OPENTUNE_ENABLE_CONTROL_API)
-            if (controlService_ != nullptr && standaloneContentRepository_ != nullptr)
-                controlService_->synchronizeHistory(undoManager_, standaloneContentRepository_->getContentEpoch());
-#endif
         }
 
         uint64_t sourceId = 0;
@@ -3795,6 +3780,62 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
             sourceStore_->physicallyDeleteIfReclaimable(sourceId);
         }
     }
+}
+
+UndoReplayState OpenTuneAudioProcessor::captureStandaloneReplayState() const
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    UndoReplayState state;
+    const auto* arrangement = standaloneArrangement_.get();
+    jassert(arrangement != nullptr);
+    for (int trackId = 0; trackId < arrangement->getNumTracks(); ++trackId) {
+        const auto trackIdentity = arrangement->getTrackIdentity(trackId);
+        state.trackIdentities.insert(trackIdentity);
+        for (int index = 0; index < arrangement->getNumPlacements(trackId); ++index) {
+            StandaloneArrangement::Placement placement;
+            const bool found = arrangement->getPlacementByIndex(trackId, index, placement);
+            jassertquiet(found);
+            state.placements.emplace(placement.placementId,
+                                     UndoReplayState::Placement{trackIdentity, true});
+        }
+    }
+    for (const auto& placement : arrangement->getRetiredPlacements())
+        state.placements.emplace(placement.placementId,
+                                 UndoReplayState::Placement{placement.trackIdentity, false});
+    return state;
+}
+
+void OpenTuneAudioProcessor::settleStandaloneHistory()
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    auto* arrangement = standaloneArrangement_.get();
+    auto* repository = standaloneContentRepository_.get();
+    jassert(arrangement != nullptr && repository != nullptr);
+
+    const int maxRounds = undoManager_.size();
+    for (int round = 0; round < maxRounds; ++round) {
+        const int historySize = undoManager_.size();
+        const int structurallyRemoved = undoManager_.settleStructure(captureStandaloneReplayState());
+        std::vector<ContentKey> releasableContents;
+        // Split, merge and delete actions retain the content of every retired placement they retain.
+        for (const auto key : repository->getRetiredClips())
+            if (!arrangement->referencesContentActive(key) && !undoManager_.retainsRetiredContent(key))
+                releasableContents.push_back(key);
+        const int contentDependentsRemoved = undoManager_.pruneActionsDependingOnContents(releasableContents);
+        if (structurallyRemoved == 0 && contentDependentsRemoved == 0)
+            break;
+        jassertquiet(undoManager_.size() < historySize);
+    }
+    synchronizeStandaloneHistory();
+}
+
+void OpenTuneAudioProcessor::synchronizeStandaloneHistory()
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+#if defined(OPENTUNE_ENABLE_CONTROL_API)
+    if (controlService_ != nullptr && standaloneContentRepository_ != nullptr)
+        controlService_->synchronizeHistory(undoManager_, standaloneContentRepository_->getContentEpoch());
+#endif
 }
 #endif // JucePlugin_Build_Standalone
 
@@ -5649,6 +5690,53 @@ OpenTuneAudioProcessor::NoteDraftCommitResult OpenTuneAudioProcessor::commitNote
         contentCommands_, key, std::move(undoDescription),
         std::move(plan.beforePatch), std::move(plan.afterPatch)));
     result.contentSnapshot = committed;
+    result.status = NoteDraftCommitStatus::Applied;
+    return result;
+}
+
+OpenTuneAudioProcessor::NoteDraftCommitResult OpenTuneAudioProcessor::commitNoteBasedCorrectionDraft(
+    ContentKey key,
+    uint64_t expectedNotesRevision,
+    const std::vector<Note>& workingNotes,
+    F0FrameRange editRange,
+    NoteGeneratorParams params,
+    juce::String undoDescription)
+{
+    NoteDraftCommitResult result;
+    auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
+    jassert(messageManager != nullptr && messageManager->isThisTheMessageThread());
+    if (messageManager == nullptr || !messageManager->isThisTheMessageThread())
+        return result;
+
+    const auto snapshot = getContentSnapshot(key);
+    if (snapshot == nullptr || contentCommands_ == nullptr)
+        return result;
+    result.contentSnapshot = snapshot;
+    if (snapshot->notesRevision != expectedNotesRevision) {
+        result.status = NoteDraftCommitStatus::StaleRevision;
+        return result;
+    }
+
+    const auto draftPlan = planNoteDraftEdit(snapshot->notes, workingNotes);
+    if (draftPlan.status == NoteDraftEditStatus::NoChange) {
+        result.status = NoteDraftCommitStatus::NoChange;
+        return result;
+    }
+
+    const auto correction = contentCommands_->planNoteCorrection(
+        *snapshot, workingNotes, editRange, params);
+    if (!correction)
+        return result;
+
+    const auto edit = contentCommands_->commitNotesAndSegmentsUndoable(
+        key, correction->notes, correction->segments,
+        ContentEditRangeFrames{correction->affectedRange.startFrame,
+                               correction->affectedRange.endFrameExclusive},
+        undoDescription);
+    if (edit.snapshot == nullptr || edit.undoAction == nullptr)
+        return result;
+
+    result.contentSnapshot = edit.snapshot;
     result.status = NoteDraftCommitStatus::Applied;
     return result;
 }

@@ -3,6 +3,7 @@
 #include "../Source/StandaloneArrangement.h"
 #include "../Source/Utils/AppPreferences.h"
 #include "../Source/Utils/ProjectSession.h"
+#include "../Source/Utils/PlacementActions.h"
 #include "../Source/SourceStore.h"
 
 #include <cstdio>
@@ -90,6 +91,51 @@ ContentKey addClip(StandaloneContentRepository& repository,
     return key;
 }
 
+bool testSweepUsesRemainingHistoryAndSharedReferences()
+{
+    OpenTuneAudioProcessor processor;
+    processor.prepareToPlay(48000.0, 512);
+    auto& store = *processor.getSourceStore();
+    auto& repository = *processor.getStandaloneContentRepository();
+    auto& arrangement = *processor.getStandaloneArrangement();
+    auto& history = processor.getUndoManager();
+    const auto exclusiveSource = addSource(store, 91);
+    const auto sharedSource = addSource(store, 92);
+    const auto exclusive = addClip(repository, arrangement, 1, exclusiveSource, true);
+    const auto shared = addClip(repository, arrangement, 2, sharedSource, true);
+    StandaloneArrangement::Placement survivor;
+    survivor.contentKey = shared;
+    survivor.durationSeconds = 1.0;
+    if (!arrangement.insertPlacement(1, survivor) || !processor.deleteTrack(0, 2))
+        return false;
+    processor.runReclaimSweepOnMessageThread();
+    if (repository.findClip(exclusive) != nullptr || store.containsSource(exclusiveSource)
+        || !repository.findClip(shared)->hasActiveContent() || !store.containsSource(sharedSource))
+        return false;
+
+    auto deletion = commitPlacementDelete(processor, {{0, survivor.placementId}});
+    if (deletion.undoAction == nullptr)
+        return false;
+    history.addAction(std::move(deletion.undoAction));
+    processor.runReclaimSweepOnMessageThread();
+    if (repository.findClip(shared) == nullptr || !store.containsSource(sharedSource)
+        || !arrangement.hasPlacement(arrangement.getTrackIdentity(0), survivor.placementId))
+        return false;
+    history.undo();
+    history.clearRedo();
+    processor.runReclaimSweepOnMessageThread();
+    if (!repository.findClip(shared)->hasActiveContent()
+        || !arrangement.getPlacementById(0, survivor.placementId, survivor))
+        return false;
+
+    deletion = commitPlacementDelete(processor, {{0, survivor.placementId}});
+    history.addAction(std::move(deletion.undoAction));
+    history.clear();
+    processor.runReclaimSweepOnMessageThread();
+    return repository.findClip(shared) == nullptr && store.getTotalCount() == 0
+        && arrangement.getRetiredPlacements().empty();
+}
+
 bool testSnapshotSourcesFollowSavedClips()
 {
     OpenTuneAudioProcessor processor;
@@ -160,6 +206,10 @@ int main()
     }
     if (!testSnapshotSourcesFollowSavedClips()) {
         std::fputs("FAIL: snapshot sources follow saved clips\n", stderr);
+        return 1;
+    }
+    if (!testSweepUsesRemainingHistoryAndSharedReferences()) {
+        std::fputs("FAIL: sweep must retain shared content and release discarded history resources\n", stderr);
         return 1;
     }
 

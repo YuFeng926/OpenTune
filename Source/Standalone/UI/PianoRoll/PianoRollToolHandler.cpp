@@ -70,18 +70,13 @@ bool commitNoteBasedCorrection(PianoRollToolHandler::Context& ctx,
                                const std::function<bool(const std::vector<PitchCorrectionSegment>&,
                                                         F0FrameRange)>& commit = {})
 {
-    const auto plan = ctx.planNoteCorrection ? ctx.planNoteCorrection(notes, editRange) : std::nullopt;
-    if (!plan)
-        return false;
-
-    const bool committed = commit
-        ? commit(plan->segments, plan->affectedRange)
-        : ctx.commitNotesAndSegments(plan->notes, plan->segments, plan->affectedRange) != nullptr;
-    if (!committed) {
-        return false;
+    if (commit) {
+        const auto plan = ctx.planNoteCorrection ? ctx.planNoteCorrection(notes, editRange) : std::nullopt;
+        return plan && commit(plan->segments, plan->affectedRange);
     }
 
-    return true;
+    const auto expectedNotesRevision = ctx.getNoteDraft().expectedNotesRevision;
+    return ctx.commitNoteCorrectionDraft(expectedNotesRevision, notes, editRange);
 }
 
 const std::vector<Note>& committedNotes(PianoRollToolHandler::Context& ctx)
@@ -458,6 +453,7 @@ void PianoRollToolHandler::mouseDrag(const juce::MouseEvent& e)
                 int threshold = ctx_.getDragThreshold();
                 if (dx * dx + dy * dy > threshold * threshold) {
                     ctx_.getState().handDrawPendingDrag = false;
+                    handleDrawCurveTool(e.withNewPosition(dragStartPos_.toFloat()));
                     handleDrawCurveTool(e);
                 }
             } else if (ctx_.getState().drawing.isDrawingF0) {
@@ -1393,8 +1389,7 @@ bool PianoRollToolHandler::commitKeyboardNoteEdit(const std::vector<Note>& work,
     }
 
     ctx_.beginNoteDraft();
-    auto& draft = ctx_.getNoteDraft();
-    draft.workingNotes = work;
+    ctx_.getNoteDraft().workingNotes = work;
     ctx_.setUndoDescription(undoDescription);
     const bool committed = commitNoteBasedCorrection(ctx_, work, editRange);
     ctx_.clearNoteDraft();
@@ -1633,8 +1628,7 @@ void PianoRollToolHandler::moveSelectedNotesPitchByKeyboard(int direction, bool 
     auto workingNotes = std::move(valuePlan.notes);
 
     ctx_.beginNoteDraft();
-    auto& draft = ctx_.getNoteDraft();
-    draft.workingNotes = workingNotes;
+    ctx_.getNoteDraft().workingNotes = workingNotes;
     ctx_.setUndoDescription(LOC_RAW("Move note"));
     const bool committed = commitNoteBasedCorrection(ctx_, workingNotes, editRange);
     ctx_.clearNoteDraft();
@@ -2841,7 +2835,7 @@ bool PianoRollToolHandler::endNotePitchDrag(const juce::MouseEvent& e)
             ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
                 ? LOC_RAW("Modulation depth")
                 : LOC_RAW("Drift correction"));
-            // applyCorrectionToRange + commitNotesAndSegments 唯一提交链
+            // 提交由 revision-checked correction draft 事务完成。
             committed = commitNoteBasedCorrection(ctx_, notes, editRange);
         }
 
@@ -2996,7 +2990,6 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         float newVal = (currentVal > 0.5f) ? 0.0f : 1.0f;
 
         ctx_.beginNoteDraft();
-        auto& draft = ctx_.getNoteDraft();
         ContentNoteValueEdit edit;
         edit.kind = ContentNoteValueEdit::Kind::Parameters;
         edit.position = static_cast<std::size_t>(clickedNoteIndex);
@@ -3007,7 +3000,7 @@ void PianoRollToolHandler::handlePitchToolDoubleClick(const juce::MouseEvent& e)
         ContentNoteValueEditRequest request;
         request.edits.push_back(std::move(edit));
         auto work = ctx_.planNoteValueEdit(notes, request).notes;
-        draft.workingNotes = work;
+        ctx_.getNoteDraft().workingNotes = work;
         ctx_.setUndoDescription(currentTool_ == ToolId::PitchModulation
             ? LOC_RAW("Modulation depth")
             : LOC_RAW("Drift correction"));
@@ -3388,7 +3381,6 @@ bool PianoRollToolHandler::handleScissorsToolMerge(const juce::MouseEvent& e)
 void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
 // 手绘曲线宸ュ叿榧犳爣閲婃斁澶勭悊锛氬皢缁樺埗鐨凢0鏁版嵁鎻愪氦鍒伴煶楂樹慨姝ｉ槦锟?
 {
-    juce::ignoreUnused(e);
     const auto dirtyBefore = ctx_.getHandDrawPreviewBounds();
 
     if (ctx_.getState().handDrawPendingDrag) {
@@ -3399,6 +3391,7 @@ void PianoRollToolHandler::handleDrawCurveUp(const juce::MouseEvent& e)
     if (!ctx_.getState().drawing.isDrawingF0) {
         return;
     }
+    handleDrawCurveTool(e);
     
     const auto contentSnapshot = ctx_.getEditableContentSnapshot();
     auto& drawing = ctx_.getState().drawing;

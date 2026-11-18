@@ -2,7 +2,6 @@
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/PianoRollNotePatchAction.h"
 #include "Utils/SelectedNoteEqEdit.h"
-#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -83,42 +82,7 @@ EqSettings makeSettings()
     return settings;
 }
 
-bool matchesLegacyRange(const EditableContentSnapshot& snapshot,
-                        const SelectedNoteEqEditPlan& plan,
-                        const EqSettings& settings)
-{
-    auto working = snapshot.notes;
-    working[0].eq = settings;
-    working[2].eq = settings;
-
-    double dirtyStart = 1e30;
-    double dirtyEnd = -1e30;
-    for (size_t i = 0; i < snapshot.notes.size(); ++i) {
-        if (snapshot.notes[i].eq == working[i].eq)
-            continue;
-        dirtyStart = std::min(dirtyStart, snapshot.notes[i].startTime);
-        dirtyEnd = std::max(dirtyEnd, snapshot.notes[i].endTime);
-    }
-    if (dirtyEnd <= dirtyStart)
-        return false;
-
-    ContentNoteRangePatch beforePatch;
-    ContentNoteRangePatch afterPatch;
-    beforePatch.affectedRange = { dirtyStart, dirtyEnd };
-    afterPatch.affectedRange = beforePatch.affectedRange;
-    for (const auto& note : snapshot.notes) {
-        if (note.endTime > dirtyStart && note.startTime < dirtyEnd)
-            beforePatch.afterNotesInRange.push_back(note);
-    }
-    for (const auto& note : working) {
-        if (note.endTime > dirtyStart && note.startTime < dirtyEnd)
-            afterPatch.afterNotesInRange.push_back(note);
-    }
-    return samePatch(plan.beforePatch, beforePatch)
-        && samePatch(plan.afterPatch, afterPatch);
-}
-
-bool checkSetAndLegacyRange()
+bool checkSetAndRange()
 {
     const auto snapshot = makeSnapshot();
     const ContentKey key{ DomainKind::StandaloneClip, 77, 0 };
@@ -132,7 +96,11 @@ bool checkSetAndLegacyRange()
         || plan.afterPatch.afterNotesInRange[2].eq != settings
         || plan.afterPatch.afterNotesInRange[0].dirty
         || plan.afterPatch.afterNotesInRange[2].dirty
-        || !matchesLegacyRange(snapshot, plan, settings))
+        || plan.beforePatch.affectedRange.startSeconds != 0.1
+        || plan.beforePatch.affectedRange.endSeconds != 0.9
+        || plan.afterPatch.affectedRange.startSeconds != 0.1
+        || plan.afterPatch.affectedRange.endSeconds != 0.9
+        || !sameNotes(plan.beforePatch.afterNotesInRange, snapshot.notes))
         return false;
 
     auto editedSnapshot = snapshot;
@@ -234,7 +202,7 @@ bool checkUndoRedoUsesBoundContentKey()
 
 int main()
 {
-    if (!checkSetAndLegacyRange()) {
+    if (!checkSetAndRange()) {
         std::cerr << "EQ set/range check failed\n";
         return 1;
     }

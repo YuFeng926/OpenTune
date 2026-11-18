@@ -41,16 +41,10 @@ bool runTransactions()
     repository.findClip(otherKey)->applyNotes({makeNote(2.125, 2.375, 550.0f)});
     const auto initial = processor.getContentSnapshot(key);
 
-    auto result = processor.commitNoteDraft(key, initial->notesRevision, original, "Unchanged draft");
-    if (!expect(result.status == Status::NoChange && history.size() == 0
-                    && result.contentSnapshot->notesRevision == initial->notesRevision,
-                "NoChange must preserve revision and history"))
-        return false;
-
     auto changed = original;
     changed[1].pitch = 660.0f;
     changed[1].endTime = 0.9375;
-    result = processor.commitNoteDraft(key, initial->notesRevision, changed, "Change draft");
+    auto result = processor.commitNoteDraft(key, initial->notesRevision, changed, "Change draft");
     if (!expect(result.status == Status::Applied && history.size() == 1
                     && result.contentSnapshot->notes[1].pitch == 660.0f
                     && result.contentSnapshot->notes[1].endTime == 0.9375
@@ -92,40 +86,70 @@ bool runTransactions()
         return false;
     history.redo();
     history.redo();
-    if (!expect(processor.getContentSnapshot(key)->notes[1].pitch == 660.0f
-                    && processor.getContentSnapshot(otherKey)->notes[0].pitch == 770.0f,
-                "Redo must restore each original content independently"))
+    return expect(processor.getContentSnapshot(key)->notes[1].pitch == 660.0f
+                      && processor.getContentSnapshot(otherKey)->notes[0].pitch == 770.0f,
+                  "Redo must restore each original content independently");
+}
+
+bool runCorrectionDraftTransaction()
+{
+    OpenTuneAudioProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+    auto& repository = *processor.getStandaloneContentRepository();
+    auto& history = processor.getUndoManager();
+    const auto key = repository.createClip();
+    auto* clip = repository.findClip(key);
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setHopSize(256);
+    curve->setSampleRate(44100.0);
+    curve->setOriginalF0(std::vector<float>(128, 220.0f));
+    clip->applyPitchCurve(std::move(curve));
+    clip->applyNotes({makeNote(0.125, 0.375, 220.0f)});
+    const auto baseline = processor.getContentSnapshot(key);
+    auto working = baseline->notes;
+    working[0].pitchOffset = 3.0f;
+
+    auto external = baseline->notes;
+    external[0].pitch = 330.0f;
+    const auto newer = processor.commitNoteDraft(key, baseline->notesRevision, external, "External edit");
+    const auto* expectedUndo = history.peekUndo();
+    const NoteGeneratorParams params;
+    const F0FrameRange range{0, 128};
+    const auto stale = processor.commitNoteBasedCorrectionDraft(
+        key, baseline->notesRevision, working, range, params, "Old pitch draft");
+    if (!expect(stale.status == Status::StaleRevision
+                    && stale.contentSnapshot->notes[0].pitch == 330.0f
+                    && stale.contentSnapshot->pitchRevision == newer.contentSnapshot->pitchRevision
+                    && history.peekUndo() == expectedUndo && history.size() == 1,
+                "A full correction draft must preserve the newer edit and its history"))
         return false;
 
-    auto beforeInsert = processor.getContentSnapshot(key);
-    auto inserted = beforeInsert->notes;
-    inserted.insert(inserted.begin() + 1, makeNote(0.4375, 0.5625, 275.0f));
-    result = processor.commitNoteDraft(key, beforeInsert->notesRevision, inserted, "Insert draft");
-    if (!expect(result.status == Status::Applied && result.contentSnapshot->notes.size() == 4,
-                "Draft insertion must add the requested note"))
-        return false;
     history.undo();
-    if (!expect(processor.getContentSnapshot(key)->notes.size() == 3,
-                "Insertion undo must remove only the inserted note"))
+    const auto undone = processor.getContentSnapshot(key);
+    const auto* expectedRedo = history.peekRedo();
+    const auto unchanged = processor.commitNoteBasedCorrectionDraft(
+        key, undone->notesRevision, undone->notes, range, params, "Unchanged pitch draft");
+    if (!expect(unchanged.status == Status::NoChange
+                    && history.cursor() == 0 && history.peekRedo() == expectedRedo,
+                "An unchanged correction draft must preserve redo"))
         return false;
-    history.redo();
 
-    const auto beforeDelete = processor.getContentSnapshot(key);
-    auto deleted = beforeDelete->notes;
-    deleted.erase(deleted.begin() + 2);
-    result = processor.commitNoteDraft(key, beforeDelete->notesRevision, deleted, "Delete draft");
-    if (!expect(result.status == Status::Applied && result.contentSnapshot->notes.size() == 3
-                    && result.contentSnapshot->notes.back().pitch == 440.0f,
-                "Draft deletion must preserve notes outside the patch"))
+    const auto applied = processor.commitNoteBasedCorrectionDraft(
+        key, undone->notesRevision, working, range, params, "Pitch draft");
+    if (!expect(applied.status == Status::Applied && history.size() == 1
+                    && applied.contentSnapshot->notes[0].pitchOffset == 3.0f
+                    && !applied.contentSnapshot->pitchCurve->getCorrectionSegments().empty(),
+                "A current correction draft must commit notes and segments in one action"))
         return false;
     history.undo();
-    if (!expect(processor.getContentSnapshot(key)->notes.size() == 4
-                    && processor.getContentSnapshot(key)->notes[2].pitch == 660.0f,
-                "Deletion undo must restore the removed note"))
+    const auto restored = processor.getContentSnapshot(key);
+    if (!expect(restored->notes[0].pitchOffset == 0.0f
+                    && restored->pitchCurve->getCorrectionSegments().empty(),
+                "Correction undo must restore notes and segments together"))
         return false;
     history.redo();
-    return expect(processor.getContentSnapshot(key)->notes.size() == 3,
-                  "Deletion redo must apply the same patch");
+    return expect(processor.getContentSnapshot(key)->notes[0].pitchOffset == 3.0f,
+                  "Correction redo must restore the committed draft");
 }
 
 } // namespace
@@ -133,5 +157,5 @@ bool runTransactions()
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
-    return runTransactions() ? 0 : 1;
+    return runTransactions() && runCorrectionDraftTransaction() ? 0 : 1;
 }

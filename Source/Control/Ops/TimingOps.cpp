@@ -483,9 +483,9 @@ private:
             finish(step, envelope.committed(context));
             return;
         }
-        // Mask API entries that can no longer restore this grid; the owner already cleared redo.
+        // The owner already cleared redo for this change.
         if (history != nullptr)
-            history->onChangeWithoutEntry(processor.getUndoManager(), key_, ControlContentAspect::TimeGrid);
+            history->onChangeWithoutEntry(processor.getUndoManager());
         if (auto* bridge = context.bridge())
             bridge->onTimeGridChanged();
         const auto handles = TimeGridOps::innerHandles(*after->timeGrid);

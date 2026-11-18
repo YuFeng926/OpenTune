@@ -11,15 +11,17 @@ namespace OpenTune {
 
 namespace {
 
-bool hasContentOwner(const OpenTuneAudioProcessor& processor, ContentKey key)
-{
-    const auto* repository = processor.getStandaloneContentRepository();
-    return key.isValid() && repository != nullptr && repository->findClip(key) != nullptr;
-}
-
 int resolveTrack(const StandaloneArrangement& arrangement, uint64_t identity)
 {
     return arrangement.findTrackIndexByIdentity(identity);
+}
+
+bool hasPlacementState(const UndoReplayState& state, uint64_t trackIdentity, uint64_t placementId, bool active)
+{
+    const auto placement = state.placements.find(placementId);
+    return state.trackIdentities.find(trackIdentity) != state.trackIdentities.end()
+        && placement != state.placements.end() && placement->second.ownerTrackIdentity == trackIdentity
+        && placement->second.active == active;
 }
 
 void retireContentIfUnreferenced(StandaloneArrangement& arrangement,
@@ -55,43 +57,65 @@ void SplitPlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
-    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
-    if (trackId < 0 || !dependenciesExist())
-        return;
+    jassert(arrangement != nullptr && repo != nullptr);
+    const int trackId = resolveTrack(*arrangement, trackIdentity_);
+    jassert(trackId >= 0);
 
     // Retire the two new placements+contents
-    arrangement->retirePlacement(trackId, leadingPlacementId_);
-    arrangement->retirePlacement(trackId, trailingPlacementId_);
+    const bool retiredLeading = arrangement->retirePlacement(trackId, leadingPlacementId_);
+    const bool retiredTrailing = arrangement->retirePlacement(trackId, trailingPlacementId_);
+    jassertquiet(retiredLeading && retiredTrailing);
     retireContentIfUnreferenced(*arrangement, *repo, leadingContentKey_);
     retireContentIfUnreferenced(*arrangement, *repo, trailingContentKey_);
 
     // Revive the original
-    repo->reviveClip(originalContentKey_);
+    const bool revivedContent = repo->reviveClip(originalContentKey_);
+    jassertquiet(revivedContent);
     processor_.requestFullContentRender(originalContentKey_);
-    arrangement->revivePlacement(trackId, originalPlacementId_);
-    arrangement->setSelectionState(selectionBefore_);
+    const bool revivedPlacement = arrangement->revivePlacement(trackId, originalPlacementId_);
+    const bool selected = arrangement->setSelectionState(selectionBefore_);
+    jassertquiet(revivedPlacement && selected);
 }
 
 void SplitPlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
-    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
-    if (trackId < 0 || !dependenciesExist())
-        return;
+    jassert(arrangement != nullptr && repo != nullptr);
+    const int trackId = resolveTrack(*arrangement, trackIdentity_);
+    jassert(trackId >= 0);
 
     // Retire the original
-    arrangement->retirePlacement(trackId, originalPlacementId_);
+    const bool retired = arrangement->retirePlacement(trackId, originalPlacementId_);
+    jassertquiet(retired);
     retireContentIfUnreferenced(*arrangement, *repo, originalContentKey_);
 
     // Revive the two new ones
-    repo->reviveClip(leadingContentKey_);
+    const bool revivedLeadingContent = repo->reviveClip(leadingContentKey_);
+    jassertquiet(revivedLeadingContent);
     processor_.requestFullContentRender(leadingContentKey_);
-    repo->reviveClip(trailingContentKey_);
+    const bool revivedTrailingContent = repo->reviveClip(trailingContentKey_);
+    jassertquiet(revivedTrailingContent);
     processor_.requestFullContentRender(trailingContentKey_);
-    arrangement->revivePlacement(trackId, leadingPlacementId_);
-    arrangement->revivePlacement(trackId, trailingPlacementId_);
-    arrangement->setSelectionState(selectionAfter_);
+    const bool revivedLeading = arrangement->revivePlacement(trackId, leadingPlacementId_);
+    const bool revivedTrailing = arrangement->revivePlacement(trackId, trailingPlacementId_);
+    const bool selected = arrangement->setSelectionState(selectionAfter_);
+    jassertquiet(revivedLeading && revivedTrailing && selected);
+}
+
+bool SplitPlacementAction::replayStructure(UndoReplayState& state, bool undo) const
+{
+    const bool originalActive = !undo;
+    const bool childrenActive = undo;
+    if (!hasPlacementState(state, trackIdentity_, originalPlacementId_, originalActive)
+        || !hasPlacementState(state, trackIdentity_, leadingPlacementId_, childrenActive)
+        || !hasPlacementState(state, trackIdentity_, trailingPlacementId_, childrenActive))
+        return false;
+
+    state.placements.at(originalPlacementId_).active = undo;
+    state.placements.at(leadingPlacementId_).active = !undo;
+    state.placements.at(trailingPlacementId_).active = !undo;
+    return true;
 }
 
 bool SplitPlacementAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
@@ -106,33 +130,9 @@ bool SplitPlacementAction::retainsRetiredContent(ContentKey key) const
     return key == originalContentKey_ || key == leadingContentKey_ || key == trailingContentKey_;
 }
 
-bool SplitPlacementAction::dependsOnTrackIdentity(uint64_t identity) const
-{
-    return identity == trackIdentity_;
-}
-
-bool SplitPlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return trackIdentity == trackIdentity_
-        && (placementId == originalPlacementId_ || placementId == leadingPlacementId_
-            || placementId == trailingPlacementId_);
-}
-
 bool SplitPlacementAction::dependsOnContent(ContentKey key) const
 {
     return key == originalContentKey_ || key == leadingContentKey_ || key == trailingContentKey_;
-}
-
-bool SplitPlacementAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
-        && arrangement->hasPlacementGlobal(originalPlacementId_)
-        && arrangement->hasPlacementGlobal(leadingPlacementId_)
-        && arrangement->hasPlacementGlobal(trailingPlacementId_)
-        && hasContentOwner(processor_, originalContentKey_)
-        && hasContentOwner(processor_, leadingContentKey_)
-        && hasContentOwner(processor_, trailingContentKey_);
 }
 
 // ============================================================================
@@ -158,43 +158,65 @@ void MergePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
-    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
-    if (trackId < 0 || !dependenciesExist())
-        return;
+    jassert(arrangement != nullptr && repo != nullptr);
+    const int trackId = resolveTrack(*arrangement, trackIdentity_);
+    jassert(trackId >= 0);
 
     // Retire merged
-    arrangement->retirePlacement(trackId, mergedPlacementId_);
+    const bool retired = arrangement->retirePlacement(trackId, mergedPlacementId_);
+    jassertquiet(retired);
     retireContentIfUnreferenced(*arrangement, *repo, mergedContentKey_);
 
     // Revive originals
-    repo->reviveClip(leadingContentKey_);
+    const bool revivedLeadingContent = repo->reviveClip(leadingContentKey_);
+    jassertquiet(revivedLeadingContent);
     processor_.requestFullContentRender(leadingContentKey_);
-    repo->reviveClip(trailingContentKey_);
+    const bool revivedTrailingContent = repo->reviveClip(trailingContentKey_);
+    jassertquiet(revivedTrailingContent);
     processor_.requestFullContentRender(trailingContentKey_);
-    arrangement->revivePlacement(trackId, leadingPlacementId_);
-    arrangement->revivePlacement(trackId, trailingPlacementId_);
-    arrangement->setSelectionState(selectionBefore_);
+    const bool revivedLeading = arrangement->revivePlacement(trackId, leadingPlacementId_);
+    const bool revivedTrailing = arrangement->revivePlacement(trackId, trailingPlacementId_);
+    const bool selected = arrangement->setSelectionState(selectionBefore_);
+    jassertquiet(revivedLeading && revivedTrailing && selected);
 }
 
 void MergePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
-    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
-    if (trackId < 0 || !dependenciesExist())
-        return;
+    jassert(arrangement != nullptr && repo != nullptr);
+    const int trackId = resolveTrack(*arrangement, trackIdentity_);
+    jassert(trackId >= 0);
 
     // Retire originals
-    arrangement->retirePlacement(trackId, leadingPlacementId_);
-    arrangement->retirePlacement(trackId, trailingPlacementId_);
+    const bool retiredLeading = arrangement->retirePlacement(trackId, leadingPlacementId_);
+    const bool retiredTrailing = arrangement->retirePlacement(trackId, trailingPlacementId_);
+    jassertquiet(retiredLeading && retiredTrailing);
     retireContentIfUnreferenced(*arrangement, *repo, leadingContentKey_);
     retireContentIfUnreferenced(*arrangement, *repo, trailingContentKey_);
 
     // Revive merged
-    repo->reviveClip(mergedContentKey_);
+    const bool revivedContent = repo->reviveClip(mergedContentKey_);
+    jassertquiet(revivedContent);
     processor_.requestFullContentRender(mergedContentKey_);
-    arrangement->revivePlacement(trackId, mergedPlacementId_);
-    arrangement->setSelectionState(selectionAfter_);
+    const bool revivedPlacement = arrangement->revivePlacement(trackId, mergedPlacementId_);
+    const bool selected = arrangement->setSelectionState(selectionAfter_);
+    jassertquiet(revivedPlacement && selected);
+}
+
+bool MergePlacementAction::replayStructure(UndoReplayState& state, bool undo) const
+{
+    const bool originalsActive = !undo;
+    const bool mergedActive = undo;
+    if (!hasPlacementState(state, trackIdentity_, leadingPlacementId_, originalsActive)
+        || !hasPlacementState(state, trackIdentity_, trailingPlacementId_, originalsActive)
+        || !hasPlacementState(state, trackIdentity_, mergedPlacementId_, mergedActive))
+        return false;
+
+    state.placements.at(leadingPlacementId_).active = undo;
+    state.placements.at(trailingPlacementId_).active = undo;
+    state.placements.at(mergedPlacementId_).active = !undo;
+    return true;
 }
 
 bool MergePlacementAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
@@ -209,33 +231,9 @@ bool MergePlacementAction::retainsRetiredContent(ContentKey key) const
     return key == leadingContentKey_ || key == trailingContentKey_ || key == mergedContentKey_;
 }
 
-bool MergePlacementAction::dependsOnTrackIdentity(uint64_t identity) const
-{
-    return identity == trackIdentity_;
-}
-
-bool MergePlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return trackIdentity == trackIdentity_
-        && (placementId == leadingPlacementId_ || placementId == trailingPlacementId_
-            || placementId == mergedPlacementId_);
-}
-
 bool MergePlacementAction::dependsOnContent(ContentKey key) const
 {
     return key == leadingContentKey_ || key == trailingContentKey_ || key == mergedContentKey_;
-}
-
-bool MergePlacementAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
-        && arrangement->hasPlacementGlobal(leadingPlacementId_)
-        && arrangement->hasPlacementGlobal(trailingPlacementId_)
-        && arrangement->hasPlacementGlobal(mergedPlacementId_)
-        && hasContentOwner(processor_, leadingContentKey_)
-        && hasContentOwner(processor_, trailingContentKey_)
-        && hasContentOwner(processor_, mergedContentKey_);
 }
 
 // ============================================================================
@@ -260,26 +258,42 @@ void DeletePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
-    if (!dependenciesExist())
-        return;
+    jassert(arrangement != nullptr && repo != nullptr);
     for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {
-        repo->reviveClip(entry->contentKey);
-        arrangement->revivePlacement(resolveTrack(*arrangement, entry->trackIdentity), entry->placementId);
+        const bool revivedContent = repo->reviveClip(entry->contentKey);
+        const int trackId = resolveTrack(*arrangement, entry->trackIdentity);
+        jassertquiet(revivedContent && trackId >= 0);
+        const bool revivedPlacement = arrangement->revivePlacement(trackId, entry->placementId);
+        jassertquiet(revivedPlacement);
     }
-    arrangement->setSelectionState(selectionBefore_);
+    const bool selected = arrangement->setSelectionState(selectionBefore_);
+    jassertquiet(selected);
 }
 
 void DeletePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
-    if (!dependenciesExist())
-        return;
+    jassert(arrangement != nullptr && repo != nullptr);
     for (const auto& entry : entries_) {
-        arrangement->retirePlacement(resolveTrack(*arrangement, entry.trackIdentity), entry.placementId);
+        const int trackId = resolveTrack(*arrangement, entry.trackIdentity);
+        jassert(trackId >= 0);
+        const bool retired = arrangement->retirePlacement(trackId, entry.placementId);
+        jassertquiet(retired);
         retireContentIfUnreferenced(*arrangement, *repo, entry.contentKey);
     }
-    arrangement->setSelectionState(selectionAfter_);
+    const bool selected = arrangement->setSelectionState(selectionAfter_);
+    jassertquiet(selected);
+}
+
+bool DeletePlacementAction::replayStructure(UndoReplayState& state, bool undo) const
+{
+    for (const auto& entry : entries_)
+        if (!hasPlacementState(state, entry.trackIdentity, entry.placementId, !undo))
+            return false;
+    for (const auto& entry : entries_)
+        state.placements.at(entry.placementId).active = undo;
+    return true;
 }
 
 bool DeletePlacementAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
@@ -296,36 +310,10 @@ bool DeletePlacementAction::retainsRetiredContent(ContentKey key) const
     });
 }
 
-bool DeletePlacementAction::dependsOnTrackIdentity(uint64_t identity) const
-{
-    return std::any_of(entries_.begin(), entries_.end(), [identity](const Entry& entry) {
-        return entry.trackIdentity == identity;
-    });
-}
-
-bool DeletePlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return std::any_of(entries_.begin(), entries_.end(), [trackIdentity, placementId](const Entry& entry) {
-        return entry.trackIdentity == trackIdentity && entry.placementId == placementId;
-    });
-}
-
 bool DeletePlacementAction::dependsOnContent(ContentKey key) const
 {
     return std::any_of(entries_.begin(), entries_.end(), [key](const Entry& entry) {
         return entry.contentKey == key;
-    });
-}
-
-bool DeletePlacementAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement == nullptr)
-        return false;
-    return std::all_of(entries_.begin(), entries_.end(), [this, arrangement](const Entry& entry) {
-        return arrangement->findTrackIndexByIdentity(entry.trackIdentity) >= 0
-            && arrangement->hasPlacementGlobal(entry.placementId)
-            && hasContentOwner(processor_, entry.contentKey);
     });
 }
 
@@ -353,58 +341,50 @@ MultiMovePlacementAction::MultiMovePlacementAction(OpenTuneAudioProcessor& proce
 void MultiMovePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    if (!dependenciesExist())
-        return;
+    jassert(arrangement != nullptr);
     std::vector<StandaloneArrangement::PlacementMove> moves;
     moves.reserve(entries_.size());
     for (const auto& entry : entries_)
         moves.push_back({resolveTrack(*arrangement, entry.targetTrackIdentity),
                          resolveTrack(*arrangement, entry.sourceTrackIdentity), entry.placementId,
                          entry.oldStartSeconds});
-    if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Rejected)
-        arrangement->setSelectionState(selectionBefore_);
+    const auto result = arrangement->applyPlacementMoves(moves);
+    const bool selected = arrangement->setSelectionState(selectionBefore_);
+    jassertquiet(result != StandaloneArrangement::PlacementMoveResult::Rejected && selected);
 }
 
 void MultiMovePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    if (!dependenciesExist())
-        return;
+    jassert(arrangement != nullptr);
     std::vector<StandaloneArrangement::PlacementMove> moves;
     moves.reserve(entries_.size());
     for (const auto& entry : entries_)
         moves.push_back({resolveTrack(*arrangement, entry.sourceTrackIdentity),
                          resolveTrack(*arrangement, entry.targetTrackIdentity), entry.placementId,
                          entry.newStartSeconds});
-    if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Rejected)
-        arrangement->setSelectionState(selectionAfter_);
+    const auto result = arrangement->applyPlacementMoves(moves);
+    const bool selected = arrangement->setSelectionState(selectionAfter_);
+    jassertquiet(result != StandaloneArrangement::PlacementMoveResult::Rejected && selected);
 }
 
-bool MultiMovePlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+bool MultiMovePlacementAction::replayStructure(UndoReplayState& state, bool undo) const
 {
-    return std::any_of(entries_.begin(), entries_.end(), [identity](const StableEntry& entry) {
-        return entry.sourceTrackIdentity == identity || entry.targetTrackIdentity == identity;
-    });
-}
-
-bool MultiMovePlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return std::any_of(entries_.begin(), entries_.end(), [trackIdentity, placementId](const StableEntry& entry) {
-        return entry.placementId == placementId
-            && (entry.sourceTrackIdentity == trackIdentity || entry.targetTrackIdentity == trackIdentity);
-    });
-}
-
-bool MultiMovePlacementAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    if (arrangement == nullptr || entries_.empty())
+    if (entries_.empty())
         return false;
-    return std::all_of(entries_.begin(), entries_.end(), [arrangement](const StableEntry& entry) {
-        return arrangement->findTrackIndexByIdentity(entry.sourceTrackIdentity) >= 0
-            && arrangement->findTrackIndexByIdentity(entry.targetTrackIdentity) >= 0
-            && arrangement->hasPlacementGlobal(entry.placementId);
-    });
+    std::unordered_set<uint64_t> seen;
+    for (const auto& entry : entries_) {
+        const auto expectedTrack = undo ? entry.targetTrackIdentity : entry.sourceTrackIdentity;
+        if (state.trackIdentities.find(entry.sourceTrackIdentity) == state.trackIdentities.end()
+            || state.trackIdentities.find(entry.targetTrackIdentity) == state.trackIdentities.end()
+            || !seen.insert(entry.placementId).second
+            || !hasPlacementState(state, expectedTrack, entry.placementId, true))
+            return false;
+    }
+    for (const auto& entry : entries_)
+        state.placements.at(entry.placementId).ownerTrackIdentity =
+            undo ? entry.sourceTrackIdentity : entry.targetTrackIdentity;
+    return true;
 }
 
 // ============================================================================
@@ -426,34 +406,25 @@ GainChangeAction::GainChangeAction(OpenTuneAudioProcessor& processor,
 void GainChangeAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
-    if (trackId >= 0)
-        arrangement->setPlacementGain(trackId, placementId_, oldGain_);
+    jassert(arrangement != nullptr);
+    const int trackId = resolveTrack(*arrangement, trackIdentity_);
+    const bool changed = arrangement->setPlacementGain(trackId, placementId_, oldGain_);
+    jassertquiet(trackId >= 0 && changed);
 }
 
 void GainChangeAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
-    if (trackId >= 0)
-        arrangement->setPlacementGain(trackId, placementId_, newGain_);
+    jassert(arrangement != nullptr);
+    const int trackId = resolveTrack(*arrangement, trackIdentity_);
+    const bool changed = arrangement->setPlacementGain(trackId, placementId_, newGain_);
+    jassertquiet(trackId >= 0 && changed);
 }
 
-bool GainChangeAction::dependsOnTrackIdentity(uint64_t identity) const
+bool GainChangeAction::replayStructure(UndoReplayState& state, bool undo) const
 {
-    return identity == trackIdentity_;
-}
-
-bool GainChangeAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return trackIdentity == trackIdentity_ && placementId == placementId_;
-}
-
-bool GainChangeAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
-        && arrangement->hasPlacementGlobal(placementId_);
+    juce::ignoreUnused(undo);
+    return hasPlacementState(state, trackIdentity_, placementId_, true);
 }
 
 // ============================================================================
@@ -479,36 +450,27 @@ TrimPlacementAction::TrimPlacementAction(OpenTuneAudioProcessor& processor,
 void TrimPlacementAction::undo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
-    if (trackId >= 0)
-        arr->setPlacementTrimState(trackId, placementId_, oldClipInSeconds_, oldDurationSeconds_, oldTimelineStart_,
-                                   oldFadeIn_, oldFadeOut_);
+    jassert(arr != nullptr);
+    const int trackId = resolveTrack(*arr, trackIdentity_);
+    const bool changed = arr->setPlacementTrimState(trackId, placementId_, oldClipInSeconds_, oldDurationSeconds_,
+                                                    oldTimelineStart_, oldFadeIn_, oldFadeOut_);
+    jassertquiet(trackId >= 0 && changed);
 }
 
 void TrimPlacementAction::redo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
-    if (trackId >= 0)
-        arr->setPlacementTrimState(trackId, placementId_, newClipInSeconds_, newDurationSeconds_, newTimelineStart_,
-                                   newFadeIn_, newFadeOut_);
+    jassert(arr != nullptr);
+    const int trackId = resolveTrack(*arr, trackIdentity_);
+    const bool changed = arr->setPlacementTrimState(trackId, placementId_, newClipInSeconds_, newDurationSeconds_,
+                                                    newTimelineStart_, newFadeIn_, newFadeOut_);
+    jassertquiet(trackId >= 0 && changed);
 }
 
-bool TrimPlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+bool TrimPlacementAction::replayStructure(UndoReplayState& state, bool undo) const
 {
-    return identity == trackIdentity_;
-}
-
-bool TrimPlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return trackIdentity == trackIdentity_ && placementId == placementId_;
-}
-
-bool TrimPlacementAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
-        && arrangement->hasPlacementGlobal(placementId_);
+    juce::ignoreUnused(undo);
+    return hasPlacementState(state, trackIdentity_, placementId_, true);
 }
 
 // ============================================================================
@@ -529,34 +491,25 @@ FadeChangeAction::FadeChangeAction(OpenTuneAudioProcessor& processor,
 void FadeChangeAction::undo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
-    if (trackId >= 0)
-        arr->setPlacementFade(trackId, placementId_, oldFadeIn_, oldFadeOut_);
+    jassert(arr != nullptr);
+    const int trackId = resolveTrack(*arr, trackIdentity_);
+    const bool changed = arr->setPlacementFade(trackId, placementId_, oldFadeIn_, oldFadeOut_);
+    jassertquiet(trackId >= 0 && changed);
 }
 
 void FadeChangeAction::redo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
-    if (trackId >= 0)
-        arr->setPlacementFade(trackId, placementId_, newFadeIn_, newFadeOut_);
+    jassert(arr != nullptr);
+    const int trackId = resolveTrack(*arr, trackIdentity_);
+    const bool changed = arr->setPlacementFade(trackId, placementId_, newFadeIn_, newFadeOut_);
+    jassertquiet(trackId >= 0 && changed);
 }
 
-bool FadeChangeAction::dependsOnTrackIdentity(uint64_t identity) const
+bool FadeChangeAction::replayStructure(UndoReplayState& state, bool undo) const
 {
-    return identity == trackIdentity_;
-}
-
-bool FadeChangeAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
-{
-    return trackIdentity == trackIdentity_ && placementId == placementId_;
-}
-
-bool FadeChangeAction::dependenciesExist() const
-{
-    const auto* arrangement = processor_.getStandaloneArrangement();
-    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
-        && arrangement->hasPlacementGlobal(placementId_);
+    juce::ignoreUnused(undo);
+    return hasPlacementState(state, trackIdentity_, placementId_, true);
 }
 
 namespace {

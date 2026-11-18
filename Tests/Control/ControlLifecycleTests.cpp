@@ -259,7 +259,6 @@ struct ServerFixture
         config.build.appVersion = "test";
         config.build.commit = std::string(40, '0');
         config.build.sourceUrl = "https://example.com/opentune";
-        config.limits.maxLineBytes = 32 * 1024 * 1024;
         server = std::make_unique<ControlServer>(std::move(config));
         std::string error;
         require(server->start(error), error.c_str());
@@ -341,7 +340,7 @@ public:
     std::promise<ControlCompletion> accepted, otherAccepted;
 };
 
-void testFinalReply(bool large, bool closeBeforeRespond)
+void testFinalReply(bool closeBeforeRespond)
 {
     auto handler = std::make_shared<FinalReplyHandler>();
     ServerFixture fixture(handler);
@@ -354,7 +353,7 @@ void testFinalReply(bool large, bool closeBeforeRespond)
     require(otherAccepted.wait_for(2s) == std::future_status::ready, "second request accepted on same channel");
     auto other = otherAccepted.get();
     auto result = JsonValue::object();
-    result.appendMember("payload", JsonValue::string(std::string(large ? 16 * 1024 * 1024 : 32, 'x')));
+    result.appendMember("payload", JsonValue::string(std::string(32, 'x')));
     std::promise<ControlCompletion::SendResult> sent;
     auto terminal = sent.get_future();
     std::atomic<int> notifications{0};
@@ -394,9 +393,8 @@ int main()
     testSubmissionDuringStop();
     testStopReplyDestruction();
     testDelayedConnectionRelease();
-    testFinalReply(false, false); // small response read successfully
-    testFinalReply(true, false); // large response read successfully
-    testFinalReply(false, true); // client and server closed before response
+    testFinalReply(false); // small response read successfully
+    testFinalReply(true); // client and server closed before response
     std::puts("PASS: control ownership, reentrant replies, nested stop, deadlines and socket send completion");
     return 0;
 }

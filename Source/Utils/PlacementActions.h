@@ -21,12 +21,10 @@ public:
     SplitPlacementAction(OpenTuneAudioProcessor& processor, const SplitOutcome& outcome);
     void undo() override;
     void redo() override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool dependsOnContent(ContentKey key) const override;
-    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC(kSplitClip); }
 
 private:
@@ -50,12 +48,10 @@ public:
     MergePlacementAction(OpenTuneAudioProcessor& processor, const MergeOutcome& outcome);
     void undo() override;
     void redo() override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool dependsOnContent(ContentKey key) const override;
-    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC(kMergeClips); }
 
 private:
@@ -81,12 +77,10 @@ public:
                           StandaloneArrangement::SelectionState selectionAfter);
     void undo() override;
     void redo() override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool dependsOnContent(ContentKey key) const override;
-    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC_RAW("Delete Clip"); }
 
 private:
@@ -237,9 +231,7 @@ public:
                              StandaloneArrangement::SelectionState selectionAfter);
     void undo() override;
     void redo() override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
-    bool dependenciesExist() const override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     juce::String getDescription() const override { return LOC_RAW("Move Clip"); }
 
 private:
@@ -262,9 +254,7 @@ public:
                      float oldGain, float newGain);
     void undo() override;
     void redo() override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
-    bool dependenciesExist() const override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     juce::String getDescription() const override { return LOC_RAW("Adjust Gain"); }
 
 private:
@@ -287,9 +277,7 @@ public:
                         double newFadeIn, double newFadeOut);
     void undo() override;
     void redo() override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
-    bool dependenciesExist() const override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     juce::String getDescription() const override { return LOC_RAW("Trim Clip"); }
 
 private:
@@ -317,9 +305,7 @@ public:
                      double newFadeIn, double newFadeOut);
     void undo() override;
     void redo() override;
-    bool dependsOnTrackIdentity(uint64_t identity) const override;
-    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
-    bool dependenciesExist() const override;
+    bool replayStructure(UndoReplayState& state, bool undo) const override;
     juce::String getDescription() const override { return LOC_RAW("Adjust Fade"); }
 
 private:

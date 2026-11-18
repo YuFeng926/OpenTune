@@ -827,6 +827,13 @@ public:
         uint64_t expectedNotesRevision,
         const std::vector<Note>& workingNotes,
         juce::String undoDescription);
+    NoteDraftCommitResult commitNoteBasedCorrectionDraft(
+        ContentKey key,
+        uint64_t expectedNotesRevision,
+        const std::vector<Note>& workingNotes,
+        F0FrameRange editRange,
+        NoteGeneratorParams params,
+        juce::String undoDescription);
     DrawNoteCommitResult drawNote(
         ContentKey key,
         const DrawNoteEditInput& input,
@@ -1082,6 +1089,11 @@ public:
 
 private:
     void notifyContentChanged(ContentKey key);
+#if JucePlugin_Build_Standalone
+    UndoReplayState captureStandaloneReplayState() const;
+    void settleStandaloneHistory();
+    void synchronizeStandaloneHistory();
+#endif
     UndoManager undoManager_;
     PianoKeyAudition pianoKeyAudition_;
     std::shared_ptr<NoteAudition> noteAudition_ = std::make_shared<NoteAudition>();

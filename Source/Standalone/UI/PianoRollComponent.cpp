@@ -312,7 +312,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
                                          int selectedNoteIndex) {
         interactionState_.noteDraft.clear();
         pendingUndoDescription_ = {};
-        undoSnapshotCaptured_ = false;
 
         if (result.contentSnapshot != nullptr) {
             cachedNotes_ = result.contentSnapshot->notes;
@@ -357,12 +356,44 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         requestContentRedraw();
         overlay_->repaint();
     };
-    toolCtx.commitNotesAndSegments = [this](const std::vector<Note>& notes,
-                                             const std::vector<PitchCorrectionSegment>& segments,
-                                             F0FrameRange affectedRange) {
-        const auto snap = readEditedSnapshot();
-        if (snap == nullptr) return ContentCommitSnapshot{};
-        return commitEditedContentNotesAndSegments(*snap, notes, segments, affectedRange);
+    toolCtx.commitNoteCorrectionDraft = [this](uint64_t expectedNotesRevision,
+                                                const std::vector<Note>& notes,
+                                                F0FrameRange editRange) {
+        OpenTuneAudioProcessor::NoteDraftCommitResult result;
+        if (processor_ != nullptr && editedContentKey_.isValid()) {
+            NoteGeneratorParams params;
+            params.retuneSpeed = currentRetuneSpeed_;
+            params.vibratoDepth = currentVibratoDepth_;
+            params.vibratoRate = currentVibratoRate_;
+            result = processor_->commitNoteBasedCorrectionDraft(
+                editedContentKey_, expectedNotesRevision, notes, editRange, params,
+                pendingUndoDescription_.isNotEmpty() ? pendingUndoDescription_ : LOC(kEdit));
+        }
+
+        interactionState_.noteDraft.clear();
+        interactionState_.noteDrag.previewSnapshot.reset();
+        pendingUndoDescription_ = {};
+        if (result.contentSnapshot != nullptr) {
+            cachedNotes_ = result.contentSnapshot->notes;
+            lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
+            lastKnownPitchRevision_ = result.contentSnapshot->pitchRevision;
+            applyEditedContentCurve(result.contentSnapshot->pitchCurve);
+        }
+
+        using Status = OpenTuneAudioProcessor::NoteDraftCommitStatus;
+        if (result.status == Status::StaleRevision) {
+            parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
+            invalidateEqPopup();
+            interactionState_.noteSelection.clear();
+            parameterTargetDidChange();
+        } else if (result.status == Status::Applied || result.status == Status::NoChange) {
+            interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
+            parameterTargetDidChange();
+        }
+
+        requestContentRedraw();
+        overlay_->repaint();
+        return result.status == Status::Applied || result.status == Status::NoChange;
     };
     toolCtx.commitNoteResize = [this](uint64_t expectedNotesRevision,
                                       int noteIndex,
@@ -380,7 +411,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             editedContentKey_, noteIndex, edge, clampedTime, minDuration,
             expectedNotesRevision, segments, affectedRange, std::move(description));
         pendingUndoDescription_ = {};
-        undoSnapshotCaptured_ = false;
         if (result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::StaleRevision) {
             closeEqPopup();
             parameterTargetWillChange(Listener::ParameterTargetChangePolicy::Cancel);
@@ -444,7 +474,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             cachedNotes_ = result.contentSnapshot->notes;
             lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
             pendingUndoDescription_ = {};
-            undoSnapshotCaptured_ = false;
             requestContentRedraw();
             listeners_.call([](Listener& listener) { listener.contentEdited(); });
             return true;
@@ -541,7 +570,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         lastKnownPitchRevision_ = result.contentSnapshot->pitchRevision;
         applyEditedContentCurve(result.contentSnapshot->pitchCurve);
         pendingUndoDescription_ = {};
-        undoSnapshotCaptured_ = false;
         requestContentRedraw();
         overlay_->repaint();
         return result;
@@ -573,7 +601,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             requestContentRedraw();
             if (result.status == SelectedNoteDeleteStatus::Applied) {
                 pendingUndoDescription_ = {};
-                undoSnapshotCaptured_ = false;
                 if (!result.pitchCurveEdited)
                     listeners_.call([](Listener& listener) { listener.contentEdited(); });
             }
@@ -722,7 +749,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             lastKnownPitchRevision_ = result.contentSnapshot->pitchRevision;
             applyEditedContentCurve(result.contentSnapshot->pitchCurve);
             pendingUndoDescription_ = {};
-            undoSnapshotCaptured_ = false;
             requestContentRedraw();
         }
         return result;
@@ -1394,7 +1420,6 @@ void PianoRollComponent::clearNoteDraft()
 {
     interactionState_.noteDraft.clear();
     pendingUndoDescription_ = {};
-    undoSnapshotCaptured_ = false;
 }
 
 // ============================================================================
@@ -1618,7 +1643,6 @@ ContentCommitSnapshot PianoRollComponent::commitEditedContentNotesAndSegments(co
         applyEditedContentCurve(edit.snapshot->pitchCurve);
     }
     pendingUndoDescription_ = {};
-    undoSnapshotCaptured_ = false;
     lastKnownNotesRevision_ = edit.snapshot->notesRevision;
     lastKnownPitchRevision_ = edit.snapshot->pitchRevision;
     {
@@ -1632,31 +1656,6 @@ std::vector<PitchCorrectionSegment> PianoRollComponent::getCurrentSegments() con
 {
     if (!currentCurve_) return {};
     return currentCurve_->getCorrectionSegments();
-}
-
-void PianoRollComponent::captureBeforeUndoSnapshot()
-{
-    beforeUndoNotes_ = cachedNotes_;
-    beforeUndoSegments_ = getCurrentSegments();
-    undoSnapshotCaptured_ = true;
-}
-
-void PianoRollComponent::recordUndoAction(const juce::String& description, F0FrameRange affectedRange)
-{
-    if (contentCommands_ == nullptr || !editedContentKey_.isValid() || !undoSnapshotCaptured_)
-        return;
-    const auto after = readEditedSnapshot();
-    auto action = contentCommands_->createPianoRollEditAction(
-        editedContentKey_, beforeUndoNotes_, beforeUndoSegments_, after,
-        std::vector<ContentEditRangeFrames>{{affectedRange.startFrame, affectedRange.endFrameExclusive}},
-        description.isNotEmpty() ? description : LOC(kEdit));
-    if (action == nullptr)
-        return;
-    undoManager_.addAction(std::move(action));
-    pendingUndoDescription_ = {};
-    undoSnapshotCaptured_ = false;
-    beforeUndoNotes_.clear();
-    beforeUndoSegments_.clear();
 }
 
 bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFrameExclusive)
@@ -3265,9 +3264,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         lastKnownPitchRevision_ = edit.snapshot->pitchRevision;
         setEditedContent(editedContentKey_, edit.snapshot->pitchCurve, audioBuffer_, audioBufferSampleRate_);
         pendingUndoDescription_ = {};
-        undoSnapshotCaptured_ = false;
-        beforeUndoNotes_.clear();
-        beforeUndoSegments_.clear();
 
         result.status = AudioEditingScheme::ParameterEditStatus::Applied;
         result.changed = true;
@@ -3320,7 +3316,6 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             if (committedSnapshot->pitchCurve != nullptr)
                 applyEditedContentCurve(committedSnapshot->pitchCurve);
             pendingUndoDescription_ = {};
-            undoSnapshotCaptured_ = false;
             lastKnownNotesRevision_ = committedSnapshot->notesRevision;
             lastKnownPitchRevision_ = committedSnapshot->pitchRevision;
             requestContentRedraw();
@@ -3792,9 +3787,6 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
         // interactionState_ 成员，resetTransient 的 noteDraft.clear() 已覆盖）
         interactionState_.resetTransient();
         pendingUndoDescription_ = {};
-        beforeUndoNotes_.clear();
-        beforeUndoSegments_.clear();
-        undoSnapshotCaptured_ = false;
         lastKnownNotesRevision_ = 0;
         lastKnownPitchRevision_ = 0;
         lastKnownTimeGridRevision_ = 0;
@@ -5825,7 +5817,6 @@ void PianoRollComponent::pasteNotes()
         }
         parameterTargetDidChange();
         pendingUndoDescription_ = {};
-        undoSnapshotCaptured_ = false;
         return;
     }
     if (result.status != PasteNotesStatus::Applied) return;
@@ -5835,7 +5826,6 @@ void PianoRollComponent::pasteNotes()
     lastKnownNotesRevision_ = result.contentSnapshot->notesRevision;
 
     pendingUndoDescription_ = {};
-    undoSnapshotCaptured_ = false;
 
     // 选中刚粘贴的 notes（按旧 exact start/end 匹配）
     interactionState_.noteSelection.clear();
@@ -6282,9 +6272,6 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     lastKnownPitchRevision_ = edit.snapshot->pitchRevision;
     setEditedContent(editedContentKey_, edit.snapshot->pitchCurve, audioBuffer_, audioBufferSampleRate_);
     pendingUndoDescription_ = {};
-    undoSnapshotCaptured_ = false;
-    beforeUndoNotes_.clear();
-    beforeUndoSegments_.clear();
 
     return { AutoTuneApplyStatus::Applied };
 }

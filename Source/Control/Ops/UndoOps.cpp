@@ -149,12 +149,6 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
                                          + " history is not the expected entry; the history changed since it was read");
             return false;
         }
-        if (entry->unsafe) {
-            refusal = controlOpError("UNSUPPORTED", "undo_unsafe_build",
-                                     std::string("the top entry deletes a clip, which OpenTune cannot ")
-                                         + what + " correctly");
-            return false;
-        }
         selectedTop = top;
         before.emplace(controlCaptureEditState(context));
         envelope.emplace(context);
@@ -175,12 +169,8 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
                       : history.value()->assignUndoId(manager, *applied, index, epoch, context.instanceShort());
     const auto after = controlCaptureEditState(context);
     controlDescribeEffect(context, *before, after, *envelope);
-    // A step that changed nothing. An entry of the API also knows it from its own step (every inner
-    // action masked, or a pitch shift that commitPitchShiftEdit() did not apply); then nothing changed.
-    const auto* origin = dynamic_cast<const ControlOriginAction*>(applied);
     const bool emptyDiff = isEmptyDiff(before->versions, after.versions);
-    jassert(origin == nullptr || origin->lastStepTookEffect() || emptyDiff);
-    if (emptyDiff || (origin != nullptr && !origin->lastStepTookEffect()))
+    if (emptyDiff)
         envelope->addWarning("UNDO_NO_EFFECT");
     auto revertParams = JsonValue::object();
     revertParams.appendMember("expectedUndoId", JsonValue::string(undoId));
