@@ -1108,11 +1108,7 @@ private:
     // paired with onContentFullMutationCompleted() to trigger batch rendering.
     bool writePitchCurveToOwner(ContentKey key, std::shared_ptr<PitchCurve> curve);
     // For OriginalF0 analysis data only — does NOT trigger audio rendering, only updates analysis state.
-    bool writeOriginalF0ToOwner(
-        ContentKey key,
-        std::shared_ptr<PitchCurve> curve,
-        std::shared_ptr<const std::vector<float>> hnsepHarmonicAudio = {},
-        std::shared_ptr<const std::vector<float>> hnsepResidualAudio = {});
+    bool writeOriginalF0ToOwner(ContentKey key, std::shared_ptr<PitchCurve> curve);
 
     // Cached pre-init state payload for deferred restore.
     // Scanner may perform a state round-trip (getStateInformation ->

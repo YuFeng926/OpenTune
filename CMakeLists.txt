@@ -659,9 +659,6 @@ juce_add_binary_data(OpenTuneResources
 set(OPENTUNE_COMMON_SOURCES
         Source/Services/F0ExtractionService.cpp
         Source/Services/F0ExtractionService.h
-        Source/Services/HNSEPOnnxPostprocessor.cpp
-        Source/Services/HNSEPOnnxPostprocessor.h
-        Source/Services/HnsepAudio.h
         Source/Services/ReferenceAnalysisService.cpp
         Source/Services/ReferenceAnalysisService.h
 

@@ -44,11 +44,7 @@ public:
     // 替换唯一音量包络，并同步 Note::outputGainDb 派生值。
     void applyVolumeEnvelope(AutomationLane envelope);
     void applyPitchCurve(std::shared_ptr<PitchCurve> curve);
-    void applyOriginalF0(
-        std::shared_ptr<PitchCurve> curve,
-        std::shared_ptr<const std::vector<float>> hnsepHarmonicAudio = {},
-        std::shared_ptr<const std::vector<float>> hnsepResidualAudio = {});
-    void clearHnsepAudio();
+    void applyOriginalF0(std::shared_ptr<PitchCurve> curve);
     void applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot);
     bool applyPitchShiftState(const PitchShiftEditState& state);
     void applyDetectedKey(const DetectedKey& key);

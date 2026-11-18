@@ -16,8 +16,6 @@ EditableContentSnapshot makeContentSnapshot(const ContentState& state)
     snap.pitchCurve = state.analysis.pitchCurve != nullptr
         ? state.analysis.pitchCurve->getSnapshot()
         : nullptr;
-    snap.hnsepHarmonicAudio = state.analysis.hnsepHarmonicAudio;
-    snap.hnsepResidualAudio = state.analysis.hnsepResidualAudio;
     snap.timeGrid = state.timeGrid;
     snap.pitchShiftSettings = state.pitchShiftSettings;
     snap.originalF0State = state.analysis.originalF0State;
@@ -54,8 +52,6 @@ ContentState contentStateFromSnapshot(const EditableContentSnapshot& snapshot)
     // 运行时 revision 从默认 1 开始，这不是运行时 revision restore。
     state.audioRevision = snapshot.audioRevision;
     state.analysis.pitchCurve = PitchCurve::fromSnapshot(snapshot.pitchCurve);
-    state.analysis.hnsepHarmonicAudio = snapshot.hnsepHarmonicAudio;
-    state.analysis.hnsepResidualAudio = snapshot.hnsepResidualAudio;
     state.analysis.setOriginalF0State(snapshot.originalF0State);
     state.analysis.originalF0FailureReason = snapshot.originalF0FailureReason;
     state.analysis.detectedKey = snapshot.detectedKey;

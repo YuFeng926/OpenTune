@@ -17,9 +17,6 @@ struct AnalysisState
     OriginalF0State originalF0State{OriginalF0State::NotRequested};
     std::string originalF0FailureReason;
     std::shared_ptr<PitchCurve> pitchCurve;
-    // Standalone-only HNSEP analysis cache; never written to project persistence.
-    std::shared_ptr<const std::vector<float>> hnsepHarmonicAudio;
-    std::shared_ptr<const std::vector<float>> hnsepResidualAudio;
     DetectedKey detectedKey;
     std::vector<SilentGap> silentGaps;
     ReferenceFeatureSet referenceFeatures;

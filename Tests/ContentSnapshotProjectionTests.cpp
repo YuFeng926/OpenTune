@@ -7,7 +7,6 @@
 #include "../Source/Content/ContentSnapshotProjection.h"
 #include "../Source/Content/CaptureSegmentContent.h"
 #include "../Source/Content/StandaloneClipContent.h"
-#include "../Source/Services/HnsepAudio.h"
 #include "../Source/Inference/TimeStretchCache.h"
 #include "../Source/Utils/PlaybackAudioReader.h"
 #include "../Source/Render/PlaybackReadSource.h"
@@ -83,10 +82,6 @@ bool testCommonFieldsRoundTrip()
     source.sourceWindow = OpenTune::SourceWindow{17, {}, 0.25, 1.5};
     source.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 4);
     source.sampleRate = 48000.0;
-    source.analysis.hnsepHarmonicAudio =
-        std::make_shared<const std::vector<float>>(std::vector<float>{0.1f, 0.2f});
-    source.analysis.hnsepResidualAudio =
-        std::make_shared<const std::vector<float>>(std::vector<float>{0.3f, 0.4f});
     source.analysis.originalF0State = OpenTune::OriginalF0State::Ready;
     source.analysis.detectedKey.root = OpenTune::Key::A;
     source.analysis.detectedKey.scale = OpenTune::Scale::Minor;
@@ -117,8 +112,6 @@ bool testCommonFieldsRoundTrip()
         && snapshot.sourceWindow.sourceStartSeconds == 0.25
         && snapshot.sourceWindow.sourceEndSeconds == 1.5
         && snapshot.audioBuffer == source.audioBuffer
-        && snapshot.hnsepHarmonicAudio == source.analysis.hnsepHarmonicAudio
-        && snapshot.hnsepResidualAudio == source.analysis.hnsepResidualAudio
         && nearlyEqual(snapshot.audioSampleRate, 48000.0)
         && snapshot.originalF0State == OpenTune::OriginalF0State::Ready
         && snapshot.detectedKey.root == OpenTune::Key::A
@@ -139,8 +132,6 @@ bool testCommonFieldsRoundTrip()
         && restored.timeGrid == snapshot.timeGrid
         && restored.sourceWindow.sourceId == source.sourceWindow.sourceId
         && restored.audioBuffer == source.audioBuffer
-        && restored.analysis.hnsepHarmonicAudio == source.analysis.hnsepHarmonicAudio
-        && restored.analysis.hnsepResidualAudio == source.analysis.hnsepResidualAudio
         && nearlyEqual(restored.sampleRate, 48000.0)
         && restored.analysis.originalF0State == source.analysis.originalF0State
         && restored.analysis.detectedKey.root == source.analysis.detectedKey.root
@@ -149,52 +140,6 @@ bool testCommonFieldsRoundTrip()
         && restored.volumeEnvelope.points().size() == source.volumeEnvelope.points().size()
         // 反向投影构造新 ContentState（新内容身份），不继承 snapshot 的运行时 revision。
         && restored.contentRevision == 1;
-}
-
-bool testHnsepChunkStitchResidualAndSampleSlice()
-{
-    const std::vector<OpenTune::HnsepSilentGap> hnsepGaps{
-        {4 * 44100 + 30000, 5 * 44100 + 30000},
-        {9 * 44100 + 30000, 10 * 44100 + 30000}
-    };
-    const auto hnsepBoundaries = OpenTune::buildHnsepChunkBoundaries(
-        131 * 44100 / 10, hnsepGaps);
-    if (hnsepBoundaries.size() != 4
-        || hnsepBoundaries[0] != 0
-        || hnsepBoundaries[1] != ((5 * 44100 + 256) / 512) * 512
-        || hnsepBoundaries[2] != (((5 * 44100 + 256) / 512) * 512
-            + 5 * 44100 + 256) / 512 * 512
-        || hnsepBoundaries[3] != 131 * 44100 / 10)
-        return false;
-
-    const auto unsplitBoundaries = OpenTune::buildHnsepChunkBoundaries(12 * 44100, {});
-    if (unsplitBoundaries != std::vector<int64_t>{0, 12 * 44100})
-        return false;
-
-    const std::vector<OpenTune::HnsepChunkOutput> chunks{
-        {0, {10.0f, 10.0f, 10.0f, 10.0f}},
-        {2, {20.0f, 20.0f, 20.0f, 20.0f}}
-    };
-    std::vector<float> harmonic;
-    if (!OpenTune::stitchHnsepChunkOutputs(6, chunks, harmonic)
-        || harmonic.size() != 6
-        || std::abs(harmonic[0] - 10.0f) > 1.0e-6f
-        || std::abs(harmonic[2] - (40.0f / 3.0f)) > 1.0e-5f
-        || std::abs(harmonic[3] - (50.0f / 3.0f)) > 1.0e-5f
-        || std::abs(harmonic[5] - 20.0f) > 1.0e-6f)
-        return false;
-
-    const std::vector<float> dry{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-    std::vector<float> residual;
-    std::vector<float> slice;
-    return OpenTune::makeHnsepResidual(dry, harmonic, residual)
-        && residual.size() == dry.size()
-        && std::abs((harmonic[3] + residual[3]) - dry[3]) <= 1.0e-6f
-        && OpenTune::sliceHnsepSamples(harmonic, 2, 5, slice)
-        && slice.size() == 5
-        && slice[0] == harmonic[2]
-        && slice[3] == harmonic[5]
-        && slice[4] == 0.0f;
 }
 
 // contentStateFromSnapshot 是"new ContentState projection"：即使 snapshot 是
@@ -846,12 +791,6 @@ int main()
     if (!testCommonFieldsRoundTrip())
     {
         std::fputs("FAIL: ContentState snapshot round-trip\n", stderr);
-        return 1;
-    }
-
-    if (!testHnsepChunkStitchResidualAndSampleSlice())
-    {
-        std::fputs("FAIL: HNSEP chunk stitching/residual/sample slicing\n", stderr);
         return 1;
     }
 

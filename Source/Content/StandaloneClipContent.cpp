@@ -105,29 +105,14 @@ void StandaloneClipContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
     bumpContentRevision();
 }
 
-void StandaloneClipContent::applyOriginalF0(
-    std::shared_ptr<PitchCurve> curve,
-    std::shared_ptr<const std::vector<float>> hnsepHarmonicAudio,
-    std::shared_ptr<const std::vector<float>> hnsepResidualAudio)
+void StandaloneClipContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
     // 一次性提交：curve + Ready 状态 + 单次 analysis/content revision。
     // 不调用 applyOriginalF0State，避免同一次提交双 bump。
     content_.analysis.pitchCurve = std::move(curve);
-    content_.analysis.hnsepHarmonicAudio = std::move(hnsepHarmonicAudio);
-    content_.analysis.hnsepResidualAudio = std::move(hnsepResidualAudio);
     content_.analysis.setOriginalF0State(OriginalF0State::Ready);
     ++content_.analysis.analysisRevision;
     ++content_.pitchRevision;
-    bumpContentRevision();
-}
-
-void StandaloneClipContent::clearHnsepAudio()
-{
-    if (content_.analysis.hnsepHarmonicAudio == nullptr
-        && content_.analysis.hnsepResidualAudio == nullptr)
-        return;
-    content_.analysis.hnsepHarmonicAudio.reset();
-    content_.analysis.hnsepResidualAudio.reset();
     bumpContentRevision();
 }
 
@@ -181,8 +166,6 @@ void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBu
 
     content_.audioBuffer = std::move(buffer);
     content_.sampleRate = sampleRate;
-    content_.analysis.hnsepHarmonicAudio.reset();
-    content_.analysis.hnsepResidualAudio.reset();
     ++content_.audioRevision;
     // 非正/非有限 duration 生成 identity 失败时保留已有 bootstrap identity，不写 nullptr。
     if (auto realGrid = TimeGridSnapshot::makeIdentity(durationSeconds))

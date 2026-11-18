@@ -39,9 +39,6 @@ struct EditableContentSnapshot
 
     std::vector<Note> notes;
     std::shared_ptr<const PitchCurveSnapshot> pitchCurve;
-    // In-memory Standalone postprocessing cache; reopening a project recomputes it.
-    std::shared_ptr<const std::vector<float>> hnsepHarmonicAudio;
-    std::shared_ptr<const std::vector<float>> hnsepResidualAudio;
     // Snapshot identity follows ContentState: an empty/new snapshot still has
     // a non-null identity grid rather than using nullptr as a sentinel.
     std::shared_ptr<const TimeGridSnapshot> timeGrid{TimeGridSnapshot::bootstrapIdentity()};

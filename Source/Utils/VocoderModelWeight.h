@@ -11,7 +11,6 @@ using VocoderModelWeight = std::string;
 
 inline constexpr const char* kVocoderWeightCommunity  = "hifigan.onnx";
 inline constexpr const char* kVocoderWeightCoulin9    = "hifigan_coulin9.onnx";
-inline constexpr const char* kVocoderWeightDdspHarmonicGenerator = "ddsp_harmonic_generator_opentune.onnx";
 inline constexpr const char* kDefaultVocoderWeight    = kVocoderWeightCommunity;
 
 } // namespace OpenTune
