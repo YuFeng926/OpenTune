@@ -98,7 +98,7 @@ struct NoteResizeState
 struct NoteInteractionDraft
 {
     bool active = false;
-    bool contentDirty = false;
+    uint64_t expectedNotesRevision = 0;
     std::vector<Note> baselineNotes;
     std::vector<Note> workingNotes;
 
@@ -109,6 +109,8 @@ struct DrawingState
 {
     bool isDrawingF0 = false;
     std::vector<float> handDrawBuffer;
+    int handDrawStartFrame = -1;
+    int handDrawEndFrameExclusive = -1;
     double dirtyStartTime = -1.0;
     double dirtyEndTime = -1.0;
     bool isDrawingNote = false;

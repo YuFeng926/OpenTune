@@ -469,7 +469,7 @@ private:
     // Shift+Left/Right range: the fixed end and the moving end (note indices).
     int keyboardRangeAnchor_ = -1;
     int keyboardRangeActive_ = -1;
-    double lastDrawTime_ = 0.0;
+    int lastDrawFrame_ = -1;
     float lastDrawF0_ = 0.0f;
     AutomationLane volumeDragBaselineEnvelope_;
     std::vector<int> volumeDragSelectedIndices_;

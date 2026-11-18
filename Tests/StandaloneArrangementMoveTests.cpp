@@ -1,8 +1,10 @@
 #include "../Source/StandaloneArrangement.h"
+#include "../Source/Utils/UndoManager.h"
 
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <memory>
 
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
 #include "../Source/Control/ControlUiBridge.h"
@@ -12,7 +14,6 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
-#include <memory>
 #include <string>
 #endif
 
@@ -133,6 +134,123 @@ bool testPlaybackBorrowRetainsOldViewAndCollectsLatest()
     arrangement.collectPlaybackSnapshots();
     const auto latest = arrangement.loadPlaybackSnapshot();
     return latest->epoch == initialEpoch + 12 && near(latest->tracks[0].volume, 3.0);
+}
+
+bool testSelectionSnapshotFollowsTrackIdentityAfterDelete()
+{
+    StandaloneArrangement arrangement;
+    auto placement = makePlacement(5, 2.0);
+    if (!arrangement.insertPlacement(2, placement))
+        return false;
+
+    const auto trackIdentity = arrangement.getTrackIdentity(2);
+    auto selection = arrangement.getSelectionState();
+    selection.activeTrackId = 2;
+    selection.activeTrackIdentity = trackIdentity;
+    selection.selectedPlacementIds[2] = placement.placementId;
+    selection.selectedTrackIdentities[2] = trackIdentity;
+    selection.placements.insert({2, placement.placementId, trackIdentity});
+    if (!arrangement.setSelectionState(selection))
+        return false;
+
+    const auto beforeDelete = arrangement.getSelectionState();
+    if (!arrangement.removeTrackAndShift(0, 3) || !arrangement.setSelectionState(beforeDelete))
+        return false;
+
+    const auto restored = arrangement.getSelectionState();
+    return arrangement.getTrackIdentity(1) == trackIdentity
+        && restored.activeTrackId == 1
+        && restored.activeTrackIdentity == trackIdentity
+        && restored.selectedPlacementIds[1] == placement.placementId
+        && restored.placements.count({1, placement.placementId, trackIdentity}) == 1;
+}
+
+class HistoryProbeAction final : public OpenTune::UndoAction
+{
+public:
+    HistoryProbeAction(uint64_t trackIdentity, uint64_t placementId = 0, OpenTune::ContentKey content = {},
+                       bool exists = true)
+        : trackIdentity_(trackIdentity), placementId_(placementId), content_(content), exists_(exists)
+    {
+    }
+
+    void undo() override { ++undoCount; }
+    void redo() override { ++redoCount; }
+    juce::String getDescription() const override { return "History probe"; }
+    bool retainsRetiredPlacement(uint64_t identity, uint64_t placementId) const override
+    {
+        return identity == trackIdentity_ && placementId == placementId_ && placementId_ != 0;
+    }
+    bool dependsOnTrackIdentity(uint64_t identity) const override { return identity == trackIdentity_; }
+    bool dependsOnPlacement(uint64_t identity, uint64_t placementId) const override
+    {
+        return identity == trackIdentity_ && placementId == placementId_ && placementId_ != 0;
+    }
+    bool dependsOnContent(OpenTune::ContentKey key) const override { return content_ == key && key.isValid(); }
+    bool dependenciesExist() const override { return exists_; }
+
+    int undoCount = 0;
+    int redoCount = 0;
+
+private:
+    uint64_t trackIdentity_;
+    uint64_t placementId_;
+    OpenTune::ContentKey content_;
+    bool exists_;
+};
+
+bool testTrackDeletionPrunesHistoryByIdentityAndContent()
+{
+    StandaloneArrangement arrangement;
+    const uint64_t deletedTrack = arrangement.getTrackIdentity(0);
+    const uint64_t survivorTrack = arrangement.getTrackIdentity(2);
+    if (!arrangement.removeTrackAndShift(0, 3) || arrangement.findTrackIndexByIdentity(survivorTrack) != 1)
+        return false;
+
+    OpenTune::UndoManager history;
+    constexpr uint64_t placementId = 31;
+    const OpenTune::ContentKey content{DomainKind::StandaloneClip, 41, 0};
+
+    history.addAction(std::make_unique<HistoryProbeAction>(deletedTrack, placementId));
+    history.addAction(std::make_unique<HistoryProbeAction>(survivorTrack, 0, content));
+    history.addAction(std::make_unique<HistoryProbeAction>(survivorTrack));
+    if (!history.retainsRetiredPlacement(deletedTrack, placementId))
+        return false;
+    history.undo();
+    history.undo();
+
+    const auto result = history.pruneForTrackDeletion(
+        deletedTrack, {{deletedTrack, placementId}}, {content}, [](OpenTune::ContentKey) { return false; });
+    return result.undo == 1 && result.redo == 1
+        && history.size() == 1 && history.cursor() == 0
+        && history.canRedo() && !history.canUndo()
+        && !history.retainsRetiredPlacement(deletedTrack, placementId);
+}
+
+bool testContentHistorySurvivesWhilePlacementStillReferencesIt()
+{
+    OpenTune::UndoManager history;
+    constexpr uint64_t deletedTrackIdentity = 10;
+    constexpr uint64_t actionTrackIdentity = 20;
+    const OpenTune::ContentKey content{DomainKind::StandaloneClip, 42, 0};
+    history.addAction(std::make_unique<HistoryProbeAction>(actionTrackIdentity, 0, content));
+
+    const auto result = history.pruneForTrackDeletion(
+        deletedTrackIdentity, {}, {content}, [](OpenTune::ContentKey) { return true; });
+    return result.undo == 0 && result.redo == 0 && history.size() == 1 && history.canUndo();
+}
+
+bool testContentReleasePrunesDependentHistoryAndAdjustsCursor()
+{
+    OpenTune::UndoManager history;
+    const OpenTune::ContentKey content{DomainKind::StandaloneClip, 43, 0};
+    history.addAction(std::make_unique<HistoryProbeAction>(20, 0, content));
+    history.addAction(std::make_unique<HistoryProbeAction>(30));
+    history.undo();
+
+    const int removed = history.pruneForContentRelease(content);
+    return removed == 1 && history.size() == 1 && history.cursor() == 0
+        && !history.canUndo() && history.canRedo();
 }
 
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
@@ -272,7 +390,11 @@ int main()
         && testRejectedMoveIsAtomic()
         && testUnchangedMoveDoesNotPublish()
         && testTrackVolumeUsesSharedBounds()
-        && testPlaybackBorrowRetainsOldViewAndCollectsLatest();
+        && testPlaybackBorrowRetainsOldViewAndCollectsLatest()
+        && testSelectionSnapshotFollowsTrackIdentityAfterDelete()
+        && testTrackDeletionPrunesHistoryByIdentityAndContent()
+        && testContentHistorySurvivesWhilePlacementStillReferencesIt()
+        && testContentReleasePrunesDependentHistoryAndAdjustsCursor();
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
     passed = passed && testTrackSetVolumeWarnings();
 #endif

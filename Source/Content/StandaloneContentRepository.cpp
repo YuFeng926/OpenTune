@@ -129,6 +129,35 @@ std::vector<ContentKey> StandaloneContentRepository::getAllClips() const
     return result;
 }
 
+const StandaloneRetiredContentRecord* StandaloneContentRepository::getRetiredContent(ContentKey key) const
+{
+    if (key.domainKind != DomainKind::StandaloneClip)
+        return nullptr;
+
+    juce::ScopedReadLock rl(lock_);
+    const auto* clip = findClipImpl(static_cast<StandaloneClipId>(key.objectId));
+    return clip ? clip->getRetiredContent(key) : nullptr;
+}
+
+bool StandaloneContentRepository::isSourceReferenced(uint64_t sourceId) const
+{
+    if (sourceId == 0)
+        return false;
+
+    juce::ScopedReadLock rl(lock_);
+    for (const auto& [id, clip] : clips_) {
+        if (clip->hasActiveContent()
+            && clip->content().sourceWindow.sourceId == sourceId)
+            return true;
+
+        const auto* retired = clip->getRetiredContent(clip->contentKey());
+        if (retired != nullptr && retired->content.sourceWindow.sourceId == sourceId)
+            return true;
+    }
+
+    return false;
+}
+
 void StandaloneContentRepository::clear()
 {
     juce::ScopedWriteLock wl(lock_);

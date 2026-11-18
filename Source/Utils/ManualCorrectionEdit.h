@@ -16,6 +16,18 @@ struct ManualCorrectionOp
     PitchCorrectionSegment::ParameterSnapshot parameterSnapshot;
 };
 
+struct ManualCorrectionStrokePoint
+{
+    int frame = 0;
+    float f0 = 0.0f;
+};
+
+struct ManualCorrectionStrokePlan
+{
+    std::vector<ManualCorrectionOp> ops;
+    AudioEditingScheme::FrameRange actualRange;
+};
+
 using ManualCorrectionFrameQuery = std::function<float(int)>;
 
 struct ManualCorrectionLogLineFit
@@ -42,6 +54,14 @@ std::vector<ManualCorrectionOp> planManualCorrectionOps(
     AudioEditingScheme::FrameRange requestedRange,
     const ManualCorrectionFrameQuery& valueForFrame,
     PitchCorrectionSegment::Source source,
+    PitchCorrectionSegment::ParameterSnapshot parameterSnapshot = {});
+
+ManualCorrectionStrokePlan planManualCorrectionStroke(
+    AudioEditingScheme::Scheme scheme,
+    const std::vector<float>& originalF0,
+    ManualCorrectionStrokePoint first,
+    ManualCorrectionStrokePoint second,
+    PitchCorrectionSegment::Source source = PitchCorrectionSegment::Source::HandDraw,
     PitchCorrectionSegment::ParameterSnapshot parameterSnapshot = {});
 
 float interpolateLogF0(float leftF0, float rightF0, float t);

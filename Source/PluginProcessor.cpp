@@ -40,6 +40,7 @@
 #include "Utils/TuningConfig.h"
 #include "Utils/VolumeEnvelopeEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
+#include "Utils/NoteDraftEdit.h"
 #include "Utils/ScissorsUndoAction.h"
 #include "Utils/PitchShiftEditAction.h"
 #include "Utils/TimeGridEditAction.h"
@@ -146,22 +147,6 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
     return key;
 }
 
-bool standaloneRepositoryReferencesSource(const StandaloneContentRepository& repository,
-                                          uint64_t sourceId)
-{
-    if (sourceId == 0) {
-        return false;
-    }
-
-    for (const auto key : repository.getAllClips()) {
-        const auto* clip = repository.findClip(key);
-        if (clip != nullptr && clip->content().sourceWindow.sourceId == sourceId) {
-            return true;
-        }
-    }
-
-    return false;
-}
 #endif // JucePlugin_Build_Standalone
 
 double contentDurationSeconds(const EditableContentSnapshot& snap)
@@ -519,7 +504,13 @@ OpenTuneAudioProcessor::OpenTuneAudioProcessor()
     // Pure in-memory state is safe to expose before runtime initialization.
 #if JucePlugin_Build_Standalone
     standaloneArrangement_ = std::make_unique<StandaloneArrangement>();
-    undoManager_.setHistoryPrunedCallback([this] { scheduleReclaimSweep(); });
+    undoManager_.setHistoryPrunedCallback([this] {
+#if defined(OPENTUNE_ENABLE_CONTROL_API)
+        if (controlService_ != nullptr && standaloneContentRepository_ != nullptr)
+            controlService_->synchronizeHistory(undoManager_, standaloneContentRepository_->getContentEpoch());
+#endif
+        scheduleReclaimSweep();
+    });
 #endif
 #if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
     // Start the external service after construction, guarded by its liveness token.
@@ -3416,16 +3407,20 @@ std::optional<SplitOutcome> OpenTuneAudioProcessor::splitPlacementAtSeconds(int 
     }
 
     standaloneArrangement_->retirePlacement(trackId, originalPlacement.placementId);
-    standaloneContentRepository_->retireClip(originalPlacement.contentKey);
+    if (!standaloneArrangement_->referencesContentActive(originalPlacement.contentKey))
+        standaloneContentRepository_->retireClip(originalPlacement.contentKey);
 
     auto selectionAfter = selectionBefore;
     selectionAfter.placements.erase({trackId, originalPlacement.placementId});
-    selectionAfter.placements.insert({trackId, trailingPlacement.placementId});
+    selectionAfter.activeTrackIdentity = standaloneArrangement_->getTrackIdentity(trackId);
+    selectionAfter.placements.insert({trackId, trailingPlacement.placementId, selectionAfter.activeTrackIdentity});
     for (auto& selectedId : selectionAfter.selectedPlacementIds)
         if (selectedId == originalPlacement.placementId)
             selectedId = trailingPlacement.placementId;
     selectionAfter.activeTrackId = trackId;
+    selectionAfter.activeTrackIdentity = standaloneArrangement_->getTrackIdentity(trackId);
     selectionAfter.selectedPlacementIds[static_cast<size_t>(trackId)] = trailingPlacement.placementId;
+    selectionAfter.selectedTrackIdentities[static_cast<size_t>(trackId)] = selectionAfter.activeTrackIdentity;
     standaloneArrangement_->setSelectionState(selectionAfter);
     scheduleReclaimSweep();
 
@@ -3559,18 +3554,23 @@ std::optional<MergeOutcome> OpenTuneAudioProcessor::mergePlacements(int trackId,
 
     standaloneArrangement_->retirePlacement(trackId, trailingPlacementId);
     standaloneArrangement_->retirePlacement(trackId, leadingPlacementId);
-    standaloneContentRepository_->retireClip(leadingPlacement.contentKey);
-    standaloneContentRepository_->retireClip(trailingPlacement.contentKey);
+    if (!standaloneArrangement_->referencesContentActive(leadingPlacement.contentKey))
+        standaloneContentRepository_->retireClip(leadingPlacement.contentKey);
+    if (!standaloneArrangement_->referencesContentActive(trailingPlacement.contentKey))
+        standaloneContentRepository_->retireClip(trailingPlacement.contentKey);
 
     auto selectionAfter = selectionBefore;
     selectionAfter.placements.erase({trackId, leadingPlacementId});
     selectionAfter.placements.erase({trackId, trailingPlacementId});
-    selectionAfter.placements.insert({trackId, mergedPlacement.placementId});
+    selectionAfter.activeTrackIdentity = standaloneArrangement_->getTrackIdentity(trackId);
+    selectionAfter.placements.insert({trackId, mergedPlacement.placementId, selectionAfter.activeTrackIdentity});
     for (auto& selectedId : selectionAfter.selectedPlacementIds)
         if (selectedId == leadingPlacementId || selectedId == trailingPlacementId)
             selectedId = mergedPlacement.placementId;
     selectionAfter.activeTrackId = trackId;
+    selectionAfter.activeTrackIdentity = standaloneArrangement_->getTrackIdentity(trackId);
     selectionAfter.selectedPlacementIds[static_cast<size_t>(trackId)] = mergedPlacement.placementId;
+    selectionAfter.selectedTrackIdentities[static_cast<size_t>(trackId)] = selectionAfter.activeTrackIdentity;
     standaloneArrangement_->setSelectionState(selectionAfter);
 
     scheduleReclaimSweep();
@@ -3603,7 +3603,8 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
     }
 
     standaloneArrangement_->retirePlacement(trackId, placement.placementId);
-    standaloneContentRepository_->retireClip(placement.contentKey);
+    if (!standaloneArrangement_->referencesContentActive(placement.contentKey))
+        standaloneContentRepository_->retireClip(placement.contentKey);
     scheduleReclaimSweep();
 
     DeleteOutcome outcome;
@@ -3613,6 +3614,60 @@ std::optional<DeleteOutcome> OpenTuneAudioProcessor::deletePlacement(int trackId
     outcome.contentKey = placement.contentKey;
     notifyPlacementChanged();
     return outcome;
+}
+
+bool OpenTuneAudioProcessor::deleteTrack(int trackId, int visibleTrackCount)
+{
+    auto* arrangement = standaloneArrangement_.get();
+    auto* repository = standaloneContentRepository_.get();
+    if (arrangement == nullptr || repository == nullptr || visibleTrackCount <= 1
+        || trackId < 0 || trackId >= visibleTrackCount || trackId >= arrangement->getNumTracks())
+        return false;
+
+    const auto trackIdentity = arrangement->getTrackIdentity(trackId);
+    if (trackIdentity == 0)
+        return false;
+
+    std::vector<std::pair<uint64_t, uint64_t>> placements;
+    std::vector<ContentKey> contents;
+    const auto addContent = [&contents](ContentKey key) {
+        if (key.isValid() && std::find(contents.begin(), contents.end(), key) == contents.end())
+            contents.push_back(key);
+    };
+
+    for (int index = 0; index < arrangement->getNumPlacements(trackId); ++index) {
+        StandaloneArrangement::Placement placement;
+        if (!arrangement->getPlacementByIndex(trackId, index, placement))
+            continue;
+        placements.emplace_back(trackIdentity, placement.placementId);
+        addContent(placement.contentKey);
+    }
+    for (const auto& retired : arrangement->getRetiredPlacements()) {
+        if (retired.trackIdentity != trackIdentity)
+            continue;
+        placements.emplace_back(trackIdentity, retired.placementId);
+        addContent(retired.contentKey);
+    }
+
+    if (!arrangement->removeTrackAndShift(trackId, visibleTrackCount))
+        return false;
+
+    undoManager_.pruneForTrackDeletion(
+        trackIdentity, placements, contents,
+        [arrangement](ContentKey key) { return arrangement->referencesContentActive(key); });
+
+#if defined(OPENTUNE_ENABLE_CONTROL_API)
+    if (controlService_ != nullptr)
+        controlService_->synchronizeHistory(undoManager_, repository->getContentEpoch());
+#endif
+
+    for (const auto key : contents)
+        if (!arrangement->referencesContentActive(key))
+            repository->retireClip(key);
+
+    scheduleReclaimSweep();
+    notifyPlacementChanged();
+    return true;
 }
 
 void OpenTuneAudioProcessor::scheduleReclaimSweep()
@@ -3691,7 +3746,7 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
 
     const auto retiredPlacements = standaloneArrangement_->getRetiredPlacements();
     for (const auto& entry : retiredPlacements) {
-        if (undoManager_.retainsRetiredPlacement(entry.trackId, entry.placementId))
+        if (undoManager_.retainsRetiredPlacement(entry.trackIdentity, entry.placementId))
             continue;
         standaloneArrangement_->deletePlacementById(entry.trackId, entry.placementId, nullptr, nullptr);
     }
@@ -3703,10 +3758,16 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
             continue;
         }
 
-        uint64_t sourceId = 0;
-        if (auto* clip = standaloneContentRepository_->findClip(key)) {
-            sourceId = clip->content().sourceWindow.sourceId;
+        if (undoManager_.pruneForContentRelease(key) > 0) {
+#if defined(OPENTUNE_ENABLE_CONTROL_API)
+            if (controlService_ != nullptr && standaloneContentRepository_ != nullptr)
+                controlService_->synchronizeHistory(undoManager_, standaloneContentRepository_->getContentEpoch());
+#endif
         }
+
+        uint64_t sourceId = 0;
+        if (const auto* retired = standaloneContentRepository_->getRetiredContent(key))
+            sourceId = retired->content.sourceWindow.sourceId;
 
         if (contentRenderService_ != nullptr) {
             contentRenderService_->removePlaybackSource(key);
@@ -3720,7 +3781,7 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
         if (sourceId != 0
             && sourceStore_ != nullptr
             && sourceStore_->containsSource(sourceId)
-            && !standaloneRepositoryReferencesSource(*standaloneContentRepository_, sourceId)) {
+            && !standaloneContentRepository_->isSourceReferenced(sourceId)) {
             sourceStore_->retireSource(sourceId);
         }
     }
@@ -3728,7 +3789,7 @@ void OpenTuneAudioProcessor::runReclaimSweepOnMessageThread()
     if (sourceStore_ != nullptr) {
         const auto retiredSourceIds = sourceStore_->getRetiredSourceIds();
         for (const uint64_t sourceId : retiredSourceIds) {
-            if (standaloneRepositoryReferencesSource(*standaloneContentRepository_, sourceId)) {
+            if (standaloneContentRepository_->isSourceReferenced(sourceId)) {
                 continue;
             }
             sourceStore_->physicallyDeleteIfReclaimable(sourceId);
@@ -5550,6 +5611,45 @@ OpenTuneAudioProcessor::PasteNotesResult OpenTuneAudioProcessor::pasteNotesAt(
         contentCommands_, key, std::move(undoDescription),
         std::move(plan.beforePatch), std::move(plan.afterPatch)));
     result.status = PasteNotesStatus::Applied;
+    return result;
+}
+
+OpenTuneAudioProcessor::NoteDraftCommitResult OpenTuneAudioProcessor::commitNoteDraft(
+    ContentKey key,
+    uint64_t expectedNotesRevision,
+    const std::vector<Note>& workingNotes,
+    juce::String undoDescription)
+{
+    NoteDraftCommitResult result;
+    auto* messageManager = juce::MessageManager::getInstanceWithoutCreating();
+    jassert(messageManager != nullptr && messageManager->isThisTheMessageThread());
+    if (messageManager == nullptr || !messageManager->isThisTheMessageThread())
+        return result;
+
+    const auto snapshot = getContentSnapshot(key);
+    if (snapshot == nullptr || contentCommands_ == nullptr)
+        return result;
+    result.contentSnapshot = snapshot;
+    if (snapshot->notesRevision != expectedNotesRevision) {
+        result.status = NoteDraftCommitStatus::StaleRevision;
+        return result;
+    }
+
+    auto plan = planNoteDraftEdit(snapshot->notes, workingNotes);
+    if (plan.status == NoteDraftEditStatus::NoChange) {
+        result.status = NoteDraftCommitStatus::NoChange;
+        return result;
+    }
+
+    const auto committed = contentCommands_->commitNoteTopologyPatch(key, plan.afterPatch);
+    if (committed == nullptr)
+        return result;
+
+    undoManager_.addAction(std::make_unique<PianoRollNotePatchAction>(
+        contentCommands_, key, std::move(undoDescription),
+        std::move(plan.beforePatch), std::move(plan.afterPatch)));
+    result.contentSnapshot = committed;
+    result.status = NoteDraftCommitStatus::Applied;
     return result;
 }
 

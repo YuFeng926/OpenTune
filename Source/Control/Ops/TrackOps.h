@@ -7,8 +7,8 @@ namespace OpenTune {
 
 /**
  * The track methods of capability tracks.v1, on the message thread, through the arrangement and the editor's
- * bridge. OpenTune identifies a track by its position only ("Track N") and has a fixed number of slots, of which
- * the editor shows the first few; the others are hidden and may hold clips.
+ * bridge. The API addresses tracks by their current position ("Track N"); history uses stable runtime identities.
+ * The editor shows the first few of a fixed number of slots; hidden slots may hold clips.
  * - track.set: mute, solo, volume (dB or linear, limited to the volume knob's range
  *   of 0 to 4, with the warning CLAMPED) and colour of tracks, as the track panel's controls set them
  *   (trackMuteToggled, trackSoloToggled, trackVolumeChanged; the colour is set directly, without the colour dialog).
@@ -28,17 +28,13 @@ namespace OpenTune {
  *   clip duplicate of the arrangement uses). A clip waiting to be reclaimed (isRetired) is not copied. No undo entry
  *   (ui_parity); the revert recipe deletes the new track and needs the end user's consent.
  * - track.delete: the steps of the track menu's Delete Track
- *   (trackDeleteRequested): StandaloneArrangement::removeTrackAndShift() removes the track's clips and moves every
+ *   (trackDeleteRequested): OpenTuneAudioProcessor::deleteTrack() removes the track's clips and moves every
  *   later shown track down, then the panel and the arrangement show one track fewer. Hidden slots keep their
- *   position, their clips and their mix. It cannot be undone (no_upstream_undo, IRREVERSIBLE) and needs confirm; the
- *   only shown track and hidden tracks cannot be deleted.
- *   The deletion is a barrier in the undo and redo histories
- *   (ControlHistory::onTrackDeleted()): an entry that addresses the deleted track or
- *   a shown track after it is possibly stale, while an entry that addresses only hidden tracks stays valid, since
- *   those keep their position. The barrier also follows the clips of the shown tracks it moves down, so a later
- *   deletion compares both the slots the entry's actions are keyed by and where its clips are then. OpenTune does not
- *   retire the contents of the removed clips (it leaks them); the control API reports a content that no clip shows
- *   any more as removed (ControlHistory::markContentsRemoved()) and does not repair the leak.
+ *   position, their clips and their mix. Actions tied to the deleted track are pruned by stable identity; content
+ *   actions survive while an active placement or retained history owns their content. Unreferenced content is retired
+ *   for reclamation.
+ *   It cannot be undone (no_upstream_undo, IRREVERSIBLE) and needs confirm; the only shown track and hidden tracks
+ *   cannot be deleted. The control API reports content that left the project as removed.
  *
  * Every write checks, in order: the trackId, the busy state, the expected arrangement
  * revision, then the method's own validation. The methods that change the number of shown tracks need the editor

@@ -17,11 +17,6 @@ namespace OpenTune {
  *   applied through the editor's complete undo or redo command, exactly as the UI's Ctrl+Z applies it. The result
  *   describes the effect from snapshots before and after the step (controlDescribeEffect); a step that changed nothing is a
  *   success with noOp and UNDO_NO_EFFECT.
- *
- * Track deletion barrier (ControlHistory::onTrackDeleted()): an entry recorded before a track
- * deletion is possibly stale (edit.getHistory possiblyStale). Without force, an entry recorded through the API
- * that addressed a moved track fails with UNDO_CONFLICT(stale_entry), and an entry of the UI is applied with the
- * warning UNDO_ENTRY_POSSIBLY_STALE. A call with force applies either without that warning and confirms the entry.
  */
 void registerUndoOps(ControlMethodTable& table);
 

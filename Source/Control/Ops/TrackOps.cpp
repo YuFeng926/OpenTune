@@ -582,7 +582,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
 
     const auto clipsAfter = controlLivePlacements(context);
 
-    // The contents that no clip shows any more left the project (OpenTune leaks their clips, see TrackOps.h).
+    // The processor retires content when its final active placement leaves the arrangement.
     std::set<std::uint64_t> stillShown;
     for (const auto& ref : clipsAfter)
         stillShown.insert(ref.placement.contentKey.objectId);
@@ -591,14 +591,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         if (stillShown.count(ref.placement.contentKey.objectId) == 0
             && std::find(leftProject.begin(), leftProject.end(), ref.placement.contentKey) == leftProject.end())
             leftProject.push_back(ref.placement.contentKey);
-    const auto epoch = controlContentEpoch(context);
-    history->markContentsRemoved(leftProject, epoch);
-
-    // The barrier in the undo and redo histories: an entry is possibly stale when it addresses
-    // the deleted track or a shown track after it, which removeTrackAndShift() moved down. A hidden track keeps its
-    // position and its clips, so an entry that addresses only hidden tracks stays valid. visible is the number of
-    // shown tracks before the deletion.
-    const auto stale = history->onTrackDeleted(processor.getUndoManager(), params.trackId, visible, epoch);
+    history->synchronize(processor.getUndoManager(), controlContentEpoch(context));
 
     // Removed: the clips, then the contents that left with them.
     for (const auto& ref : removed)
@@ -641,15 +634,9 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
 
     // No undo and no revert: OpenTune has no way to bring the track back.
     envelope.addWarning("IRREVERSIBLE", controlTrackRef(params.trackId));
-    auto staleData = JsonValue::object();
-    staleData.appendMember("undo", JsonValue::integer(stale.undo));
-    staleData.appendMember("redo", JsonValue::integer(stale.redo));
-    if (stale.undo + stale.redo > 0)
-        envelope.addWarning("UNDO_HISTORY_POSSIBLY_STALE", JsonValue(), staleData);
     envelope.setNotUndoable("no_upstream_undo");
     auto result = envelope.committed(context);
     result.appendMember("trackIdMap", std::move(trackIdMap));
-    result.appendMember("possiblyStaleEntries", std::move(staleData));
     return result;
 }
 

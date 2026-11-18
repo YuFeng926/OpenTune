@@ -81,8 +81,10 @@ bool isExactContinuation(const StandaloneArrangement::PlaybackPlacement& previou
 StandaloneArrangement::StandaloneArrangement()
 {
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
-        tracks_[static_cast<size_t>(trackId)].name = defaultTrackName(trackId);
-        tracks_[static_cast<size_t>(trackId)].colour = makeDefaultTrackColour();
+        auto& track = tracks_[static_cast<size_t>(trackId)];
+        track.identity = nextTrackIdentity_++;
+        track.name = defaultTrackName(trackId);
+        track.colour = makeDefaultTrackColour();
     }
 
     const juce::ScopedWriteLock lock(stateLock_);
@@ -447,40 +449,81 @@ StandaloneArrangement::SelectionState StandaloneArrangement::getSelectionState()
     const juce::ScopedReadLock lock(stateLock_);
     SelectionState state;
     state.activeTrackId = activeTrackId_;
-    state.placements = selectedPlacements_;
-    for (int trackId = 0; trackId < kTrackCount; ++trackId)
+    state.activeTrackIdentity = tracks_[static_cast<size_t>(activeTrackId_)].identity;
+    for (const auto& key : selectedPlacements_) {
+        auto stableKey = key;
+        stableKey.trackIdentity = tracks_[static_cast<size_t>(key.trackId)].identity;
+        state.placements.insert(stableKey);
+    }
+    for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         state.selectedPlacementIds[static_cast<size_t>(trackId)] =
             tracks_[static_cast<size_t>(trackId)].selectedPlacementId;
+        state.selectedTrackIdentities[static_cast<size_t>(trackId)] =
+            tracks_[static_cast<size_t>(trackId)].identity;
+    }
     return state;
 }
 
 bool StandaloneArrangement::setSelectionState(const SelectionState& state)
 {
-    if (!isValidTrackId(state.activeTrackId))
-        return false;
-
     const juce::ScopedWriteLock lock(stateLock_);
+    int activeTrack = state.activeTrackIdentity != 0 ? -1 : state.activeTrackId;
+    if (state.activeTrackIdentity != 0) {
+        for (int trackId = 0; trackId < kTrackCount; ++trackId)
+            if (tracks_[static_cast<size_t>(trackId)].identity == state.activeTrackIdentity) {
+                activeTrack = trackId;
+                break;
+            }
+        if (isValidTrackId(state.activeTrackId)
+            && state.selectedTrackIdentities[static_cast<size_t>(state.activeTrackId)]
+                == tracks_[static_cast<size_t>(state.activeTrackId)].identity)
+            activeTrack = state.activeTrackId;
+    }
+    if (!isValidTrackId(activeTrack))
+        activeTrack = activeTrackId_;
+
+    std::array<uint64_t, kTrackCount> selectedIds{};
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         const auto placementId = state.selectedPlacementIds[static_cast<size_t>(trackId)];
         if (placementId == 0)
             continue;
-        const int index = findPlacementIndexUnlocked(trackId, placementId);
-        if (index < 0 || tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)].isRetired)
-            return false;
-    }
-    for (const auto& key : state.placements) {
-        if (!isValidTrackId(key.trackId) || key.placementId == 0)
-            return false;
-        const int index = findPlacementIndexUnlocked(key.trackId, key.placementId);
-        if (index < 0 || tracks_[static_cast<size_t>(key.trackId)].placements[static_cast<size_t>(index)].isRetired)
-            return false;
+        const auto identity = state.selectedTrackIdentities[static_cast<size_t>(trackId)];
+        int resolvedTrack = identity == 0 ? trackId : -1;
+        if (identity != 0) {
+            for (int current = 0; current < kTrackCount; ++current)
+                if (tracks_[static_cast<size_t>(current)].identity == identity) {
+                    resolvedTrack = current;
+                    break;
+                }
+        }
+        if (!isValidTrackId(resolvedTrack))
+            continue;
+        const int index = findPlacementIndexUnlocked(resolvedTrack, placementId);
+        if (index >= 0 && !tracks_[static_cast<size_t>(resolvedTrack)]
+                               .placements[static_cast<size_t>(index)].isRetired)
+            selectedIds[static_cast<size_t>(resolvedTrack)] = placementId;
     }
 
-    activeTrackId_ = state.activeTrackId;
-    selectedPlacements_ = state.placements;
+    activeTrackId_ = activeTrack;
+    selectedPlacements_.clear();
+    for (const auto& key : state.placements) {
+        int resolvedTrack = key.trackIdentity == 0 ? key.trackId : -1;
+        if (key.trackIdentity != 0) {
+            for (int trackId = 0; trackId < kTrackCount; ++trackId)
+                if (tracks_[static_cast<size_t>(trackId)].identity == key.trackIdentity) {
+                    resolvedTrack = trackId;
+                    break;
+                }
+        }
+        if (!isValidTrackId(resolvedTrack) || key.placementId == 0)
+            continue;
+        const int index = findPlacementIndexUnlocked(resolvedTrack, key.placementId);
+        if (index >= 0 && !tracks_[static_cast<size_t>(resolvedTrack)]
+                               .placements[static_cast<size_t>(index)].isRetired)
+            selectedPlacements_.insert({resolvedTrack, key.placementId});
+    }
     for (int trackId = 0; trackId < kTrackCount; ++trackId)
-        tracks_[static_cast<size_t>(trackId)].selectedPlacementId =
-            state.selectedPlacementIds[static_cast<size_t>(trackId)];
+        tracks_[static_cast<size_t>(trackId)].selectedPlacementId = selectedIds[static_cast<size_t>(trackId)];
     return true;
 }
 
@@ -494,6 +537,7 @@ void StandaloneArrangement::clear()
 
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         auto& track = tracks_[static_cast<size_t>(trackId)];
+        track.identity = nextTrackIdentity_++;
         track.placements.clear();
         track.selectedPlacementId = 0;
         track.isMuted = false;
@@ -1069,6 +1113,58 @@ void StandaloneArrangement::publishPlaybackSnapshotLocked()
     playbackSnapshot_.publish(std::move(owner));
 }
 
+StandaloneArrangement::TrackIdentity StandaloneArrangement::getTrackIdentity(int trackId) const
+{
+    if (!isValidTrackId(trackId))
+        return 0;
+    const juce::ScopedReadLock lock(stateLock_);
+    return tracks_[static_cast<size_t>(trackId)].identity;
+}
+
+int StandaloneArrangement::findTrackIndexByIdentity(TrackIdentity identity) const
+{
+    if (identity == 0)
+        return -1;
+    const juce::ScopedReadLock lock(stateLock_);
+    for (int trackId = 0; trackId < kTrackCount; ++trackId)
+        if (tracks_[static_cast<size_t>(trackId)].identity == identity)
+            return trackId;
+    return -1;
+}
+
+bool StandaloneArrangement::hasPlacement(TrackIdentity identity, uint64_t placementId) const
+{
+    if (identity == 0 || placementId == 0)
+        return false;
+    const juce::ScopedReadLock lock(stateLock_);
+    for (int trackId = 0; trackId < kTrackCount; ++trackId)
+        if (tracks_[static_cast<size_t>(trackId)].identity == identity)
+            return findPlacementIndexUnlocked(trackId, placementId) >= 0;
+    return false;
+}
+
+bool StandaloneArrangement::hasPlacementGlobal(uint64_t placementId) const
+{
+    const juce::ScopedReadLock lock(stateLock_);
+    int trackId = -1;
+    size_t index = 0;
+    return findPlacementByIdGlobalUnlocked(placementId, trackId, index);
+}
+
+bool StandaloneArrangement::hasActivePlacement(TrackIdentity identity, uint64_t placementId) const
+{
+    if (identity == 0 || placementId == 0)
+        return false;
+    const juce::ScopedReadLock lock(stateLock_);
+    for (int trackId = 0; trackId < kTrackCount; ++trackId) {
+        if (tracks_[static_cast<size_t>(trackId)].identity != identity)
+            continue;
+        const int index = findPlacementIndexUnlocked(trackId, placementId);
+        return index >= 0 && !tracks_[static_cast<size_t>(trackId)].placements[static_cast<size_t>(index)].isRetired;
+    }
+    return false;
+}
+
 bool StandaloneArrangement::retirePlacement(int trackId, uint64_t placementId)
 {
     if (!isValidTrackId(trackId) || placementId == 0) return false;
@@ -1113,6 +1209,17 @@ bool StandaloneArrangement::referencesContentAnyState(ContentKey contentKey) con
     return false;
 }
 
+bool StandaloneArrangement::referencesContentActive(ContentKey contentKey) const
+{
+    if (!contentKey.isValid()) return false;
+    const juce::ScopedReadLock lock(stateLock_);
+    for (int trackId = 0; trackId < kTrackCount; ++trackId)
+        for (const auto& placement : tracks_[static_cast<size_t>(trackId)].placements)
+            if (!placement.isRetired && placement.contentKey == contentKey)
+                return true;
+    return false;
+}
+
 std::vector<StandaloneArrangement::RetiredPlacementEntry> StandaloneArrangement::getRetiredPlacements() const
 {
     std::vector<RetiredPlacementEntry> result;
@@ -1120,7 +1227,8 @@ std::vector<StandaloneArrangement::RetiredPlacementEntry> StandaloneArrangement:
     for (int trackId = 0; trackId < kTrackCount; ++trackId) {
         for (const auto& p : tracks_[static_cast<size_t>(trackId)].placements) {
             if (p.isRetired) {
-                result.push_back({trackId, p.placementId, p.contentKey});
+                result.push_back({trackId, tracks_[static_cast<size_t>(trackId)].identity,
+                                  p.placementId, p.contentKey});
             }
         }
     }
@@ -1160,11 +1268,21 @@ bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
 
     const juce::ScopedWriteLock lock(stateLock_);
 
+    std::set<PlacementSelectionKey> shiftedSelection;
+    for (auto key : selectedPlacements_) {
+        if (key.trackId == trackId)
+            continue;
+        if (key.trackId > trackId && key.trackId < visibleCount)
+            --key.trackId;
+        shiftedSelection.insert(key);
+    }
+
     // Shift tracks [trackId+1, visibleCount) down by one
     for (int i = trackId; i < visibleCount - 1; ++i) {
         auto& dst = tracks_[static_cast<size_t>(i)];
         auto& src = tracks_[static_cast<size_t>(i + 1)];
 
+        dst.identity = src.identity;
         dst.placements = std::move(src.placements);
         dst.selectedPlacementId = src.selectedPlacementId;
         dst.isMuted = src.isMuted;
@@ -1179,6 +1297,7 @@ bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
     // Clear the last visible slot (now vacated)
     const int lastSlot = visibleCount - 1;
     auto& cleared = tracks_[static_cast<size_t>(lastSlot)];
+    cleared.identity = nextTrackIdentity_++;
     cleared.placements.clear();
     cleared.selectedPlacementId = 0;
     cleared.isMuted = false;
@@ -1194,6 +1313,7 @@ bool StandaloneArrangement::removeTrackAndShift(int trackId, int visibleCount)
     } else if (activeTrackId_ > trackId && activeTrackId_ < visibleCount) {
         --activeTrackId_;
     }
+    selectedPlacements_ = std::move(shiftedSelection);
 
     publishPlaybackSnapshotLocked();
     return true;

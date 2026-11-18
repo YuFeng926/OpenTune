@@ -67,21 +67,6 @@ public:
             them while the notes of the content are masked (see the class comment). */
         std::optional<std::pair<PitchShiftSettings, PitchShiftSettings>> pitchShift;
         std::shared_ptr<ContentEditCommands> commands;
-        /** The track slots the wrapped OpenTune action is keyed by (a clip move or trim, a split, a merge, ...):
-            empty for an action that addresses a content only. The action keeps these numbers for good (for example
-            MultiMovePlacementAction::Entry::sourceTrackId), so undo() and redo() write to these slots whatever
-            track deletions happened since. Never changed after construction. */
-        std::vector<int> tracks;
-        /** An approximation of the positions the clips of the action are at now: a copy of tracks when the entry is
-            made, renumbered by the barrier of every track deletion for the shown tracks that moved down
-            (removeTrackAndShift()). After an undo() or redo() in which the action was executed (not blocked by a mask)
-            the slots of tracks are merged into it (without duplicates), so followed covers tracks from then on, and a
-            deletion that hits one of them reports the entry possibly stale: too often rather than
-            too rarely. "Executed" is all that is known: the value apply() returns does not reflect an upstream action
-            that rejects the change on its own (for example because its clip is gone), which only makes followed cover
-            more tracks than needed. The real protection comes from tracks: the action reads and writes only those
-            slots. Filled by the constructor when left empty. */
-        std::vector<int> followed;
     };
 
     ControlOriginAction(std::shared_ptr<ControlHistory> history, std::string undoId, juce::String description,
@@ -94,8 +79,12 @@ public:
     void undo() override;
     void redo() override;
     juce::String getDescription() const override { return description_; }
-    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependsOnContent(ContentKey key) const override;
+    bool dependenciesExist() const override;
 
     const std::string& undoId() const noexcept { return undoId_; }
     /** The class names of the inner actions, in order. */
@@ -112,51 +101,17 @@ public:
         puts it back. Called by ControlHistory. */
     void mask(const ContentKey& content, ControlContentAspect aspect);
 
-    /** A track was deleted; visibleCount is the number of shown tracks before the deletion.
-        The entry becomes possibly stale when a track it is keyed by (Inner::tracks) or a position its clips are at
-        (Inner::followed) is the deleted one or one of the shown tracks after it (removeTrackAndShift() moves only the
-        shown tracks after the deleted one down; a hidden track keeps its position and its clips). Only the followed
-        positions are renumbered to where the clips are now: the slots of the wrapped action never change. An entry
-        that addresses no track, only tracks before the deleted one or only hidden tracks stays as it is. True when
-        the entry was not possibly stale before and is now. Called by ControlHistory. */
-    bool onTrackDeleted(int deletedTrack, int visibleCount);
-    /** True from a track deletion that made the entry possibly stale until a call with force applied the entry. */
-    bool possiblyStale() const noexcept { return possiblyStale_; }
-    /** The end user confirmed the entry by asking for its step with force: it is no longer possibly stale. */
-    void confirmStale() noexcept { possiblyStale_ = false; }
-    /** True while the entry sits on the redo side of the history: after its undo() and before its next redo().
-        A new entry starts on the undo side. */
-    bool onRedoSide() const noexcept { return onRedoSide_; }
-    /** The value of ControlHistory::barrierGeneration() when the entry was made: an entry made after the last
-        track deletion carries the current value. */
-    std::uint64_t barrierGeneration() const noexcept { return barrierGeneration_; }
-    /** True when the entry sits at a position below the history's stale mark (ControlHistory::record() found
-        it so, or the history was full and positions moved): the entry is newer than the last track deletion, but
-        its position still counts among the positions recorded before it. A track deletion then must not take it
-        off the count of newer positions (see ControlHistory::onTrackDeleted()). */
-    bool belowStaleMark() const noexcept { return belowStaleMark_; }
-    /** Called by ControlHistory. */
-    void markBelowStaleMark() noexcept { belowStaleMark_ = true; }
-
 private:
     bool masked(const ContentKey& content, ControlContentAspect aspect) const;
     /** Undoes (undo true) or redoes one inner action, as the masks of its content allow; false when it applied
         nothing. */
     bool apply(Inner& inner, bool undo);
-    /** apply(), then merges the slots of the inner action into followed when the action was executed (not blocked
-        by a mask). The value apply() returns does not reflect an upstream action that rejects the change itself. */
-    bool applyAndFollow(Inner& inner, bool undo);
-
     std::shared_ptr<ControlHistory> history_;
     std::string undoId_;
     juce::String description_;
     std::vector<Inner> inner_;
     std::vector<std::pair<ContentKey, ControlContentAspect>> masked_;
     bool lastStepTookEffect_ = true;
-    bool possiblyStale_ = false;
-    bool onRedoSide_ = false;
-    bool belowStaleMark_ = false;
-    std::uint64_t barrierGeneration_ = 0;
 };
 
 /**
@@ -170,12 +125,8 @@ private:
  * place in memory and would carry its undoId. Opening a project forgets all of them (the content epoch
  * changes and OpenTune clears its history).
  *
- * A full history moves every position: once it holds kUndoHistoryCapacity entries, UndoManager::addAction()
- * drops the oldest one and every entry moves down by one, and the read hooks cannot tell that apart from an
- * undo followed by a new entry. Whenever the history is found full and changed since it was last observed,
- * the undoIds of UI entries are therefore forgotten: such an entry is never confirmed at a position that may
- * hold another entry, and a call that names it fails with UNDO_CONFLICT(top_mismatch) instead. Steps the API
- * applies itself (noteOwnStep) move no position and keep them.
+ * UI entry indices are rebuilt from their action identities whenever the history changes. At capacity, UI undoIds
+ * are forgotten because an action address may be reused after the oldest entry is destroyed.
  *
  * Threading: message thread only. Owned by ControlService and shared with every ControlOriginAction.
  */
@@ -194,10 +145,6 @@ public:
         /** Recorded through the control API (origin control) or in the UI (origin ui). */
         bool control = false;
         bool unsafe = false;
-        /** Recorded before a track deletion that may have moved a track the entry addresses:
-            an entry made through the API when the deletion removed or moved a track it addresses, an entry of the
-            UI when it was recorded before the deletion, since the server cannot inspect it. */
-        bool possiblyStale = false;
         juce::String description;
     };
 
@@ -222,73 +169,16 @@ public:
     /** The API has just applied UndoManager::undo() or redo() itself, right after describe() checked the top:
         a step moves the cursor but no entry, so the history as it is now counts as observed. */
     void noteOwnStep(const UndoManager& manager);
+    void synchronize(const UndoManager& manager, std::uint64_t epoch);
 
     /**
-     * Pushes the entry onto OpenTune's history (UndoManager::addAction(), which discards the redo history) and
-     * notes where it landed: UndoManager::cursor() minus one is its position. An entry that lands below the
-     * position a track deletion marked (the history was undone past the mark first) is flagged
-     * (ControlOriginAction::belowStaleMark()), so that the next deletion's count does not subtract it from the
-     * positions above the mark. Every push of the API goes through here.
+     * Pushes the entry onto OpenTune's history and tracks its action identity for history descriptions.
      */
     void record(UndoManager& manager, std::unique_ptr<ControlOriginAction> action);
 
     /** Called by ControlOriginAction for its lifetime. */
     void add(ControlOriginAction* action);
     void remove(ControlOriginAction* action);
-
-    // ---- The barrier of a track deletion ------------------------------------------------------------
-
-    /** How many entries of each side of the history a track deletion made possibly stale. */
-    struct StaleCounts
-    {
-        int undo = 0;
-        int redo = 0;
-    };
-
-    /**
-     * A track was deleted: every entry that may address a track which moved is possibly stale from now on.
-     * visibleCount is the number of shown tracks before the deletion. Only the shown tracks after the deleted one
-     * move: removeTrackAndShift() shifts the shown tracks down and leaves the hidden slots where they are, their
-     * clips and their mix with them, so an entry that addresses a hidden track only is not possibly stale. An entry of
-     * the API compares both the slots its OpenTune actions are keyed by, which never change, and the positions its
-     * clips moved to, which are renumbered (ControlOriginAction::onTrackDeleted()), so that a later deletion sees
-     * where the clips are then and where undo() would write. An entry recorded in the UI cannot be
-     * inspected, so each of them recorded before the deletion is possibly stale. OpenTune's UndoManager gives no
-     * access to an entry by position, only to its two tops, its size and its cursor, so an entry of the UI is told by
-     * its position: every position below the size the history had at the deletion holds an entry recorded before it.
-     * A position that a later entry took over after an undo keeps counting until prune() sees the history shorter;
-     * that can report too many entries as possibly stale, never too few. An entry of the API that was made below the
-     * mark is not subtracted from those positions either (record()). A deletion made in the UI itself is not
-     * observed (there is no hook for it).
-     * Returns how many entries on each side the deletion newly made possibly stale: an entry that already was
-     * possibly stale is not counted again; one that a call with force had confirmed is.
-     */
-    StaleCounts onTrackDeleted(const UndoManager& manager, int deletedTrack, int visibleCount, std::uint64_t epoch);
-
-    /** The end user asked for the step of this entry with force: it is no longer possibly stale, until another
-        track deletion makes it so again. An entry of the UI gets its undoId first
-        (assignUndoId), so that it can be told apart. */
-    void confirmStale(const UndoManager& manager, const UndoAction& action, int index, std::uint64_t epoch,
-                      const std::string& instanceShort);
-
-    /** The number of track deletions this history has seen; the entries made after the last one carry it. */
-    std::uint64_t barrierGeneration() const noexcept { return barrierGeneration_; }
-
-    // ---- Contents that a track deletion removed from the project -------------------------------------
-
-    /**
-     * Contents that left the project when a track deletion removed the last clip that showed them. OpenTune leaks
-     * such a content: StandaloneArrangement::removeTrackAndShift() drops the placements without retiring them or
-     * their contents, so the content repository still lists the content as live. The control API does not show it
-     * any more (controlLiveContents(), controlLiveSnapshot()), as a content that left the project. Forgotten when
-     * the content epoch changes (a project was opened), and for a content that a clip shows again (the undo of an
-     * earlier clip deletion brings such a clip back): see reviveShownContents(). Message thread only.
-     */
-    void markContentsRemoved(const std::vector<ContentKey>& contents, std::uint64_t epoch);
-    bool hasRemovedContents() const { return !removedContents_.empty(); }
-    /** Forgets the marks of the contents in \p shown: a clip of the arrangement shows them again. */
-    void reviveShownContents(const std::vector<ContentKey>& shown);
-    bool isContentRemoved(const ContentKey& content, std::uint64_t epoch) const;
 
 private:
     struct UiEntry
@@ -298,8 +188,6 @@ private:
         std::type_index type = typeid(void);
         juce::String description;
         std::string undoId;
-        /** A call with force applied the entry since the last track deletion: it is not possibly stale. */
-        bool staleConfirmed = false;
     };
 
     /** What the read hooks show of the history. */
@@ -322,11 +210,6 @@ private:
     const UiEntry* findUiEntry(const UndoAction& action, int index) const;
 
     std::uint64_t nextSeq_ = 1;
-    /** Positions below this one hold entries recorded before the last track deletion (see onTrackDeleted()). */
-    int staleBelow_ = 0;
-    std::uint64_t barrierGeneration_ = 0;
-    std::optional<std::uint64_t> removedContentsEpoch_;
-    std::vector<ContentKey> removedContents_;
     std::optional<std::uint64_t> epoch_;
     std::optional<Observation> lastObserved_;
     std::vector<UiEntry> uiEntries_;

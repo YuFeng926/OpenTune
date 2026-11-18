@@ -57,14 +57,12 @@ bool parseStepParams(const JsonValue& params, StepParams& out, std::string& why)
     return true;
 }
 
-/** possiblyStale marks an entry affected by the track-deletion barrier. */
 JsonValue entryJson(const ControlHistory::Entry& entry)
 {
     auto json = JsonValue::object();
     json.appendMember("undoId", entry.undoId ? JsonValue::string(*entry.undoId) : JsonValue());
     json.appendMember("description", controlJsonText(entry.description.toStdString(), 200));
     json.appendMember("origin", JsonValue::string(entry.control ? "control" : "ui"));
-    json.appendMember("possiblyStale", JsonValue::boolean(entry.possiblyStale));
     json.appendMember("unsafe", JsonValue::boolean(entry.unsafe));
     return json;
 }
@@ -135,7 +133,6 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     std::optional<Error> refusal;
     int index = 0;
     std::uint64_t epoch = 0;
-    bool stale = false;
     UndoAction* selectedTop = nullptr;
     auto* applied = bridge->performUndoRedo(undo, [&](UndoAction* top) {
         if (top == nullptr) {
@@ -158,15 +155,6 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
                                          + what + " correctly");
             return false;
         }
-        // API entries affected by a track deletion require force; UI entries retain the warning unless forced.
-        stale = entry->possiblyStale && !params.force;
-        if (stale && entry->control) {
-            refusal = controlOpError("UNDO_CONFLICT", "stale_entry",
-                                     std::string("the top entry of the ") + what
-                                         + " history addresses a track that a track deletion moved or removed; apply it "
-                                           "with force only if the end user asked for it");
-            return false;
-        }
         selectedTop = top;
         before.emplace(controlCaptureEditState(context));
         envelope.emplace(context);
@@ -185,9 +173,6 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     const std::string undoId =
         entry->undoId ? *entry->undoId
                       : history.value()->assignUndoId(manager, *applied, index, epoch, context.instanceShort());
-    // The end user asked for this step after seeing possiblyStale, which confirms the entry.
-    if (params.force)
-        history.value()->confirmStale(manager, *applied, index, epoch, context.instanceShort());
     const auto after = controlCaptureEditState(context);
     controlDescribeEffect(context, *before, after, *envelope);
     // A step that changed nothing. An entry of the API also knows it from its own step (every inner
@@ -195,8 +180,6 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     const auto* origin = dynamic_cast<const ControlOriginAction*>(applied);
     const bool emptyDiff = isEmptyDiff(before->versions, after.versions);
     jassert(origin == nullptr || origin->lastStepTookEffect() || emptyDiff);
-    if (stale)
-        envelope->addWarning("UNDO_ENTRY_POSSIBLY_STALE");
     if (emptyDiff || (origin != nullptr && !origin->lastStepTookEffect()))
         envelope->addWarning("UNDO_NO_EFFECT");
     auto revertParams = JsonValue::object();

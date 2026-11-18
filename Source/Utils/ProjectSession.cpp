@@ -101,29 +101,6 @@ ProjectSnapshot ProjectSession::captureSnapshot(SaveTask::Mode mode) const
         return ProjectSnapshot{};  // Empty snapshot
     }
 
-    // Sources (from SourceStore)
-    const auto sourceIds = sourceStore->getAllActiveSourceIds();
-    for (auto sid : sourceIds) {
-        SourceStore::SourceSnapshot srcSnap;
-        if (!sourceStore->getSnapshot(sid, srcSnap)) { continue; }
-
-        ProjectSourceEntry entry;
-        entry.sourceId = srcSnap.sourceId;
-        entry.displayName = srcSnap.displayName;
-        entry.originalImportPath = srcSnap.sourceFilePath.isNotEmpty()
-            ? srcSnap.sourceFilePath
-            : srcSnap.displayName;
-        entry.sampleRate = srcSnap.sampleRate;
-        entry.numChannels = srcSnap.numChannels;
-        entry.lengthSamples = srcSnap.numSamples;
-        entry.lengthSeconds = (srcSnap.sampleRate > 0.0)
-            ? static_cast<double>(srcSnap.numSamples) / srcSnap.sampleRate : 0.0;
-        entry.contentHash = juce::String::toHexString(static_cast<juce::int64>(srcSnap.sourceId));
-        entry.fileSizeBytes = 0; // Unknown until file copy
-
-        snap.sources.push_back(entry);
-    }
-
     // Clips (from StandaloneContentRepository) —collect all ContentKeys referenced by placements
     std::set<ContentKey> activeContentKeys;
     int numTracks = arrangement->getNumTracks();
@@ -221,6 +198,34 @@ ProjectSnapshot ProjectSession::captureSnapshot(SaveTask::Mode mode) const
         }
 
         snap.contents.push_back(entry);
+    }
+
+    // Sources (from SourceStore), limited to the SourceWindows in this snapshot's clips.
+    std::set<uint64_t> sourceIds;
+    for (const auto& content : snap.contents) {
+        if (content.sourceWindow.sourceId != 0)
+            sourceIds.insert(content.sourceWindow.sourceId);
+    }
+
+    for (const auto sourceId : sourceIds) {
+        SourceStore::SourceSnapshot srcSnap;
+        if (!sourceStore->getSnapshot(sourceId, srcSnap)) { continue; }
+
+        ProjectSourceEntry entry;
+        entry.sourceId = srcSnap.sourceId;
+        entry.displayName = srcSnap.displayName;
+        entry.originalImportPath = srcSnap.sourceFilePath.isNotEmpty()
+            ? srcSnap.sourceFilePath
+            : srcSnap.displayName;
+        entry.sampleRate = srcSnap.sampleRate;
+        entry.numChannels = srcSnap.numChannels;
+        entry.lengthSamples = srcSnap.numSamples;
+        entry.lengthSeconds = (srcSnap.sampleRate > 0.0)
+            ? static_cast<double>(srcSnap.numSamples) / srcSnap.sampleRate : 0.0;
+        entry.contentHash = juce::String::toHexString(static_cast<juce::int64>(srcSnap.sourceId));
+        entry.fileSizeBytes = 0; // Unknown until file copy
+
+        snap.sources.push_back(entry);
     }
 
     // Tracks and Placements (from StandaloneArrangement)

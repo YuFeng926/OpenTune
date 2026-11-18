@@ -21,13 +21,17 @@ public:
     SplitPlacementAction(OpenTuneAudioProcessor& processor, const SplitOutcome& outcome);
     void undo() override;
     void redo() override;
-    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependsOnContent(ContentKey key) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC(kSplitClip); }
 
 private:
     OpenTuneAudioProcessor& processor_;
-    int trackId_;
+    uint64_t trackIdentity_;
     uint64_t originalPlacementId_;
     ContentKey originalContentKey_;
     uint64_t leadingPlacementId_;
@@ -46,13 +50,17 @@ public:
     MergePlacementAction(OpenTuneAudioProcessor& processor, const MergeOutcome& outcome);
     void undo() override;
     void redo() override;
-    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependsOnContent(ContentKey key) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC(kMergeClips); }
 
 private:
     OpenTuneAudioProcessor& processor_;
-    int trackId_;
+    uint64_t trackIdentity_;
     uint64_t leadingPlacementId_;
     ContentKey leadingContentKey_;
     uint64_t trailingPlacementId_;
@@ -73,13 +81,17 @@ public:
                           StandaloneArrangement::SelectionState selectionAfter);
     void undo() override;
     void redo() override;
-    bool retainsRetiredPlacement(int trackId, uint64_t placementId) const override;
+    bool retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
     bool retainsRetiredContent(ContentKey key) const override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependsOnContent(ContentKey key) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC_RAW("Delete Clip"); }
 
 private:
     struct Entry {
-        int trackId;
+        uint64_t trackIdentity;
         uint64_t placementId;
         ContentKey contentKey;
     };
@@ -211,17 +223,28 @@ public:
         double newStartSeconds = 0.0;
     };
 
+    struct StableEntry {
+        uint64_t sourceTrackIdentity = 0;
+        uint64_t targetTrackIdentity = 0;
+        uint64_t placementId = 0;
+        double oldStartSeconds = 0.0;
+        double newStartSeconds = 0.0;
+    };
+
     MultiMovePlacementAction(OpenTuneAudioProcessor& processor,
                              std::vector<Entry> entries,
                              StandaloneArrangement::SelectionState selectionBefore,
                              StandaloneArrangement::SelectionState selectionAfter);
     void undo() override;
     void redo() override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC_RAW("Move Clip"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
-    std::vector<Entry> entries_;
+    std::vector<StableEntry> entries_;
     StandaloneArrangement::SelectionState selectionBefore_;
     StandaloneArrangement::SelectionState selectionAfter_;
 };
@@ -239,11 +262,14 @@ public:
                      float oldGain, float newGain);
     void undo() override;
     void redo() override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC_RAW("Adjust Gain"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
-    int trackId_;
+    uint64_t trackIdentity_;
     uint64_t placementId_;
     float oldGain_;
     float newGain_;
@@ -261,11 +287,14 @@ public:
                         double newFadeIn, double newFadeOut);
     void undo() override;
     void redo() override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC_RAW("Trim Clip"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
-    int trackId_;
+    uint64_t trackIdentity_;
     uint64_t placementId_;
     double oldClipInSeconds_;
     double oldDurationSeconds_;
@@ -288,11 +317,14 @@ public:
                      double newFadeIn, double newFadeOut);
     void undo() override;
     void redo() override;
+    bool dependsOnTrackIdentity(uint64_t identity) const override;
+    bool dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const override;
+    bool dependenciesExist() const override;
     juce::String getDescription() const override { return LOC_RAW("Adjust Fade"); }
 
 private:
     OpenTuneAudioProcessor& processor_;
-    int trackId_;
+    uint64_t trackIdentity_;
     uint64_t placementId_;
     double oldFadeIn_;
     double oldFadeOut_;

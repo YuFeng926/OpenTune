@@ -9,13 +9,37 @@
 
 namespace OpenTune {
 
+namespace {
+
+bool hasContentOwner(const OpenTuneAudioProcessor& processor, ContentKey key)
+{
+    const auto* repository = processor.getStandaloneContentRepository();
+    return key.isValid() && repository != nullptr && repository->findClip(key) != nullptr;
+}
+
+int resolveTrack(const StandaloneArrangement& arrangement, uint64_t identity)
+{
+    return arrangement.findTrackIndexByIdentity(identity);
+}
+
+void retireContentIfUnreferenced(StandaloneArrangement& arrangement,
+                                 StandaloneContentRepository& repository,
+                                 ContentKey key)
+{
+    if (!arrangement.referencesContentActive(key))
+        repository.retireClip(key);
+}
+
+} // namespace
+
 // ============================================================================
 // SplitPlacementAction
 // ============================================================================
 
 SplitPlacementAction::SplitPlacementAction(OpenTuneAudioProcessor& processor, const SplitOutcome& outcome)
     : processor_(processor)
-    , trackId_(outcome.trackId)
+    , trackIdentity_(processor.getStandaloneArrangement() != nullptr
+                         ? processor.getStandaloneArrangement()->getTrackIdentity(outcome.trackId) : 0)
     , originalPlacementId_(outcome.originalPlacementId)
     , originalContentKey_(outcome.originalContentKey)
     , leadingPlacementId_(outcome.leadingPlacementId)
@@ -31,17 +55,20 @@ void SplitPlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
+    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
+    if (trackId < 0 || !dependenciesExist())
+        return;
 
     // Retire the two new placements+contents
-    arrangement->retirePlacement(trackId_, leadingPlacementId_);
-    arrangement->retirePlacement(trackId_, trailingPlacementId_);
-    repo->retireClip(leadingContentKey_);
-    repo->retireClip(trailingContentKey_);
+    arrangement->retirePlacement(trackId, leadingPlacementId_);
+    arrangement->retirePlacement(trackId, trailingPlacementId_);
+    retireContentIfUnreferenced(*arrangement, *repo, leadingContentKey_);
+    retireContentIfUnreferenced(*arrangement, *repo, trailingContentKey_);
 
     // Revive the original
     repo->reviveClip(originalContentKey_);
     processor_.requestFullContentRender(originalContentKey_);
-    arrangement->revivePlacement(trackId_, originalPlacementId_);
+    arrangement->revivePlacement(trackId, originalPlacementId_);
     arrangement->setSelectionState(selectionBefore_);
 }
 
@@ -49,24 +76,27 @@ void SplitPlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
+    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
+    if (trackId < 0 || !dependenciesExist())
+        return;
 
     // Retire the original
-    arrangement->retirePlacement(trackId_, originalPlacementId_);
-    repo->retireClip(originalContentKey_);
+    arrangement->retirePlacement(trackId, originalPlacementId_);
+    retireContentIfUnreferenced(*arrangement, *repo, originalContentKey_);
 
     // Revive the two new ones
     repo->reviveClip(leadingContentKey_);
     processor_.requestFullContentRender(leadingContentKey_);
     repo->reviveClip(trailingContentKey_);
     processor_.requestFullContentRender(trailingContentKey_);
-    arrangement->revivePlacement(trackId_, leadingPlacementId_);
-    arrangement->revivePlacement(trackId_, trailingPlacementId_);
+    arrangement->revivePlacement(trackId, leadingPlacementId_);
+    arrangement->revivePlacement(trackId, trailingPlacementId_);
     arrangement->setSelectionState(selectionAfter_);
 }
 
-bool SplitPlacementAction::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+bool SplitPlacementAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
 {
-    return trackId == trackId_
+    return trackIdentity == trackIdentity_
         && (placementId == originalPlacementId_ || placementId == leadingPlacementId_
             || placementId == trailingPlacementId_);
 }
@@ -76,13 +106,43 @@ bool SplitPlacementAction::retainsRetiredContent(ContentKey key) const
     return key == originalContentKey_ || key == leadingContentKey_ || key == trailingContentKey_;
 }
 
+bool SplitPlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return identity == trackIdentity_;
+}
+
+bool SplitPlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return trackIdentity == trackIdentity_
+        && (placementId == originalPlacementId_ || placementId == leadingPlacementId_
+            || placementId == trailingPlacementId_);
+}
+
+bool SplitPlacementAction::dependsOnContent(ContentKey key) const
+{
+    return key == originalContentKey_ || key == leadingContentKey_ || key == trailingContentKey_;
+}
+
+bool SplitPlacementAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
+        && arrangement->hasPlacementGlobal(originalPlacementId_)
+        && arrangement->hasPlacementGlobal(leadingPlacementId_)
+        && arrangement->hasPlacementGlobal(trailingPlacementId_)
+        && hasContentOwner(processor_, originalContentKey_)
+        && hasContentOwner(processor_, leadingContentKey_)
+        && hasContentOwner(processor_, trailingContentKey_);
+}
+
 // ============================================================================
 // MergePlacementAction
 // ============================================================================
 
 MergePlacementAction::MergePlacementAction(OpenTuneAudioProcessor& processor, const MergeOutcome& outcome)
     : processor_(processor)
-    , trackId_(outcome.trackId)
+    , trackIdentity_(processor.getStandaloneArrangement() != nullptr
+                         ? processor.getStandaloneArrangement()->getTrackIdentity(outcome.trackId) : 0)
     , leadingPlacementId_(outcome.leadingPlacementId)
     , leadingContentKey_(outcome.leadingContentKey)
     , trailingPlacementId_(outcome.trailingPlacementId)
@@ -98,18 +158,21 @@ void MergePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
+    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
+    if (trackId < 0 || !dependenciesExist())
+        return;
 
     // Retire merged
-    arrangement->retirePlacement(trackId_, mergedPlacementId_);
-    repo->retireClip(mergedContentKey_);
+    arrangement->retirePlacement(trackId, mergedPlacementId_);
+    retireContentIfUnreferenced(*arrangement, *repo, mergedContentKey_);
 
     // Revive originals
     repo->reviveClip(leadingContentKey_);
     processor_.requestFullContentRender(leadingContentKey_);
     repo->reviveClip(trailingContentKey_);
     processor_.requestFullContentRender(trailingContentKey_);
-    arrangement->revivePlacement(trackId_, leadingPlacementId_);
-    arrangement->revivePlacement(trackId_, trailingPlacementId_);
+    arrangement->revivePlacement(trackId, leadingPlacementId_);
+    arrangement->revivePlacement(trackId, trailingPlacementId_);
     arrangement->setSelectionState(selectionBefore_);
 }
 
@@ -117,23 +180,26 @@ void MergePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
+    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
+    if (trackId < 0 || !dependenciesExist())
+        return;
 
     // Retire originals
-    arrangement->retirePlacement(trackId_, leadingPlacementId_);
-    arrangement->retirePlacement(trackId_, trailingPlacementId_);
-    repo->retireClip(leadingContentKey_);
-    repo->retireClip(trailingContentKey_);
+    arrangement->retirePlacement(trackId, leadingPlacementId_);
+    arrangement->retirePlacement(trackId, trailingPlacementId_);
+    retireContentIfUnreferenced(*arrangement, *repo, leadingContentKey_);
+    retireContentIfUnreferenced(*arrangement, *repo, trailingContentKey_);
 
     // Revive merged
     repo->reviveClip(mergedContentKey_);
     processor_.requestFullContentRender(mergedContentKey_);
-    arrangement->revivePlacement(trackId_, mergedPlacementId_);
+    arrangement->revivePlacement(trackId, mergedPlacementId_);
     arrangement->setSelectionState(selectionAfter_);
 }
 
-bool MergePlacementAction::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+bool MergePlacementAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
 {
-    return trackId == trackId_
+    return trackIdentity == trackIdentity_
         && (placementId == leadingPlacementId_ || placementId == trailingPlacementId_
             || placementId == mergedPlacementId_);
 }
@@ -141,6 +207,35 @@ bool MergePlacementAction::retainsRetiredPlacement(int trackId, uint64_t placeme
 bool MergePlacementAction::retainsRetiredContent(ContentKey key) const
 {
     return key == leadingContentKey_ || key == trailingContentKey_ || key == mergedContentKey_;
+}
+
+bool MergePlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return identity == trackIdentity_;
+}
+
+bool MergePlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return trackIdentity == trackIdentity_
+        && (placementId == leadingPlacementId_ || placementId == trailingPlacementId_
+            || placementId == mergedPlacementId_);
+}
+
+bool MergePlacementAction::dependsOnContent(ContentKey key) const
+{
+    return key == leadingContentKey_ || key == trailingContentKey_ || key == mergedContentKey_;
+}
+
+bool MergePlacementAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
+        && arrangement->hasPlacementGlobal(leadingPlacementId_)
+        && arrangement->hasPlacementGlobal(trailingPlacementId_)
+        && arrangement->hasPlacementGlobal(mergedPlacementId_)
+        && hasContentOwner(processor_, leadingContentKey_)
+        && hasContentOwner(processor_, trailingContentKey_)
+        && hasContentOwner(processor_, mergedContentKey_);
 }
 
 // ============================================================================
@@ -155,17 +250,21 @@ DeletePlacementAction::DeletePlacementAction(OpenTuneAudioProcessor& processor, 
     , selectionAfter_(std::move(selectionAfter))
 {
     entries_.reserve(outcomes.size());
+    auto* arrangement = processor_.getStandaloneArrangement();
     for (const auto& outcome : outcomes)
-        entries_.push_back({outcome.trackId, outcome.placementId, outcome.contentKey});
+        entries_.push_back({arrangement != nullptr ? arrangement->getTrackIdentity(outcome.trackId) : 0,
+                            outcome.placementId, outcome.contentKey});
 }
 
 void DeletePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
+    if (!dependenciesExist())
+        return;
     for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {
         repo->reviveClip(entry->contentKey);
-        arrangement->revivePlacement(entry->trackId, entry->placementId);
+        arrangement->revivePlacement(resolveTrack(*arrangement, entry->trackIdentity), entry->placementId);
     }
     arrangement->setSelectionState(selectionBefore_);
 }
@@ -174,17 +273,19 @@ void DeletePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
     auto* repo = processor_.getStandaloneContentRepository();
+    if (!dependenciesExist())
+        return;
     for (const auto& entry : entries_) {
-        arrangement->retirePlacement(entry.trackId, entry.placementId);
-        repo->retireClip(entry.contentKey);
+        arrangement->retirePlacement(resolveTrack(*arrangement, entry.trackIdentity), entry.placementId);
+        retireContentIfUnreferenced(*arrangement, *repo, entry.contentKey);
     }
     arrangement->setSelectionState(selectionAfter_);
 }
 
-bool DeletePlacementAction::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+bool DeletePlacementAction::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
 {
-    return std::any_of(entries_.begin(), entries_.end(), [trackId, placementId](const Entry& entry) {
-        return entry.trackId == trackId && entry.placementId == placementId;
+    return std::any_of(entries_.begin(), entries_.end(), [trackIdentity, placementId](const Entry& entry) {
+        return entry.trackIdentity == trackIdentity && entry.placementId == placementId;
     });
 }
 
@@ -192,6 +293,39 @@ bool DeletePlacementAction::retainsRetiredContent(ContentKey key) const
 {
     return std::any_of(entries_.begin(), entries_.end(), [key](const Entry& entry) {
         return entry.contentKey == key;
+    });
+}
+
+bool DeletePlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return std::any_of(entries_.begin(), entries_.end(), [identity](const Entry& entry) {
+        return entry.trackIdentity == identity;
+    });
+}
+
+bool DeletePlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return std::any_of(entries_.begin(), entries_.end(), [trackIdentity, placementId](const Entry& entry) {
+        return entry.trackIdentity == trackIdentity && entry.placementId == placementId;
+    });
+}
+
+bool DeletePlacementAction::dependsOnContent(ContentKey key) const
+{
+    return std::any_of(entries_.begin(), entries_.end(), [key](const Entry& entry) {
+        return entry.contentKey == key;
+    });
+}
+
+bool DeletePlacementAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement == nullptr)
+        return false;
+    return std::all_of(entries_.begin(), entries_.end(), [this, arrangement](const Entry& entry) {
+        return arrangement->findTrackIndexByIdentity(entry.trackIdentity) >= 0
+            && arrangement->hasPlacementGlobal(entry.placementId)
+            && hasContentOwner(processor_, entry.contentKey);
     });
 }
 
@@ -204,19 +338,29 @@ MultiMovePlacementAction::MultiMovePlacementAction(OpenTuneAudioProcessor& proce
                                                    StandaloneArrangement::SelectionState selectionBefore,
                                                    StandaloneArrangement::SelectionState selectionAfter)
     : processor_(processor)
-    , entries_(std::move(entries))
     , selectionBefore_(std::move(selectionBefore))
     , selectionAfter_(std::move(selectionAfter))
 {
+    auto* arrangement = processor_.getStandaloneArrangement();
+    entries_.reserve(entries.size());
+    for (const auto& entry : entries) {
+        entries_.push_back({arrangement != nullptr ? arrangement->getTrackIdentity(entry.sourceTrackId) : 0,
+                            arrangement != nullptr ? arrangement->getTrackIdentity(entry.targetTrackId) : 0,
+                            entry.placementId, entry.oldStartSeconds, entry.newStartSeconds});
+    }
 }
 
 void MultiMovePlacementAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
+    if (!dependenciesExist())
+        return;
     std::vector<StandaloneArrangement::PlacementMove> moves;
     moves.reserve(entries_.size());
     for (const auto& entry : entries_)
-        moves.push_back({entry.targetTrackId, entry.sourceTrackId, entry.placementId, entry.oldStartSeconds});
+        moves.push_back({resolveTrack(*arrangement, entry.targetTrackIdentity),
+                         resolveTrack(*arrangement, entry.sourceTrackIdentity), entry.placementId,
+                         entry.oldStartSeconds});
     if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Rejected)
         arrangement->setSelectionState(selectionBefore_);
 }
@@ -224,12 +368,43 @@ void MultiMovePlacementAction::undo()
 void MultiMovePlacementAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
+    if (!dependenciesExist())
+        return;
     std::vector<StandaloneArrangement::PlacementMove> moves;
     moves.reserve(entries_.size());
     for (const auto& entry : entries_)
-        moves.push_back({entry.sourceTrackId, entry.targetTrackId, entry.placementId, entry.newStartSeconds});
+        moves.push_back({resolveTrack(*arrangement, entry.sourceTrackIdentity),
+                         resolveTrack(*arrangement, entry.targetTrackIdentity), entry.placementId,
+                         entry.newStartSeconds});
     if (arrangement->applyPlacementMoves(moves) != StandaloneArrangement::PlacementMoveResult::Rejected)
         arrangement->setSelectionState(selectionAfter_);
+}
+
+bool MultiMovePlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return std::any_of(entries_.begin(), entries_.end(), [identity](const StableEntry& entry) {
+        return entry.sourceTrackIdentity == identity || entry.targetTrackIdentity == identity;
+    });
+}
+
+bool MultiMovePlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return std::any_of(entries_.begin(), entries_.end(), [trackIdentity, placementId](const StableEntry& entry) {
+        return entry.placementId == placementId
+            && (entry.sourceTrackIdentity == trackIdentity || entry.targetTrackIdentity == trackIdentity);
+    });
+}
+
+bool MultiMovePlacementAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    if (arrangement == nullptr || entries_.empty())
+        return false;
+    return std::all_of(entries_.begin(), entries_.end(), [arrangement](const StableEntry& entry) {
+        return arrangement->findTrackIndexByIdentity(entry.sourceTrackIdentity) >= 0
+            && arrangement->findTrackIndexByIdentity(entry.targetTrackIdentity) >= 0
+            && arrangement->hasPlacementGlobal(entry.placementId);
+    });
 }
 
 // ============================================================================
@@ -240,7 +415,8 @@ GainChangeAction::GainChangeAction(OpenTuneAudioProcessor& processor,
                                    int trackId, uint64_t placementId,
                                    float oldGain, float newGain)
     : processor_(processor)
-    , trackId_(trackId)
+    , trackIdentity_(processor.getStandaloneArrangement() != nullptr
+                         ? processor.getStandaloneArrangement()->getTrackIdentity(trackId) : 0)
     , placementId_(placementId)
     , oldGain_(oldGain)
     , newGain_(newGain)
@@ -250,13 +426,34 @@ GainChangeAction::GainChangeAction(OpenTuneAudioProcessor& processor,
 void GainChangeAction::undo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    arrangement->setPlacementGain(trackId_, placementId_, oldGain_);
+    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
+    if (trackId >= 0)
+        arrangement->setPlacementGain(trackId, placementId_, oldGain_);
 }
 
 void GainChangeAction::redo()
 {
     auto* arrangement = processor_.getStandaloneArrangement();
-    arrangement->setPlacementGain(trackId_, placementId_, newGain_);
+    const int trackId = arrangement != nullptr ? resolveTrack(*arrangement, trackIdentity_) : -1;
+    if (trackId >= 0)
+        arrangement->setPlacementGain(trackId, placementId_, newGain_);
+}
+
+bool GainChangeAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return identity == trackIdentity_;
+}
+
+bool GainChangeAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return trackIdentity == trackIdentity_ && placementId == placementId_;
+}
+
+bool GainChangeAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
+        && arrangement->hasPlacementGlobal(placementId_);
 }
 
 // ============================================================================
@@ -270,7 +467,10 @@ TrimPlacementAction::TrimPlacementAction(OpenTuneAudioProcessor& processor,
                                          double oldTimelineStart, double newTimelineStart,
                                          double oldFadeIn, double oldFadeOut,
                                          double newFadeIn, double newFadeOut)
-    : processor_(processor), trackId_(trackId), placementId_(placementId)
+    : processor_(processor)
+    , trackIdentity_(processor.getStandaloneArrangement() != nullptr
+                         ? processor.getStandaloneArrangement()->getTrackIdentity(trackId) : 0)
+    , placementId_(placementId)
     , oldClipInSeconds_(oldClipInSeconds), oldDurationSeconds_(oldDurationSeconds)
     , newClipInSeconds_(newClipInSeconds), newDurationSeconds_(newDurationSeconds)
     , oldTimelineStart_(oldTimelineStart), newTimelineStart_(newTimelineStart)
@@ -279,15 +479,36 @@ TrimPlacementAction::TrimPlacementAction(OpenTuneAudioProcessor& processor,
 void TrimPlacementAction::undo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    arr->setPlacementTrimState(trackId_, placementId_, oldClipInSeconds_, oldDurationSeconds_, oldTimelineStart_,
-                               oldFadeIn_, oldFadeOut_);
+    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
+    if (trackId >= 0)
+        arr->setPlacementTrimState(trackId, placementId_, oldClipInSeconds_, oldDurationSeconds_, oldTimelineStart_,
+                                   oldFadeIn_, oldFadeOut_);
 }
 
 void TrimPlacementAction::redo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    arr->setPlacementTrimState(trackId_, placementId_, newClipInSeconds_, newDurationSeconds_, newTimelineStart_,
-                               newFadeIn_, newFadeOut_);
+    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
+    if (trackId >= 0)
+        arr->setPlacementTrimState(trackId, placementId_, newClipInSeconds_, newDurationSeconds_, newTimelineStart_,
+                                   newFadeIn_, newFadeOut_);
+}
+
+bool TrimPlacementAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return identity == trackIdentity_;
+}
+
+bool TrimPlacementAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return trackIdentity == trackIdentity_ && placementId == placementId_;
+}
+
+bool TrimPlacementAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
+        && arrangement->hasPlacementGlobal(placementId_);
 }
 
 // ============================================================================
@@ -298,20 +519,44 @@ FadeChangeAction::FadeChangeAction(OpenTuneAudioProcessor& processor,
                                    int trackId, uint64_t placementId,
                                    double oldFadeIn, double oldFadeOut,
                                    double newFadeIn, double newFadeOut)
-    : processor_(processor), trackId_(trackId), placementId_(placementId)
+    : processor_(processor)
+    , trackIdentity_(processor.getStandaloneArrangement() != nullptr
+                         ? processor.getStandaloneArrangement()->getTrackIdentity(trackId) : 0)
+    , placementId_(placementId)
     , oldFadeIn_(oldFadeIn), oldFadeOut_(oldFadeOut)
     , newFadeIn_(newFadeIn), newFadeOut_(newFadeOut) {}
 
 void FadeChangeAction::undo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    arr->setPlacementFade(trackId_, placementId_, oldFadeIn_, oldFadeOut_);
+    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
+    if (trackId >= 0)
+        arr->setPlacementFade(trackId, placementId_, oldFadeIn_, oldFadeOut_);
 }
 
 void FadeChangeAction::redo()
 {
     auto* arr = processor_.getStandaloneArrangement();
-    arr->setPlacementFade(trackId_, placementId_, newFadeIn_, newFadeOut_);
+    const int trackId = arr != nullptr ? resolveTrack(*arr, trackIdentity_) : -1;
+    if (trackId >= 0)
+        arr->setPlacementFade(trackId, placementId_, newFadeIn_, newFadeOut_);
+}
+
+bool FadeChangeAction::dependsOnTrackIdentity(uint64_t identity) const
+{
+    return identity == trackIdentity_;
+}
+
+bool FadeChangeAction::dependsOnPlacement(uint64_t trackIdentity, uint64_t placementId) const
+{
+    return trackIdentity == trackIdentity_ && placementId == placementId_;
+}
+
+bool FadeChangeAction::dependenciesExist() const
+{
+    const auto* arrangement = processor_.getStandaloneArrangement();
+    return arrangement != nullptr && arrangement->findTrackIndexByIdentity(trackIdentity_) >= 0
+        && arrangement->hasPlacementGlobal(placementId_);
 }
 
 namespace {
@@ -808,8 +1053,10 @@ PlacementCopyCommit commitPlacementCopies(OpenTuneAudioProcessor& processor,
         auto selection = arrangement->getSelectionState();
         selection.placements.clear();
         selection.activeTrackId = targetTrackId;
+        selection.activeTrackIdentity = arrangement->getTrackIdentity(targetTrackId);
+        selection.selectedTrackIdentities[static_cast<size_t>(targetTrackId)] = selection.activeTrackIdentity;
         for (const auto& copy : result.copies)
-            selection.placements.insert({targetTrackId, copy.placement.placementId});
+            selection.placements.insert({targetTrackId, copy.placement.placementId, selection.activeTrackIdentity});
         selection.selectedPlacementIds[static_cast<size_t>(targetTrackId)] =
             result.copies.back().placement.placementId;
         arrangement->setSelectionState(selection);
@@ -838,6 +1085,9 @@ bool applyPlacementMoveBatch(OpenTuneAudioProcessor& processor,
     if (result == StandaloneArrangement::PlacementMoveResult::Applied) {
         auto selectionAfter = arrangement->getSelectionState();
         selectionAfter.activeTrackId = primaryAfter.trackId;
+        selectionAfter.activeTrackIdentity = arrangement->getTrackIdentity(primaryAfter.trackId);
+        selectionAfter.selectedTrackIdentities[static_cast<size_t>(primaryAfter.trackId)] =
+            selectionAfter.activeTrackIdentity;
         selectionAfter.selectedPlacementIds[static_cast<size_t>(primaryAfter.trackId)] = primaryAfter.placementId;
         arrangement->setSelectionState(selectionAfter);
         undoAction = std::make_unique<MultiMovePlacementAction>(processor, entries, selectionBefore, selectionAfter);

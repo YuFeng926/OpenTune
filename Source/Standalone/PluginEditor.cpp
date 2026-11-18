@@ -4254,7 +4254,7 @@ ControlTrackCommandResult OpenTuneAudioProcessorEditor::deleteTrack(int trackId)
         return ControlTrackCommandResult::HiddenTrack;
     if (visibleCount <= 1)
         return ControlTrackCommandResult::LastTrack;
-    if (!arrangement->removeTrackAndShift(trackId, visibleCount))
+    if (!processorRef_.deleteTrack(trackId, visibleCount))
         return ControlTrackCommandResult::Failed;
 
     trackPanel_.setVisibleTrackCount(visibleCount - 1);

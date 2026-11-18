@@ -6,6 +6,7 @@
 #include "ControlMessageThread.h"
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -17,6 +18,7 @@ class ControlHistory;
 class ControlJobs;
 class ControlServer;
 class ControlUiBridge;
+class UndoManager;
 class OpenTuneAudioProcessor;
 
 /**
@@ -95,6 +97,8 @@ public:
     const std::string& discoveryFilePath() const noexcept { return discoveryFile_; }
     /** Wake active jobs after a processor or editor state event. Message thread. */
     void wakeJobs() const noexcept;
+    /** Rebuilds history descriptions after the processor removes undo entries. Message thread. */
+    void synchronizeHistory(const UndoManager& manager, std::uint64_t epoch);
     /** A callback safe to retain beyond the jobs registry's lifetime. */
     std::function<void()> jobWakeCallback() const;
     /** Registers the editor's bridge, or unregisters it with nullptr. Message thread. */

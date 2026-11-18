@@ -27,7 +27,7 @@ std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotCo
 
 void StandaloneClipContent::retireContent(ContentKey key)
 {
-    if (key != contentKey())
+    if (key != contentKey() || lifecycle_ == ContentLifecycle::Retired)
         return;
 
     StandaloneRetiredContentRecord record;
@@ -66,6 +66,13 @@ void StandaloneClipContent::releaseRetiredContent(ContentKey key)
         std::remove_if(retired_.begin(), retired_.end(),
             [&key](const StandaloneRetiredContentRecord& r) { return r.key == key; }),
         retired_.end());
+}
+
+const StandaloneRetiredContentRecord* StandaloneClipContent::getRetiredContent(ContentKey key) const
+{
+    const auto it = std::find_if(retired_.begin(), retired_.end(),
+        [&key](const StandaloneRetiredContentRecord& record) { return record.key == key; });
+    return it != retired_.end() ? &*it : nullptr;
 }
 
 bool StandaloneClipContent::isRetired() const

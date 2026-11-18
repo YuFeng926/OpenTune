@@ -44,6 +44,12 @@ public:
     /// 获取所有 clip 的 key（包括 active 和 retired）
     std::vector<ContentKey> getAllClips() const;
 
+    /// 消息线程读取仍保留的退休记录，记录由内容 owner 持有。
+    const StandaloneRetiredContentRecord* getRetiredContent(ContentKey key) const;
+
+    /// 查询活动 payload 或仍保留的退休 payload 是否引用 source。
+    bool isSourceReferenced(uint64_t sourceId) const;
+
     void clear();
 
 private:

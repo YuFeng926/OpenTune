@@ -1,5 +1,7 @@
 #include "UndoManager.h"
 
+#include <algorithm>
+
 namespace OpenTune {
 
 void UndoManager::addAction(std::unique_ptr<UndoAction> action)
@@ -29,6 +31,7 @@ void UndoManager::addAction(std::unique_ptr<UndoAction> action)
 
 UndoAction* UndoManager::undo()
 {
+    pruneInvalidActions();
     if (!canUndo())
         return nullptr;
 
@@ -41,6 +44,7 @@ UndoAction* UndoManager::undo()
 
 UndoAction* UndoManager::redo()
 {
+    pruneInvalidActions();
     if (!canRedo())
         return nullptr;
 
@@ -70,10 +74,10 @@ void UndoManager::clear()
         historyPrunedCallback_();
 }
 
-bool UndoManager::retainsRetiredPlacement(int trackId, uint64_t placementId) const
+bool UndoManager::retainsRetiredPlacement(uint64_t trackIdentity, uint64_t placementId) const
 {
     for (const auto& action : actions_)
-        if (action->retainsRetiredPlacement(trackId, placementId))
+        if (action->retainsRetiredPlacement(trackIdentity, placementId))
             return true;
     return false;
 }
@@ -84,6 +88,78 @@ bool UndoManager::retainsRetiredContent(ContentKey key) const
         if (action->retainsRetiredContent(key))
             return true;
     return false;
+}
+
+int UndoManager::indexOf(const UndoAction* action) const
+{
+    for (int index = 0; index < static_cast<int>(actions_.size()); ++index)
+        if (actions_[static_cast<std::size_t>(index)].get() == action)
+            return index;
+    return -1;
+}
+
+int UndoManager::pruneActions(const std::function<bool(const UndoAction&)>& shouldPrune, bool notify)
+{
+    int removed = 0;
+    for (int index = 0; index < static_cast<int>(actions_.size());) {
+        if (!shouldPrune(*actions_[static_cast<std::size_t>(index)])) {
+            ++index;
+            continue;
+        }
+        if (index < cursor_)
+            --cursor_;
+        actions_.erase(actions_.begin() + index);
+        ++removed;
+    }
+    if (removed != 0) {
+        if (notify && historyPrunedCallback_)
+            historyPrunedCallback_();
+    }
+    return removed;
+}
+
+UndoManager::PruneResult UndoManager::pruneForTrackDeletion(
+    uint64_t trackIdentity, const std::vector<std::pair<uint64_t, uint64_t>>& placements,
+    const std::vector<ContentKey>& removedContents,
+    const std::function<bool(ContentKey)>& hasActiveReference)
+{
+    PruneResult result;
+    auto markAndPrune = [this, &result](const std::function<bool(const UndoAction&)>& predicate) {
+        const int cursorBefore = cursor_;
+        const int removed = pruneActions(predicate, false);
+        result.undo += cursorBefore - cursor_;
+        result.redo += removed - (cursorBefore - cursor_);
+    };
+
+    markAndPrune([trackIdentity, &placements](const UndoAction& action) {
+        if (!action.dependenciesExist() || action.dependsOnTrackIdentity(trackIdentity))
+            return true;
+        return std::any_of(placements.begin(), placements.end(), [&action](const auto& placement) {
+            return action.dependsOnPlacement(placement.first, placement.second);
+        });
+    });
+
+    for (const auto key : removedContents) {
+        if (hasActiveReference(key))
+            continue;
+        const bool heldByHistory = std::any_of(actions_.begin(), actions_.end(), [key](const auto& action) {
+            return action->retainsRetiredContent(key);
+        });
+        if (heldByHistory)
+            continue;
+        markAndPrune([key](const UndoAction& action) { return action.dependsOnContent(key); });
+    }
+    return result;
+}
+
+int UndoManager::pruneForContentRelease(ContentKey content)
+{
+    return pruneActions([content](const UndoAction& action) { return action.dependsOnContent(content); }, false);
+}
+
+int UndoManager::pruneInvalidActions(bool notify)
+{
+    return pruneActions([](const UndoAction& action) { return !action.dependenciesExist(); }, notify);
 }
 
 } // namespace OpenTune

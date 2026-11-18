@@ -854,6 +854,8 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Utils/PianoRollNotePatchAction.h
         Source/Utils/DrawNoteEdit.cpp
         Source/Utils/DrawNoteEdit.h
+        Source/Utils/NoteDraftEdit.cpp
+        Source/Utils/NoteDraftEdit.h
         Source/Utils/NoteResizeEdit.cpp
         Source/Utils/NoteResizeEdit.h
         Source/Utils/AutomationLane.cpp
@@ -1924,6 +1926,19 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME DrawNoteEditTests COMMAND OpenTuneDrawNoteEditTests)
 
+    add_executable(OpenTuneNoteDraftEditTests
+        Tests/NoteDraftEditTests.cpp
+        Source/Utils/NoteDraftEdit.cpp)
+    target_include_directories(OpenTuneNoteDraftEditTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_compile_definitions(OpenTuneNoteDraftEditTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0)
+    target_link_libraries(OpenTuneNoteDraftEditTests PRIVATE
+        juce::juce_audio_basics juce::juce_core)
+    if(MSVC)
+        target_compile_options(OpenTuneNoteDraftEditTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME NoteDraftEditTests COMMAND OpenTuneNoteDraftEditTests)
+
     add_executable(OpenTuneNoteResizeEditTests
         Tests/NoteResizeEditTests.cpp
     )
@@ -1972,11 +1987,13 @@ if(OPENTUNE_BUILD_TESTS)
 
     add_executable(OpenTuneManualCorrectionEditTests
         Tests/ManualCorrectionEditTests.cpp
+        Source/Utils/ManualCorrectionEdit.cpp
     )
     target_include_directories(OpenTuneManualCorrectionEditTests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_compile_definitions(OpenTuneManualCorrectionEditTests PRIVATE
+        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0)
     target_link_libraries(OpenTuneManualCorrectionEditTests PRIVATE
-        OpenTune
         juce::juce_audio_basics
         juce::juce_core
     )
@@ -2251,14 +2268,28 @@ if(OPENTUNE_BUILD_TESTS)
         juce::juce_audio_basics
         juce::juce_core
     )
-    if(OPENTUNE_ENABLE_CONTROL_API)
-        target_compile_definitions(OpenTuneStandaloneArrangementMoveTests PRIVATE
-            JucePlugin_Build_Standalone=1)
-    endif()
+    target_compile_definitions(OpenTuneStandaloneArrangementMoveTests PRIVATE
+        JucePlugin_Build_Standalone=1)
     if(MSVC)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
+
+    foreach(standalone_edit_test IN ITEMS
+            NoteDraftTransactionTests ManualCorrectionTransactionTests StandaloneSourceLifetimeTests)
+        add_executable(OpenTune${standalone_edit_test}
+            Tests/${standalone_edit_test}.cpp
+            Tests/HeadlessEditorFactory.cpp)
+        target_include_directories(OpenTune${standalone_edit_test} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source ${ONNXRUNTIME_INCLUDE_DIR})
+        target_link_libraries(OpenTune${standalone_edit_test} PRIVATE
+            OpenTuneStandalone OpenTuneResources juce::juce_audio_basics juce::juce_core)
+        target_compile_definitions(OpenTune${standalone_edit_test} PRIVATE JucePlugin_Build_Standalone=1)
+        if(MSVC)
+            target_compile_options(OpenTune${standalone_edit_test} PRIVATE /utf-8 /EHsc)
+        endif()
+        add_test(NAME ${standalone_edit_test} COMMAND OpenTune${standalone_edit_test})
+    endforeach()
 
     # Render/ARA contract tests use the production objects and their real worker
     # threads.  They intentionally link the application target instead of

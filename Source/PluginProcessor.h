@@ -809,6 +809,24 @@ public:
         double pasteStartTime,
         uint64_t expectedNotesRevision,
         juce::String undoDescription);
+    enum class NoteDraftCommitStatus
+    {
+        Failed,
+        StaleRevision,
+        NoChange,
+        Applied
+    };
+    struct NoteDraftCommitResult
+    {
+        NoteDraftCommitStatus status = NoteDraftCommitStatus::Failed;
+        ContentCommitSnapshot contentSnapshot;
+    };
+    // Message-thread note-only transaction; patches and undo retain absolute seconds and ContentKey.
+    NoteDraftCommitResult commitNoteDraft(
+        ContentKey key,
+        uint64_t expectedNotesRevision,
+        const std::vector<Note>& workingNotes,
+        juce::String undoDescription);
     DrawNoteCommitResult drawNote(
         ContentKey key,
         const DrawNoteEditInput& input,
@@ -949,6 +967,7 @@ public:
     std::optional<SplitOutcome> splitPlacementAtSeconds(int trackId, int placementIndex, double splitSeconds);
     std::optional<MergeOutcome> mergePlacements(int trackId, uint64_t leadingPlacementId, uint64_t trailingPlacementId, int targetPlacementIndex);
     std::optional<DeleteOutcome> deletePlacement(int trackId, int placementIndex);
+    bool deleteTrack(int trackId, int visibleTrackCount);
     void runReclaimSweepOnMessageThread();   // public for test synchronous invocation
     void scheduleReclaimSweep();
 #endif
