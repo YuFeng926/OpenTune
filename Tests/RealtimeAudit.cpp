@@ -1,6 +1,7 @@
 #include "RealtimeAudit.h"
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -11,6 +12,8 @@
 
 namespace
 {
+thread_local std::atomic<uint32_t>* spinLockWaitSignal = nullptr;
+
 struct ThreadState
 {
     uint32_t scopeDepth = 0;
@@ -190,11 +193,18 @@ void recordSpinLockAttempt() noexcept
 void recordSpinLockWait() noexcept
 {
     recordLockWait(Api::JuceSpinLock);
+    if (auto* signal = spinLockWaitSignal)
+        signal->store(1, std::memory_order_release);
 }
 }
 
 namespace OpenTune::RealtimeAuditTest
 {
+void setSpinLockWaitSignal(std::atomic<uint32_t>* signal) noexcept
+{
+    spinLockWaitSignal = signal;
+}
+
 const char* apiName(Api api) noexcept
 {
     static constexpr const char* names[] = {

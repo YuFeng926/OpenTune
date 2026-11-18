@@ -26,12 +26,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <malloc.h>
 #include <memory>
+#include <thread>
 
 #if !JucePlugin_Build_Standalone
 extern const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory();
@@ -85,9 +87,10 @@ class FixedPlayHead final : public juce::AudioPlayHead
 {
 public:
     juce::Optional<PositionInfo> getPosition() const override { return position_; }
+    void setPosition(juce::Optional<PositionInfo> position) { position_ = std::move(position); }
 
 private:
-    const PositionInfo position_ = makePlayingPosition();
+    juce::Optional<PositionInfo> position_ = makePlayingPosition();
 };
 
 void fillFixedPcm(juce::AudioBuffer<float>& pcm)
@@ -186,17 +189,27 @@ bool installPlayableContent(OpenTune::OpenTuneAudioProcessor& processor,
 #endif
 }
 
+struct FakeAudioDeviceLifecycle
+{
+    int opens = 0;
+    int closes = 0;
+    int starts = 0;
+    int stops = 0;
+};
+
 class FakeAudioDevice final : public juce::AudioIODevice
 {
 public:
-    FakeAudioDevice()
-        : AudioIODevice("RealtimeAuditFake", "RealtimeAudit")
+    explicit FakeAudioDevice(FakeAudioDeviceLifecycle& lifecycle)
+        : AudioIODevice("RealtimeAuditFake", "RealtimeAudit"), lifecycle_(lifecycle)
     {
         inputChannels_.setBit(0);
         inputChannels_.setBit(1);
         outputChannels_.setBit(0);
         outputChannels_.setBit(1);
     }
+
+    ~FakeAudioDevice() override { close(); }
 
     juce::StringArray getOutputChannelNames() override { return { "Left", "Right" }; }
     juce::StringArray getInputChannelNames() override { return { "Left", "Right" }; }
@@ -208,26 +221,41 @@ public:
                       double sampleRateToUse,
                       int bufferSizeToUse) override
     {
+        close();
         inputChannels_ = inputChannels;
         outputChannels_ = outputChannels;
         sampleRate_ = sampleRateToUse;
         bufferSize_ = bufferSizeToUse;
         open_ = true;
+        ++lifecycle_.opens;
         return {};
     }
-    void close() override { open_ = false; }
+    void close() override
+    {
+        if (open_)
+        {
+            stop();
+            open_ = false;
+            ++lifecycle_.closes;
+        }
+    }
     bool isOpen() override { return open_; }
     void start(juce::AudioIODeviceCallback* callback) override
     {
         callback_ = callback;
+        if (! playing_)
+            ++lifecycle_.starts;
         playing_ = true;
         callback_->audioDeviceAboutToStart(this);
     }
     void stop() override
     {
         if (playing_)
+        {
             callback_->audioDeviceStopped();
-        playing_ = false;
+            playing_ = false;
+            ++lifecycle_.stops;
+        }
     }
     bool isPlaying() override { return playing_; }
     juce::String getLastError() override { return {}; }
@@ -269,6 +297,7 @@ public:
     }
 
 private:
+    FakeAudioDeviceLifecycle& lifecycle_;
     juce::BigInteger inputChannels_;
     juce::BigInteger outputChannels_;
     juce::AudioIODeviceCallback* callback_ = nullptr;
@@ -486,7 +515,8 @@ private:
 class FakeAudioDeviceType final : public juce::AudioIODeviceType
 {
 public:
-    FakeAudioDeviceType() : AudioIODeviceType("RealtimeAudit") {}
+    explicit FakeAudioDeviceType(FakeAudioDeviceLifecycle& lifecycle)
+        : AudioIODeviceType("RealtimeAudit"), lifecycle_(lifecycle) {}
 
     void scanForDevices() override {}
     juce::StringArray getDeviceNames(bool) const override { return { "RealtimeAuditFake" }; }
@@ -502,8 +532,11 @@ public:
         if ((outputName.isNotEmpty() && outputName != "RealtimeAuditFake")
             || (inputName.isNotEmpty() && inputName != "RealtimeAuditFake"))
             return nullptr;
-        return new FakeAudioDevice();
+        return new FakeAudioDevice(lifecycle_);
     }
+
+private:
+    FakeAudioDeviceLifecycle& lifecycle_;
 };
 
 void runManagerCallback(juce::AudioDeviceManager& manager,
@@ -514,6 +547,10 @@ void runManagerCallback(juce::AudioDeviceManager& manager,
     check(device != nullptr, "audio_manager_fake_device_missing");
     if (device != nullptr)
     {
+        check(processor.getSampleRate() == device->getCurrentSampleRate(),
+              "audio_manager_processor_callback_sample_rate_mismatch");
+        check(processor.getBlockSize() == device->getCurrentBufferSizeSamples(),
+              "audio_manager_processor_callback_block_size_mismatch");
 #if !JucePlugin_Build_Standalone
         juce::AudioBuffer<float> expectedPcm(2, device->getCurrentBufferSizeSamples());
         bool sourceReady = false;
@@ -625,10 +662,50 @@ bool runAllocationAndWaitSelfTest()
             || result.records[i].api == OpenTune::RealtimeAudit::Api::JuceSpinLock;
     check(detectedJuceSpinLock, "juce_spinlock_hooks_not_detected");
 
+    std::atomic<uint32_t> spinLockWaitObserved{ 0 };
+    juce::SpinLock contendedSpinLock;
+    contendedSpinLock.enter();
+    Result contendedSpinLockResult;
+    std::thread spinLockWaiter([&]
+    {
+        OpenTune::RealtimeAuditTest::setSpinLockWaitSignal(&spinLockWaitObserved);
+        contendedSpinLockResult = audit("intentional_spinlock_wait_self_test", [&]
+        {
+            contendedSpinLock.enter();
+        });
+        OpenTune::RealtimeAuditTest::setSpinLockWaitSignal(nullptr);
+        contendedSpinLock.exit();
+    });
+    while (spinLockWaitObserved.load(std::memory_order_acquire) == 0)
+        std::this_thread::yield();
+    contendedSpinLock.exit();
+    spinLockWaiter.join();
+    OpenTune::RealtimeAuditTest::reportResult(contendedSpinLockResult);
+
+    bool detectedJuceSpinLockAttempt = false;
+    bool detectedJuceSpinLockWait = false;
+    for (uint16_t i = 0; i < contendedSpinLockResult.recordCount; ++i)
+    {
+        const auto& record = contendedSpinLockResult.records[i];
+        if (record.api == OpenTune::RealtimeAudit::Api::JuceSpinLock
+            && record.event == OpenTune::RealtimeAudit::Event::LockAttempt)
+            detectedJuceSpinLockAttempt = true;
+        if (record.api == OpenTune::RealtimeAudit::Api::JuceSpinLock
+            && record.event == OpenTune::RealtimeAudit::Event::LockWait)
+            detectedJuceSpinLockWait = true;
+    }
+    check(contendedSpinLockResult.counters.lockAttempts > 0
+              && detectedJuceSpinLockAttempt,
+          "contended_juce_spinlock_attempt_not_detected");
+    check(contendedSpinLockResult.counters.lockWaits > 0
+              && detectedJuceSpinLockWait,
+          "contended_juce_spinlock_wait_not_detected");
+
     CloseHandle(file);
     CloseHandle(event);
     DeleteCriticalSection(&criticalSection);
-    return detected && detectedJuceSpinLock;
+    return detected && detectedJuceSpinLock && detectedJuceSpinLockAttempt
+        && detectedJuceSpinLockWait;
 }
 
 void runNestedScopeSelfTest()
@@ -672,11 +749,61 @@ void runProcessorCallbacks(OpenTune::OpenTuneAudioProcessor& processor)
           "processor_capture_replacement_pcm_mismatch");
 #endif
 
+    const bool playingBeforeZeroSampleBlock = processor.getPlayHeadState().isPlaying.load(
+        std::memory_order_acquire);
     juce::AudioBuffer<float> zeroSamples;
     checkClean(audit("processor_zero_sample_block", [&]
     {
         processor.processBlock(zeroSamples, midi);
     }));
+    check(processor.getPlayHeadState().isPlaying.load(std::memory_order_acquire)
+              == playingBeforeZeroSampleBlock,
+          "processor_zero_sample_block_changed_transport_state");
+
+#if !JucePlugin_Build_Standalone
+    const auto& transport = processor.getPlayHeadState();
+    const auto initialEpoch = transport.presentationEpoch.load();
+    auto stoppedPosition = makePlayingPosition();
+    stoppedPosition.setTimeInSeconds(0.75);
+    stoppedPosition.setTimeInSamples(36000);
+    stoppedPosition.setIsPlaying(false);
+    playHead.setPosition(stoppedPosition);
+    checkClean(audit("processor_zero_sample_seek_and_stop", [&]
+    {
+        processor.processBlock(zeroSamples, midi);
+    }));
+    check(transport.timeInSeconds.load() == 0.75 && !transport.isPlaying.load()
+              && transport.presentationEpoch.load() == initialEpoch + 1,
+          "zero_sample_seek_and_stop_did_not_update_transport");
+
+    checkClean(audit("processor_zero_sample_duplicate_observation", [&]
+    {
+        processor.processBlock(zeroSamples, midi);
+    }));
+    check(transport.presentationEpoch.load() == initialEpoch + 1,
+          "zero_sample_duplicate_observation_advanced_epoch");
+
+    juce::AudioPlayHead::PositionInfo stateOnlyPosition;
+    stateOnlyPosition.setIsPlaying(true);
+    playHead.setPosition(stateOnlyPosition);
+    checkClean(audit("processor_zero_sample_state_without_time", [&]
+    {
+        processor.processBlock(zeroSamples, midi);
+    }));
+    check(transport.timeInSeconds.load() == 0.75 && transport.isPlaying.load()
+              && transport.presentationEpoch.load() == initialEpoch + 2,
+          "zero_sample_state_only_observation_lost_time");
+
+    playHead.setPosition(juce::nullopt);
+    checkClean(audit("processor_zero_sample_missing_position", [&]
+    {
+        processor.processBlock(zeroSamples, midi);
+    }));
+    check(transport.timeInSeconds.load() == 0.75 && transport.isPlaying.load()
+              && transport.presentationEpoch.load() == initialEpoch + 2,
+          "zero_sample_missing_position_changed_transport");
+    playHead.setPosition(makePlayingPosition());
+#endif
 
     for (int block = 0; block < 8; ++block)
     {
@@ -724,8 +851,9 @@ int main()
     OpenTune::OpenTuneAudioProcessor playerProcessor;
     juce::AudioProcessorPlayer player;
     player.setProcessor(&playerProcessor);
+    FakeAudioDeviceLifecycle deviceLifecycle;
     juce::AudioDeviceManager manager;
-    manager.addAudioDeviceType(std::make_unique<FakeAudioDeviceType>());
+    manager.addAudioDeviceType(std::make_unique<FakeAudioDeviceType>(deviceLifecycle));
     manager.addAudioCallback(&player);
 
     juce::AudioDeviceManager::AudioDeviceSetup setup;
@@ -784,6 +912,27 @@ int main()
     playerProcessor.play();
 #endif
     runManagerCallback(manager, playerProcessor, "audio_manager_player_reconfigured_first_callback");
+
+    const auto beforeCloseLifecycle = deviceLifecycle;
+    manager.closeAudioDevice();
+    check(deviceLifecycle.stops == beforeCloseLifecycle.stops + 1,
+          "audio_manager_close_did_not_stop_fake_device");
+    check(deviceLifecycle.closes == beforeCloseLifecycle.closes + 1,
+          "audio_manager_close_did_not_close_fake_device");
+    check(manager.getCurrentAudioDevice() == nullptr,
+          "audio_manager_device_remained_open_after_close");
+
+    manager.restartLastAudioDevice();
+    check(deviceLifecycle.opens == beforeCloseLifecycle.opens + 1,
+          "audio_manager_restart_did_not_reopen_fake_device");
+    check(deviceLifecycle.starts == beforeCloseLifecycle.starts + 1,
+          "audio_manager_restart_did_not_start_fake_device");
+    check(deviceLifecycle.stops == beforeCloseLifecycle.stops + 1,
+          "audio_manager_restart_changed_stop_count");
+#if JucePlugin_Build_Standalone
+    playerProcessor.play();
+#endif
+    runManagerCallback(manager, playerProcessor, "audio_manager_player_restarted_first_callback");
 
 #if !JucePlugin_Build_Standalone
     if (araReady)

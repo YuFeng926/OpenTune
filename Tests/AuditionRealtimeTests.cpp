@@ -6,7 +6,9 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <thread>
+#include <vector>
 
 #if defined(OPENTUNE_REALTIME_AUDIT)
 #include "RealtimeAudit.h"
@@ -37,6 +39,21 @@ struct AuditionRealtimeTestAccess {
     {
         return audition.slots_[static_cast<size_t>(index)].state.load(
             std::memory_order_acquire);
+    }
+
+    static int pitchPendingSlot(const NotePitchAudition& audition)
+    {
+        for (int i = 0; i < NotePitchAudition::kNumSlots; ++i)
+            if (pitchSlotState(audition, i)
+                == static_cast<uint8_t>(NotePitchAudition::SlotState::Pending))
+                return i;
+        return -1;
+    }
+
+    static bool pitchSlotIsAudioOwned(const NotePitchAudition& audition, int index)
+    {
+        return pitchSlotState(audition, index)
+            == static_cast<uint8_t>(NotePitchAudition::SlotState::AudioOwned);
     }
 
     static int pitchVoiceCount(const NotePitchAudition& audition)
@@ -181,10 +198,11 @@ bool realtimeAuditPassed = true;
 
 template <typename Audition>
 void mixAudited(Audition& audition, juce::AudioBuffer<float>& output,
-                int numSamples, double sampleRate)
+                 int numSamples, double sampleRate,
+                 [[maybe_unused]] const char* label = "audition_mix_and_return_slots")
 {
 #if defined(OPENTUNE_REALTIME_AUDIT)
-    OpenTune::RealtimeAudit::Scope scope("audition_mix_and_return_slots");
+    OpenTune::RealtimeAudit::Scope scope(label);
 #endif
     audition.mixIntoBuffer(output, numSamples, sampleRate);
 #if defined(OPENTUNE_REALTIME_AUDIT)
@@ -206,6 +224,43 @@ void fillSignal(juce::AudioBuffer<float>& buffer, float value)
     buffer.clear();
     for (int i = 0; i < buffer.getNumSamples(); ++i)
         buffer.setSample(0, i, value);
+}
+
+OpenTune::PlaybackReadSource makeWorkerPitchSource(OpenTune::TimeStretchCache& timeStretchCache)
+{
+    constexpr int sampleCount = 44100;
+    constexpr double sampleRate = 44100.0;
+    constexpr double frequency = 220.0;
+    constexpr double twoPi = 6.2831853071795864769;
+
+    auto pcm = std::make_shared<juce::AudioBuffer<float>>(1, sampleCount);
+    for (int i = 0; i < sampleCount; ++i)
+        pcm->setSample(0, i, static_cast<float>(0.4 * std::sin(
+            twoPi * frequency * static_cast<double>(i) / sampleRate)));
+
+    auto snapshot = std::make_shared<OpenTune::EditableContentSnapshot>();
+    snapshot->audioBuffer = pcm;
+    snapshot->audioSampleRate = sampleRate;
+    snapshot->pitchCurve = std::make_shared<const OpenTune::PitchCurveSnapshot>(
+        std::vector<float>(120, static_cast<float>(frequency)),
+        std::vector<float>(120, 0.5f),
+        std::vector<OpenTune::PitchCorrectionSegment>{}, 441, sampleRate);
+
+    return OpenTune::makePlaybackReadSource(
+        {OpenTune::DomainKind::StandaloneClip, 1, 0}, std::move(snapshot),
+        {pcm, sampleRate, 0, 1}, pcm, sampleRate, 0,
+        std::make_shared<OpenTune::RenderCache>(), timeStretchCache);
+}
+
+int waitForPitchPendingSlot(const OpenTune::NotePitchAudition& audition)
+{
+    int slot = -1;
+    while (slot < 0) {
+        slot = AuditionRealtimeTestAccess::pitchPendingSlot(audition);
+        if (slot < 0)
+            std::this_thread::yield();
+    }
+    return slot;
 }
 
 bool testNoteAuditionLatestWins()
@@ -355,6 +410,42 @@ bool testPitchPlaybackRateChangeReturnsVoice()
                  "a playing voice returns its PCM when the device rate changes");
 }
 
+bool testPitchWorkerRequestPlaybackAndStopFade()
+{
+    OpenTune::TimeStretchCache timeStretchCache;
+    OpenTune::NotePitchAudition audition;
+    constexpr double sampleRate = 44100.0;
+    audition.request(makeWorkerPitchSource(timeStretchCache),
+                     0.1, 0.5, 246.94f, sampleRate);
+
+    const int pendingSlot = waitForPitchPendingSlot(audition);
+
+    juce::AudioBuffer<float> output(1, 512);
+    output.clear();
+    mixAudited(audition, output, output.getNumSamples(), sampleRate, "pitch_worker_first_block");
+    if (!check(AuditionRealtimeTestAccess::pitchVoiceCount(audition) == 1
+                   && AuditionRealtimeTestAccess::pitchSlotIsAudioOwned(audition, pendingSlot)
+                   && output.getMagnitude(0, 0, output.getNumSamples()) > 1.0e-5f,
+               "the first audited mix claims and plays worker-rendered PCM"))
+        return false;
+
+    output.clear();
+    mixAudited(audition, output, output.getNumSamples(), sampleRate, "pitch_worker_next_block");
+    if (!check(audition.isActive()
+                   && output.getMagnitude(0, 0, output.getNumSamples()) > 1.0e-5f,
+               "worker-rendered PCM continues across mix blocks"))
+        return false;
+
+    audition.stop();
+    juce::AudioBuffer<float> fadeOut(1, 600);
+    fadeOut.clear();
+    mixAudited(audition, fadeOut, fadeOut.getNumSamples(), sampleRate, "pitch_worker_stop_fade");
+    return check(fadeOut.getMagnitude(0, 0, 128) > 1.0e-5f
+                     && fadeOut.getMagnitude(0, 512, 88) == 0.0f
+                     && !audition.isActive(),
+                 "stop fades the worker-rendered voice to silence");
+}
+
 bool testReturnedNotePcmCanBeReusedAndDestroyed()
 {
     OpenTune::NoteAudition audition;
@@ -382,6 +473,28 @@ bool testPianoEventSnapshotBoundary()
                  "one block processes exactly the 63-event SPSC capacity");
 }
 
+bool testPianoLoadNoteOnMixNoteOff()
+{
+    OpenTune::PianoKeyAudition audition;
+    audition.loadSamples();
+    audition.noteOn(60);
+
+    juce::AudioBuffer<float> firstBlock(1, 512);
+    firstBlock.clear();
+    mixAudited(audition, firstBlock, firstBlock.getNumSamples(), 44100.0, "piano_note_on_first_block");
+    if (!check(firstBlock.getMagnitude(0, 0, firstBlock.getNumSamples()) > 1.0e-5f,
+               "Piano noteOn produces PCM in the first mixed block"))
+        return false;
+
+    audition.noteOff(60);
+    juce::AudioBuffer<float> releaseBlock(1, 4096);
+    releaseBlock.clear();
+    mixAudited(audition, releaseBlock, releaseBlock.getNumSamples(), 44100.0, "piano_note_off_release");
+    return check(releaseBlock.getMagnitude(0, 0, 128) > 1.0e-5f
+                     && releaseBlock.getMagnitude(0, 3072, 1024) == 0.0f,
+                 "Piano noteOff release reaches final silence");
+}
+
 bool testPianoConcurrentProducerBoundary()
 {
     OpenTune::PianoKeyAudition audition;
@@ -406,7 +519,9 @@ int main()
         && testPitchStopRestartGeneration()
         && testPitchRateRejectionAndProducerReclaim()
         && testPitchPlaybackRateChangeReturnsVoice()
+        && testPitchWorkerRequestPlaybackAndStopFade()
         && testReturnedNotePcmCanBeReusedAndDestroyed()
+        && testPianoLoadNoteOnMixNoteOff()
         && testPianoEventSnapshotBoundary()
         && testPianoConcurrentProducerBoundary();
     if (!passed || !realtimeAuditPassed)
