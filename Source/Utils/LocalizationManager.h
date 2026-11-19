@@ -285,8 +285,6 @@ constexpr const char* kGpuFirst = "GPU First";
 constexpr const char* kCpuFirst = "CPU First";
 constexpr const char* kHybridMode = "Hybrid Mode";
 
-constexpr const char* kVocoderWeight = "Vocoder Model";
-
 constexpr const char* kSetShortcut = "Set Shortcut";
 constexpr const char* kPressNewKeyCombination = "Press the new key combination";
 constexpr const char* kCurrent = "Current";
@@ -637,7 +635,6 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kGpuFirst, "GPU First", "GPU 优先", "GPU 優先", "GPU приоритет", "GPU primero" },
         { Keys::kCpuFirst, "CPU First", "CPU 优先", "CPU 優先", "CPU приоритет", "CPU primero" },
         { Keys::kHybridMode, "Hybrid Mode: Small corrections use DSP, large corrections use vocoder", "混合模式:小修用dsp，大修用声码器", "ハイブリッドモード：小さな修正はDSP、大きな修正はボコーダー", "Гибридный режим: небольшие коррекции через DSP, большие через вокодер", "Modo híbrido: correcciones pequeñas con DSP, grandes con vocoder" },
-        { Keys::kVocoderWeight, "Vocoder Model", "声码器模型", "ボコーダーモデル", "Модель вокодера", "Modelo de vocoder" },
 
         { Keys::kSetShortcut, "Set Shortcut", "设置快捷键", "ショートカットを設定", "Назначить сочетание", "Atajo" },
         { Keys::kPressNewKeyCombination, "Press a key, wheel, middle or side button", "按下按键、滚动滚轮或点击鼠标中键/侧键", "キー、ホイール、中央またはサイドボタンを操作してください", "Нажмите клавишу, прокрутите колесо или нажмите среднюю/боковую кнопку", "Pulse una tecla, la rueda o un botón central/lateral" },

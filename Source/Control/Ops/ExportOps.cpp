@@ -372,15 +372,9 @@ private:
         const auto runtime = controlProcessingRuntime();
         const auto full = controlProcessingJson(preferences, &runtime);
         auto json = JsonValue::object();
-        for (const char* name : {"vocoderWeight", "hybridMode", "backend", "tuningHz"})
+        for (const char* name : {"hybridMode", "backend", "tuningHz"})
             if (const JsonValue* value = full.find(name))
                 json.appendMember(name, *value);
-        if (const JsonValue* reasons = full.find("nullReasons"))
-            if (const JsonValue* weight = reasons->find("vocoderWeight")) {
-                auto nullReasons = JsonValue::object();
-                nullReasons.appendMember("vocoderWeight", *weight);
-                json.appendMember("nullReasons", std::move(nullReasons));
-            }
         return json;
     }
 

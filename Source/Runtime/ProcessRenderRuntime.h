@@ -3,7 +3,6 @@
 #include "../Content/EditableContentSnapshot.h"
 #include "../Inference/VocoderDomain.h"
 #include "../Render/ContentRenderService.h"
-#include "../Utils/VocoderModelWeight.h"
 #include <condition_variable>
 #include <atomic>
 #include <cstddef>
@@ -174,25 +173,16 @@ public:
                                CompletionContext completion);
 
     /**
-     * 异步模型切换 / 后端重置 API（UI 线程调用）：
-     * 只投递命令到进程寿命 control worker 并立即返回。control worker 串行执行
-     * 耗时 Session 销毁、按当前配置重建、AccelerationDetector resetAndDetect。
-     * setVocoderModelWeight 返回 true 表示命令已在 control queue 锁内接受；
-     * false 表示拒绝且不执行、不持久化。completion 经 MessageManager::callAsync
-     * 投递回消息线程；调用方在其 completion gate 关闭后直接丢弃（不访问 owner）。
+     * 异步推理后端重置 API（UI 线程调用）：向进程寿命 control worker 投递命令并立即返回。
+     * worker 串行执行 Session 销毁、AccelerationDetector resetAndDetect 和 Session 重建。
+     * 返回 true 表示命令已接受；completion 经 MessageManager::callAsync 投递回消息线程。
      */
-    bool setVocoderModelWeight(const VocoderModelWeight& weight,
-                               std::shared_ptr<ContentRenderService> crs,
-                               ControlCompletion completion,
-                               std::shared_ptr<CompletionGate> completionGate,
-                               bool resetInferenceBackend = false,
-                               bool forceCpu = false);
-    void resetVocoder(std::shared_ptr<ContentRenderService> crs,
-                      ControlCompletion completion);
     bool resetInferenceBackend(bool forceCpu,
                                std::shared_ptr<ContentRenderService> crs,
                                ControlCompletion completion,
                                std::shared_ptr<CompletionGate> completionGate);
+    void resetVocoder(std::shared_ptr<ContentRenderService> crs,
+                      ControlCompletion completion);
     void detachDeferredJobs(void* owner,
                             const std::shared_ptr<CompletionGate>& gate);
     void pruneDeferredJobsForCache(const std::shared_ptr<RenderCache>& cache);
@@ -217,7 +207,6 @@ public:
     VocoderSubmitResult submitVocoderJob(VocoderDomain::Job job,
                                           uint64_t expectedGeneration,
                                           juce::String& rejectionReason);
-    VocoderModelWeight getVocoderModelWeight() const;
     bool isVocoderReady() const noexcept;
     bool isVocoderReconfiguring() const noexcept;
 
@@ -236,19 +225,13 @@ private:
     ProcessRenderRuntime();
     ~ProcessRenderRuntime() = default;
 
-    static std::string modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight);
-
-    // 在锁外创建并初始化完整 domain。模型加载、Session 创建和失败清理均不得
-    // 持有 vocoderMutex_，保证 UI 查询与实例 detach 永远只经历短临界区。
-    std::unique_ptr<VocoderDomain> createVocoderDomain(const VocoderModelWeight& weight,
-                                                       juce::String& errorMessage);
+    std::unique_ptr<VocoderDomain> createVocoderDomain(juce::String& errorMessage);
 
     // 一次锁内“确保 domain 并返回 generation/conditioningBins/fMax”：配置与
     // domain 同代生成，杜绝跨域混用（旧 generation 配置配新 domain 等）。
     struct VocoderConfig
     {
         uint64_t generation{0};
-        VocoderModelWeight modelWeight{kDefaultVocoderWeight};
         int conditioningBins{0};
         VocoderConditioningType conditioningType{VocoderConditioningType::LogMel};
         float fMax{16000.0f};
@@ -258,22 +241,19 @@ private:
     };
     bool acquireVocoderConfig(VocoderConfig& out);
 
-    // ---- 进程寿命 control worker：模型切换/后端重置的唯一执行者 ----
+    // ---- 进程寿命 control worker：推理后端重置的唯一执行者 ----
     struct ControlCommand
     {
         enum class Type : uint8_t
         {
             EnsureVocoder,
-            SetVocoderWeight,
             ResetVocoder,
             ResetInferenceBackend,
             Stop
         };
 
-        Type type{Type::ResetVocoder};
-        VocoderModelWeight weight{kDefaultVocoderWeight};
+        Type type{Type::EnsureVocoder};
         bool forceCpu{false};
-        bool resetInferenceBackend{false};
         std::shared_ptr<ControlTransaction> transaction;
         ControlCompletion completion;
         std::shared_ptr<CompletionGate> completionGate;
@@ -346,7 +326,6 @@ private:
     std::vector<std::weak_ptr<ContentRenderService>> backendListeners_; // backendListenersMutex_ protected
 
     std::unique_ptr<VocoderDomain> vocoderDomain_;
-    VocoderModelWeight currentVocoderModelWeight_{kDefaultVocoderWeight};
     mutable std::mutex vocoderMutex_;
     std::condition_variable domainSubmitCv_;
     int domainSubmitInFlight_{0}; // vocoderMutex_ protected

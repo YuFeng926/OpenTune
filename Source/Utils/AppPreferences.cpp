@@ -27,7 +27,7 @@ constexpr const char* kSharedScrollSpeedKey = "shared.scroll.speed";
 constexpr const char* kStandaloneMouseTrailThemeKey = "standalone.mouseTrail.theme";
 constexpr const char* kStandaloneCursorStyleKey = "standalone.cursorStyle";
 constexpr const char* kSharedRenderingPriorityKey = "shared.rendering.priority";
-constexpr const char* kSharedVocoderWeightKey = "shared.rendering.vocoderWeight";
+constexpr const char* kLegacySharedVocoderWeightKey = "shared.rendering.vocoderWeight";
 constexpr const char* kSharedExperimentalFeaturesEnabledKey = "shared.features.experimentalEnabled";
 constexpr const char* kSharedRecentProjectsKey = "shared.recentProjects";
 constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
@@ -231,20 +231,6 @@ RenderingPriority renderingPriorityFromToken(const juce::String& token)
 {
     if (token == "cpu-first") return RenderingPriority::CpuFirst;
     return RenderingPriority::GpuFirst;
-}
-
-static juce::String toVocoderWeightToken(const VocoderModelWeight& w)
-{
-    return juce::String(w);
-}
-
-static VocoderModelWeight fromVocoderWeightToken(const juce::String& token)
-{
-    // 旧版枚举 token 迁移到文件名标识
-    if (token == "community") return kVocoderWeightCommunity;
-    if (token == "coulin9-v4") return kVocoderWeightCoulin9;
-    if (token.isEmpty()) return kDefaultVocoderWeight;
-    return token.toStdString();
 }
 
 static juce::String toF0ModelTypeToken(F0ModelType type)
@@ -462,9 +448,6 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.renderingPriority = renderingPriorityFromToken(
         properties.getValue(kSharedRenderingPriorityKey,
                             toRenderingPriorityToken(state.shared.renderingPriority)));
-    state.shared.vocoderModelWeight = fromVocoderWeightToken(
-        properties.getValue(kSharedVocoderWeightKey,
-                            toVocoderWeightToken(state.shared.vocoderModelWeight)));
     state.shared.experimentalFeaturesEnabled = properties.getBoolValue(
         kSharedExperimentalFeaturesEnabledKey,
         state.shared.experimentalFeaturesEnabled);
@@ -541,8 +524,6 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
     properties.setValue(kSharedWholeNoteMoveSnapModeKey, static_cast<int>(state.shared.wholeNoteMoveSnapMode));
     properties.setValue(kSharedRenderingPriorityKey,
                         toRenderingPriorityToken(state.shared.renderingPriority));
-    properties.setValue(kSharedVocoderWeightKey,
-                        toVocoderWeightToken(state.shared.vocoderModelWeight));
     properties.setValue(kSharedExperimentalFeaturesEnabledKey,
                         state.shared.experimentalFeaturesEnabled);
     properties.setValue(kSharedLightPitchCorrectionEnabledKey,
@@ -577,7 +558,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
 
 bool ProcessingPreferenceDelta::any() const noexcept
 {
-    return tuning || scheme || hybrid || experimental || vocoder || priority || f0 || accessibilityMode;
+    return tuning || scheme || hybrid || experimental || priority || f0 || accessibilityMode;
 }
 
 bool ProcessingPreferenceDelta::needsJob() const noexcept
@@ -587,7 +568,7 @@ bool ProcessingPreferenceDelta::needsJob() const noexcept
 
 bool ProcessingPreferenceDelta::needsRuntimeCompletion() const noexcept
 {
-    return vocoder || priority;
+    return priority;
 }
 
 ProcessingPreferenceState readProcessingPreferenceState(const AppPreferences& preferences)
@@ -598,7 +579,6 @@ ProcessingPreferenceState readProcessingPreferenceState(const AppPreferences& pr
     state.audioEditingScheme = shared.audioEditingScheme;
     state.lightPitchCorrectionEnabled = shared.lightPitchCorrectionEnabled;
     state.experimentalFeaturesEnabled = shared.experimentalFeaturesEnabled;
-    state.vocoderModelWeight = shared.vocoderModelWeight;
     state.renderingPriority = shared.renderingPriority;
     state.f0ModelType = shared.f0ModelType;
     state.accessibilityModeEnabled = shared.accessibilityModeEnabled;
@@ -615,7 +595,6 @@ ProcessingPreferenceDelta computeProcessingPreferenceDelta(const ProcessingPrefe
                    && *patch.lightPitchCorrectionEnabled != state.lightPitchCorrectionEnabled;
     delta.experimental = patch.experimentalFeaturesEnabled
                          && *patch.experimentalFeaturesEnabled != state.experimentalFeaturesEnabled;
-    delta.vocoder = patch.vocoderModelWeight && *patch.vocoderModelWeight != state.vocoderModelWeight;
     delta.priority = patch.renderingPriority && *patch.renderingPriority != state.renderingPriority;
     delta.f0 = patch.f0ModelType && *patch.f0ModelType != state.f0ModelType;
     delta.accessibilityMode = patch.accessibilityModeEnabled
@@ -631,7 +610,6 @@ ProcessingPreferenceDelta diffProcessingPreferenceStates(const ProcessingPrefere
     delta.scheme = before.audioEditingScheme != after.audioEditingScheme;
     delta.hybrid = before.lightPitchCorrectionEnabled != after.lightPitchCorrectionEnabled;
     delta.experimental = before.experimentalFeaturesEnabled != after.experimentalFeaturesEnabled;
-    delta.vocoder = before.vocoderModelWeight != after.vocoderModelWeight;
     delta.priority = before.renderingPriority != after.renderingPriority;
     delta.f0 = before.f0ModelType != after.f0ModelType;
     delta.accessibilityMode = before.accessibilityModeEnabled != after.accessibilityModeEnabled;
@@ -671,13 +649,7 @@ ProcessingPreferenceApplyResult applyProcessingPreferencePatch(
     }
 
     bool runtimeCommandAccepted = true;
-    if (result.delta.vocoder) {
-        const std::optional<bool> forceCpu = result.delta.priority
-            ? std::optional<bool>(*patch.renderingPriority == RenderingPriority::CpuFirst)
-            : std::nullopt;
-        runtimeCommandAccepted = runtimeOperations.setVocoderModelWeight(
-            *patch.vocoderModelWeight, forceCpu, std::move(runtimeCallback));
-    } else if (result.delta.priority) {
+    if (result.delta.priority) {
         runtimeCommandAccepted = runtimeOperations.resetInferenceBackend(
             *patch.renderingPriority == RenderingPriority::CpuFirst, std::move(runtimeCallback));
     }
@@ -708,8 +680,6 @@ ProcessingPreferenceApplyResult applyProcessingPreferencePatch(
     }
     if (result.delta.experimental)
         preferences.setExperimentalFeaturesEnabled(*patch.experimentalFeaturesEnabled);
-    if (result.delta.vocoder)
-        preferences.setVocoderModelWeight(*patch.vocoderModelWeight);
     if (result.delta.priority)
         preferences.setRenderingPriority(*patch.renderingPriority);
     if (result.delta.f0)
@@ -753,6 +723,7 @@ void AppPreferences::load()
     const bool migrateShortcutSchema = userSettings->getIntValue(kShortcutSchemaVersionKey, 0)
         < kShortcutSchemaVersion;
     const bool hasLegacyVisualPreference = userSettings->containsKey(kSharedPitchLaneVisualModeKey);
+    const bool hasLegacyVocoderWeight = userSettings->containsKey(kLegacySharedVocoderWeightKey);
     state_ = loadStateFromProperties(*userSettings);
     if (migrateShortcutSchema)
         writeShortcutSettingsToProperties(*userSettings, state_.shared.shortcuts);
@@ -764,7 +735,9 @@ void AppPreferences::load()
             writeStateToProperties(*userSettings, state_);
         userSettings->removeValue(kSharedPitchLaneVisualModeKey);
     }
-    if (migrateShortcutSchema || hasLegacyVisualPreference)
+    if (hasLegacyVocoderWeight)
+        userSettings->removeValue(kLegacySharedVocoderWeightKey);
+    if (migrateShortcutSchema || hasLegacyVisualPreference || hasLegacyVocoderWeight)
         userSettings->saveIfNeeded();
     TuningConfig::setCurrentTuningHz(state_.shared.tuning.tuningHz);
 }
@@ -899,13 +872,6 @@ void AppPreferences::setRenderingPriority(RenderingPriority priority)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.renderingPriority = priority;
-    saveLocked();
-}
-
-void AppPreferences::setVocoderModelWeight(const VocoderModelWeight& weight)
-{
-    const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.vocoderModelWeight = weight;
     saveLocked();
 }
 

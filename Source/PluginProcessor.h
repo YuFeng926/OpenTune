@@ -50,7 +50,6 @@
 #include "Utils/TimeCoordinate.h"
 #include "Utils/UndoManager.h"
 #include "Plugin/ReaperHostBridge.h"   // declarations only; the .cpp is built for the plugin
-#include "Utils/VocoderModelWeight.h"
 #include "Utils/PianoKeyAudition.h"
 #include "Utils/NoteAudition.h"
 #include "Audio/NotePitchAudition.h"
@@ -615,17 +614,6 @@ public:
      * gate 关闭后回调直接丢弃。
      */
     bool resetInferenceBackend(bool forceCpu, ProcessingPreferenceRuntimeCallback completion = {});
-
-    /**
-     * 切换声码器模型权重（UI 线程）：向进程寿命 control worker 投递命令
-     * （严格先销毁旧 Session 再按当前配置重建）→ 立即返回。返回 true 表示
-     * control queue 已接受该命令，共享偏好命令在接受后完成持久化。
-     * 模型切换完成后由共享 backend 变更通知统一清理
-     * RenderCache/TimeStretchCache。gate 关闭后回调直接丢弃。
-     */
-    bool setVocoderModelWeight(const VocoderModelWeight& weight,
-                               ProcessingPreferenceRuntimeCallback completion = {},
-                               std::optional<bool> forceCpu = std::nullopt);
 
     bool setF0ModelType(F0ModelType type, juce::String* failureReason = nullptr);
     ProcessingPreferenceRuntimeOperations getProcessingPreferenceRuntimeOperations();

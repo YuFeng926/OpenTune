@@ -33,11 +33,8 @@ struct ControlVocoderState
 };
 
 /**
- * processing.options of prefs.get: {vocoderWeight, f0Model, renderingPriority}, each an
- * array of strings.
+ * processing.options of prefs.get: {f0Model, renderingPriority}, each an array of strings.
  *
- * - vocoderWeight: the file names that the preferences window lists, in its order (ModelFactory::
- *   getAvailableVocoderWeights() of the models directory); empty without a model.
  * - f0Model: the names of the pitch models that are available (ModelFactory::getAvailableF0Models()); empty without
  *   a model.
  * - renderingPriority: every value.
@@ -46,9 +43,6 @@ struct ControlVocoderState
  * out; an array has at most kControlOptionCount members. Reads the disk; message thread.
  */
 JsonValue controlPrefsOptionsJson();
-
-/** The file names of processing.options.vocoderWeight (see controlPrefsOptionsJson()). */
-std::vector<std::string> controlVocoderWeightOptions();
 
 /** Every pitch model OpenTune knows, available or not, with the name that the wire uses. */
 std::vector<F0ModelInfo> controlF0Models();

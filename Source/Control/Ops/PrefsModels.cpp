@@ -6,8 +6,6 @@
 #include "Utils/AccelerationDetector.h"
 #include "Utils/ModelPathResolver.h"
 
-#include <algorithm>
-
 namespace OpenTune {
 
 namespace {
@@ -36,16 +34,6 @@ JsonValue textArray(const std::vector<std::string>& names)
 
 } // namespace
 
-std::vector<std::string> controlVocoderWeightOptions()
-{
-    // ModelFactory::getAvailableVocoderWeights(): the built-in weights of the models directory and the files of its
-    // vocoder_weights folder, which is what the preferences window lists (SharedAudioPage).
-    std::vector<std::string> names;
-    for (const auto& weight : ModelFactory::getAvailableVocoderWeights(ModelPathResolver::getModelsDirectory()))
-        names.push_back(weight.fileName);
-    return limitedNames(names);
-}
-
 std::vector<F0ModelInfo> controlF0Models()
 {
     // ModelFactory::getAvailableF0Models(): the pitch models, each with whether its file exists.
@@ -72,7 +60,6 @@ std::string controlF0ModelName(F0ModelType type)
 JsonValue controlPrefsOptionsJson()
 {
     auto options = JsonValue::object();
-    options.appendMember("vocoderWeight", textArray(controlVocoderWeightOptions()));
     options.appendMember("f0Model", textArray(controlF0ModelOptions()));
     options.appendMember("renderingPriority", textArray({"gpuFirst", "cpuFirst"}));
     return options;

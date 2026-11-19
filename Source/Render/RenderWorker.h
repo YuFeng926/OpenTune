@@ -114,9 +114,9 @@ public:
 
     /**
      * pause() 暂停取新同步 job 并等待正在执行的 render callback 完成
-     * （inFlight_ == 0），绝不等待异步 vocoder 推理（重置推理后端 /
-     * 切换 vocoder 模型前调用）：卡住的推理由调用方 resetVocoder /
-     * setVocoderModelWeight 的 SetTerminate + join 终止，onComplete 回调归还计数。
+     * （inFlight_ == 0），绝不等待异步 vocoder 推理（推理后端重置或内部会话重建前调用）：
+     * 卡住的推理由调用方 resetVocoder / resetInferenceBackend 的 SetTerminate + join 终止，
+     * onComplete 回调归还计数。
      * drain() 完整合同：等待 queue_ 空且 inFlight_ == 0 && asyncInFlight_ == 0。
      * 导出路径在读取渲染结果前必须调用，保证最新完整数据已落盘。
      * 析构路径不得使用 drain()/pause() 编排：只通过

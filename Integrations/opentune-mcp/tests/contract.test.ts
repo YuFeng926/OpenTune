@@ -33,7 +33,7 @@ const samples: Record<string, Record<string, unknown>> = {
   'ui.dismiss': { target: 'dialogs', confirm: true }, 'ui.setSelection': { placementId, openEditor: true, dryRun: true },
   'ui.setWorkspace': { workspace: 'pianoRoll' }, 'project.save': {}, 'project.saveAs': { path: '/tmp/example.otproj', confirm: true },
   'project.open': { path: '/tmp/example.otproj', discardUnsaved: true }, 'project.clearRecent': {},
-  'project.saveCopy': { path: '/tmp/copy.otproj' }, 'prefs.set': { tuningHz: 440.123, editingScheme: 'openTune' },
+  'project.saveCopy': { path: '/tmp/copy.otproj' }, 'prefs.set': { tuningHz: 440.123, editingScheme: 'openTune', renderingPriority: 'cpuFirst' },
   'audio.set': { sampleRateHz: 44100, bufferSizeFrame: 512 }, 'app.quit': { discardUnsaved: false },
   'job.get': { jobId: 'j:01234567:1', waitMs: 30000 }, 'job.cancel': { jobId: 'j:01234567:1' },
   'import.start': { items: [{ path: '/tmp/voice.wav' }], layout: 'single', newTrack: true, startTimelineSec: 0, generateNotes: true, idempotencyKey: 'import-1' },
@@ -80,7 +80,7 @@ test('mutual exclusions, required revisions and protocol boundaries reject inval
     ['track.set', { tracks: [{ trackId: 1, volumeDb: 0, volumeLinear: 1 }] }],
     ['track.set', { tracks: [{ trackId: 1 }] }], ['track.add', { count: 65 }], ['track.duplicate', { trackId: 2147483648 }],
     ['ui.setSelection', { trackId: 1, openEditor: false }], ['ui.dismiss', { target: 'onboarding', confirm: false }],
-    ['prefs.set', {}], ['audio.set', {}], ['job.get', { jobId: 'j:01234567:1', waitMs: 30001 }],
+    ['prefs.set', {}], ['prefs.set', { vocoderWeight: 'hifigan.onnx' }], ['audio.set', {}], ['job.get', { jobId: 'j:01234567:1', waitMs: 30001 }],
     ['import.start', { items: [{ path: '/tmp/voice.wav' }], layout: 'single', trackId: 0, newTrack: false }],
     ['export.start', { kind: 'master', path: '/tmp/voice.wav', target: { trackId: 0 } }],
   ];

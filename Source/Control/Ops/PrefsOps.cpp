@@ -39,8 +39,6 @@ struct PrefsRequest
     std::optional<bool> notesPrimary;
     std::optional<bool> hybridMode;
     std::optional<bool> experimentalFeatures;
-    /** vocoderWeight: a file name of processing.options.vocoderWeight (checked when the call runs). */
-    std::optional<std::string> vocoderWeight;
     /** renderingPriority: true for cpuFirst, false for gpuFirst. */
     std::optional<bool> cpuFirst;
     /** f0Model: a name of processing.options.f0Model (checked when the call runs), and the type it names. */
@@ -97,7 +95,7 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
 {
     ControlParamReader reader(params);
     std::optional<double> tuning;
-    if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures", "vocoderWeight",
+    if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures",
                              "renderingPriority", "f0Model", "accessibilityModeEnabled"})
         || !reader.optionalNumber("tuningHz", static_cast<double>(TuningConfig::kMinTuningHz),
                                   static_cast<double>(TuningConfig::kMaxTuningHz), tuning)) {
@@ -113,7 +111,6 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
     }
     if (!readBoolean(reader, "hybridMode", out.hybridMode)
         || !readBoolean(reader, "experimentalFeatures", out.experimentalFeatures)
-        || !readOptionName(reader, "vocoderWeight", out.vocoderWeight)
         || !readEnumPair(reader, "renderingPriority", "gpuFirst", "cpuFirst", out.cpuFirst)
         || !readOptionName(reader, "f0Model", out.f0Model)
         || !readBoolean(reader, "accessibilityModeEnabled", out.accessibilityModeEnabled)) {
@@ -122,8 +119,8 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
     }
     if (tuning)
         out.tuningHz = roundedTuning(*tuning);
-    if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures && !out.vocoderWeight
-        && !out.cpuFirst && !out.f0Model && !out.accessibilityModeEnabled) {
+    if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures && !out.cpuFirst
+        && !out.f0Model && !out.accessibilityModeEnabled) {
         why = "params must have at least one member";
         return false;
     }
@@ -141,8 +138,6 @@ ProcessingPreferencePatch preferencePatch(const PrefsRequest& request)
                                                          : AudioEditingScheme::Scheme::CorrectedF0Primary;
     patch.lightPitchCorrectionEnabled = request.hybridMode;
     patch.experimentalFeaturesEnabled = request.experimentalFeatures;
-    if (request.vocoderWeight)
-        patch.vocoderModelWeight = *request.vocoderWeight;
     if (request.cpuFirst)
         patch.renderingPriority = *request.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst;
     patch.f0ModelType = request.f0Type;
@@ -180,12 +175,11 @@ std::optional<Error> applyError(const ProcessingPreferenceApplyResult& result)
         case ProcessingPreferenceApplyResult::Status::F0ModelRejected:
             return controlOpError("MODEL_UNAVAILABLE", "model_missing", "OpenTune could not switch the pitch model");
         case ProcessingPreferenceApplyResult::Status::RuntimeCommandRejected:
-            return controlOpError("MODEL_UNAVAILABLE",
-                                  result.delta.vocoder ? "vocoder_weight_rejected" : "backend_change_rejected",
+            return controlOpError("MODEL_UNAVAILABLE", "backend_change_rejected",
                                   "OpenTune could not queue the processing configuration change");
         case ProcessingPreferenceApplyResult::Status::F0RestoreRejected:
             return controlOpErrorAfterChange(
-                "MODEL_UNAVAILABLE", result.delta.vocoder ? "vocoder_weight_rejected" : "backend_change_rejected",
+                "MODEL_UNAVAILABLE", "backend_change_rejected",
                 "OpenTune could not queue the processing configuration change; the pitch model remains changed because its "
                 "previous selection could not be restored");
         case ProcessingPreferenceApplyResult::Status::Applied:
@@ -215,15 +209,6 @@ void addPreferenceChange(ControlWriteEnvelope& envelope, const char* name, const
     auto fields = JsonValue::object();
     fields.appendMember(name, std::move(pair));
     envelope.addChange("preference", preferenceRef(name), JsonValue::string(label), std::move(fields));
-}
-
-/** A stored vocoder weight as the wire carries it, or nullopt when it cannot be sent back (empty, not UTF-8 or longer
-    than the limit of processing.options). */
-std::optional<JsonValue> wireWeight(const std::string& weight)
-{
-    if (weight.empty() || !isValidUtf8(weight) || utf8CodePointCount(weight) > kControlOptionTextCodePoints)
-        return std::nullopt;
-    return JsonValue::string(weight);
 }
 
 /** Records preference changes from the persisted state and runtime completion actually observed. */
@@ -265,14 +250,6 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope,
                             JsonValue::boolean(after.experimentalFeaturesEnabled), JsonValue());
         names.append(JsonValue::string("experimentalFeatures"));
         revert.appendMember("experimentalFeatures", JsonValue::boolean(before.experimentalFeaturesEnabled));
-    }
-    if (delta.vocoder) {
-        const auto previous = wireWeight(before.vocoderModelWeight);
-        addPreferenceChange(envelope, "vocoderWeight", "Vocoder weight", previous ? *previous : JsonValue(),
-                            JsonValue::string(after.vocoderModelWeight), JsonValue());
-        names.append(JsonValue::string("vocoderWeight"));
-        if (previous)
-            revert.appendMember("vocoderWeight", *previous);
     }
     if (delta.priority) {
         const auto name = [](RenderingPriority priority) {
@@ -498,21 +475,12 @@ Error startRefusal(const std::string& refusal)
 }
 
 /**
- * Checks the vocoder weight and the pitch model of a request against what the preferences window offers
- * (processing.options of prefs.get) and resolves the pitch model's type. A value that is not on offer gives
- * INVALID_ARGUMENT(option_unavailable) with the name of the member, and nothing changes. A value that is equal to the
- * current one is checked as well. Reads the disk on every call that names a vocoder weight or a pitch model (the lists
- * are scanned from the models directory, as controlPrefsOptionsJson() does for prefs.get); the directory is small.
+ * Checks the pitch model against processing.options of prefs.get and resolves its type. Reads the disk on every call
+ * that names a pitch model; its list is scanned from the models directory, as controlPrefsOptionsJson() does.
  * Message thread.
  */
 std::optional<Error> checkOptions(PrefsRequest& request)
 {
-    if (request.vocoderWeight) {
-        const auto weights = controlVocoderWeightOptions();
-        if (std::find(weights.begin(), weights.end(), *request.vocoderWeight) == weights.end())
-            return controlOpError("INVALID_ARGUMENT", "option_unavailable",
-                                  "vocoderWeight is not one of processing.options.vocoderWeight");
-    }
     if (request.f0Model) {
         const auto names = controlF0ModelOptions();
         const auto type = f0TypeOf(*request.f0Model);

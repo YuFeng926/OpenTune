@@ -11,7 +11,6 @@
 #include "../Render/RenderChunkPlanner.h"
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
-#include "../Utils/AppPreferences.h"
 #include "../Utils/ChannelLayoutLogger.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Utils/LocalizationManager.h"
@@ -681,29 +680,6 @@ void ProcessRenderRuntime::releaseOwner() noexcept
 
 ProcessRenderRuntime::ProcessRenderRuntime()
 {
-    // 启动前从持久化配置读取 vocoder 模型权重，确保首次 EnsureVocoder 使用用户
-    // 实际选择的权重（而非硬编码默认值）。
-    const auto prefs = AppPreferences().getState().shared.vocoderModelWeight;
-    const auto modelsDir = ModelPathResolver::getModelsDirectory();
-    currentVocoderModelWeight_ = prefs;
-
-    // 持久化权重可能已被新版本停止打包；只回退到项目保证提供的内置默认权重。
-    // 默认权重也缺失时保留原值，让后续 createVocoderDomain 报出真实错误。
-    const auto resolvedPath = modelPathForWeight(modelsDir, prefs);
-    if (!juce::File(resolvedPath).existsAsFile()) {
-        AppLogger::warn("[ProcessRenderRuntime] Persisted vocoder weight not found: "
-            + juce::String(prefs) + " (" + resolvedPath + ")");
-
-        if (prefs != kDefaultVocoderWeight) {
-            const auto defaultPath = modelPathForWeight(modelsDir, kDefaultVocoderWeight);
-            if (juce::File(defaultPath).existsAsFile()) {
-                AppLogger::warn("[ProcessRenderRuntime] Falling back to default weight: "
-                    + juce::String(kDefaultVocoderWeight));
-                currentVocoderModelWeight_ = kDefaultVocoderWeight;
-            }
-        }
-    }
-
 #if defined(JucePlugin_Build_AU) && JucePlugin_Build_AU
     // AU keeps the eager worker that its owner-count teardown/reopen contract
     // depends on. Standalone and VST3 start the worker on the first accepted
@@ -1002,24 +978,10 @@ void ProcessRenderRuntime::finishShutdown(uint64_t generation)
     workerExitCv_.notify_all();
 }
 
-std::string ProcessRenderRuntime::modelPathForWeight(const std::string& modelDir, const VocoderModelWeight& weight)
-{
-    // 权重标识即文件名：vocoder_weights/ 优先（用户放置的可切换权重），
-    // 未命中时回退 models/ 根目录（内置权重）。
-    const juce::File dirWeight = juce::File(modelDir)
-        .getChildFile("vocoder_weights")
-        .getChildFile(juce::String(weight));
-    if (dirWeight.existsAsFile())
-        return dirWeight.getFullPathName().toStdString();
-
-    return modelDir + "/" + weight;
-}
-
-std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(
-    const VocoderModelWeight& weight, juce::String& errorMessage)
+std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(juce::String& errorMessage)
 {
     // 该函数始终在 vocoderMutex_ 外执行。ORT Env 初始化、模型加载、Session
-    // 创建和失败清理都可能耗时，绝不能阻塞 UI 的 detach/isVocoderReady。
+    // 创建和失败清理都可能耗时，不能阻塞 UI 的 detach/isVocoderReady。
     const auto modelsDir = ModelPathResolver::getModelsDirectory();
     std::string f0Error;
     if (!ProcessF0Runtime::getInstance().initialize(modelsDir, &f0Error))
@@ -1038,9 +1000,11 @@ std::unique_ptr<VocoderDomain> ProcessRenderRuntime::createVocoderDomain(
     }
 
     auto domain = std::make_unique<VocoderDomain>(env);
-    const auto modelPath = modelPathForWeight(modelsDir, weight);
-    AppLogger::info("VocoderDomain: loading weight=" + juce::String(weight)
-        + " modelPath=" + modelPath);
+    const auto modelPath = juce::File(modelsDir)
+        .getChildFile("hifigan.onnx")
+        .getFullPathName()
+        .toStdString();
+    AppLogger::info("VocoderDomain: loading modelPath=" + modelPath);
     std::string domainError;
     if (!domain->initialize(modelPath, &domainError))
     {
@@ -1059,29 +1023,17 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     std::vector<DeferredFailureNotification>& deferredFailureNotifications)
 {
     std::unique_ptr<VocoderDomain> retiredDomain;
-    VocoderModelWeight targetWeight;
 
     {
         std::unique_lock<std::mutex> lock(vocoderMutex_);
-
-        if (command.type == ControlCommand::Type::SetVocoderWeight
-            && currentVocoderModelWeight_ == command.weight
-            && vocoderDomain_ != nullptr
-            && !command.resetInferenceBackend)
-            return ControlResult::Unchanged;
 
         if (command.type == ControlCommand::Type::EnsureVocoder
             && vocoderDomain_ != nullptr)
             return ControlResult::Unchanged;
 
-        if (command.type == ControlCommand::Type::SetVocoderWeight)
-            currentVocoderModelWeight_ = command.weight;
-
-        targetWeight = currentVocoderModelWeight_;
         vocoderReconfiguring_ = true;
         retiredDomain = std::move(vocoderDomain_); // O(1)：锁内只摘除所有权
         ++vocoderGeneration_;                      // 立即拒绝全部旧配置快照
-
     }
 
     // 唯一可能无界的路径：只阻塞进程寿命 control worker，不持任何 runtime 锁。
@@ -1091,24 +1043,19 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     }
     retiredDomain.reset();
 
-    if (command.type == ControlCommand::Type::ResetInferenceBackend
-        || command.resetInferenceBackend)
-    {
+    if (command.type == ControlCommand::Type::ResetInferenceBackend) {
         auto& detector = AccelerationDetector::getInstance();
         detector.resetAndDetect(command.forceCpu);
     }
 
     // 严格先销毁旧 Session，再创建新 Session；新旧显存不并存。
-    auto newDomain = createVocoderDomain(targetWeight, errorMessage);
+    auto newDomain = createVocoderDomain(errorMessage);
 
     {
         std::lock_guard<std::mutex> lock(vocoderMutex_);
-        if (currentVocoderModelWeight_ == targetWeight)
-        {
-            vocoderDomain_ = std::move(newDomain);
-            if (vocoderDomain_ != nullptr)
-                ++vocoderGeneration_; // 新 domain 获得独立代际
-        }
+        vocoderDomain_ = std::move(newDomain);
+        if (vocoderDomain_ != nullptr)
+            ++vocoderGeneration_; // 新 domain 获得独立代际
         vocoderReconfiguring_ = false;
     }
     bool domainAvailable = false;
@@ -1336,8 +1283,7 @@ void ProcessRenderRuntime::controlWorkerLoop()
         auto completion = std::move(command.completion);
         auto completionGate = std::move(command.completionGate);
         const bool rootCompletionCanNotify = result == ControlResult::Failed
-            && (command.type == ControlCommand::Type::SetVocoderWeight
-                || command.type == ControlCommand::Type::ResetInferenceBackend)
+            && command.type == ControlCommand::Type::ResetInferenceBackend
             && static_cast<bool>(completion);
 
         // The worker owns pause/resume, the CRS strong reference release and the
@@ -1420,19 +1366,13 @@ void ProcessRenderRuntime::controlWorkerLoop()
     }
 }
 
-bool ProcessRenderRuntime::setVocoderModelWeight(const VocoderModelWeight& weight,
+bool ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
                                                  std::shared_ptr<ContentRenderService> crs,
                                                  ControlCompletion completion,
-                                                 std::shared_ptr<CompletionGate> completionGate,
-                                                 bool resetInferenceBackend,
-                                                 bool forceCpu)
+                                                 std::shared_ptr<CompletionGate> completionGate)
 {
-    // UI 线程只投递命令并立即返回；Session 销毁与重建由 control worker 串行执行。
-    // 返回 true 表示命令已在 control queue 锁内接受，false 表示拒绝。
     ControlCommand command;
-    command.type = ControlCommand::Type::SetVocoderWeight;
-    command.weight = weight;
-    command.resetInferenceBackend = resetInferenceBackend;
+    command.type = ControlCommand::Type::ResetInferenceBackend;
     command.forceCpu = forceCpu;
     command.transaction = std::make_shared<ControlTransaction>();
     command.transaction->crs = std::move(crs);
@@ -1450,21 +1390,6 @@ void ProcessRenderRuntime::resetVocoder(std::shared_ptr<ContentRenderService> cr
     command.transaction->crs = std::move(crs);
     command.completion = std::move(completion);
     postControlCommand(std::move(command));
-}
-
-bool ProcessRenderRuntime::resetInferenceBackend(bool forceCpu,
-                                                 std::shared_ptr<ContentRenderService> crs,
-                                                 ControlCompletion completion,
-                                                 std::shared_ptr<CompletionGate> completionGate)
-{
-    ControlCommand command;
-    command.type = ControlCommand::Type::ResetInferenceBackend;
-    command.forceCpu = forceCpu;
-    command.transaction = std::make_shared<ControlTransaction>();
-    command.transaction->crs = std::move(crs);
-    command.completion = std::move(completion);
-    command.completionGate = std::move(completionGate);
-    return postControlCommand(std::move(command));
 }
 
 void ProcessRenderRuntime::detachDeferredJobs(
@@ -1560,7 +1485,6 @@ bool ProcessRenderRuntime::acquireVocoderConfig(VocoderConfig& out)
         if (vocoderDomain_ != nullptr)
         {
             out.generation = vocoderGeneration_;
-            out.modelWeight = currentVocoderModelWeight_;
             out.conditioningBins = vocoderDomain_->getConditioningBins();
             out.conditioningType = vocoderDomain_->getConditioningType();
             out.fMax = vocoderDomain_->getFMax();
@@ -1584,12 +1508,6 @@ bool ProcessRenderRuntime::isVocoderReady() const noexcept
 {
     std::lock_guard<std::mutex> lock(vocoderMutex_);
     return vocoderDomain_ != nullptr;
-}
-
-VocoderModelWeight ProcessRenderRuntime::getVocoderModelWeight() const
-{
-    std::lock_guard<std::mutex> lock(vocoderMutex_);
-    return currentVocoderModelWeight_;
 }
 
 bool ProcessRenderRuntime::isVocoderReconfiguring() const noexcept

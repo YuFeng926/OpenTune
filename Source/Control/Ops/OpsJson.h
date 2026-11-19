@@ -43,8 +43,7 @@ struct ControlProcessingRuntime
 /**
  * The processing object of session.info (with runtime) and prefs.get (runtime null): the processing
  * preferences of a copy of the preferences' state, and the A4 frequency of
- * TuningConfig::currentTuningHz() (an atomic, any thread). vocoderWeight is null with the reason
- * "unavailable" when the preference is empty, not UTF-8 or longer than 64 characters.
+ * TuningConfig::currentTuningHz() (an atomic, any thread).
  */
 JsonValue controlProcessingJson(const SharedPreferencesState& preferences, const ControlProcessingRuntime* runtime);
 

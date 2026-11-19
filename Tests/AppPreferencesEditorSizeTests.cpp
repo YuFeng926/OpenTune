@@ -11,7 +11,7 @@ bool hasSize(const OpenTune::PluginEditorSize& actual, int width, int height)
 
 bool testSharedPluginEditorSize()
 {
-    const auto temporaryDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+    const auto temporaryDirectory = juce::File::getCurrentWorkingDirectory()
         .getChildFile("OpenTuneAppPreferences-" + juce::Uuid().toString());
     OpenTune::AppPreferences::StorageOptions options;
     options.settingsDirectory = temporaryDirectory;
@@ -184,10 +184,11 @@ bool testShortcutDefaults()
 
 bool testLegacyShortcutMigration()
 {
-    const auto temporaryDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+    const auto temporaryDirectory = juce::File::getCurrentWorkingDirectory()
         .getChildFile("OpenTuneShortcutMigration-" + juce::Uuid().toString());
     OpenTune::AppPreferences::StorageOptions storageOptions;
     storageOptions.settingsDirectory = temporaryDirectory;
+    temporaryDirectory.createDirectory();
 
     auto settingsFile = temporaryDirectory.getChildFile(storageOptions.fileName);
     juce::PropertiesFile::Options propertiesOptions;
@@ -255,12 +256,59 @@ bool testLegacyShortcutMigration()
     return migrated && persistedMigration;
 }
 
+bool testLegacyVocoderWeightPreferenceRemoved()
+{
+    const auto temporaryDirectory = juce::File::getCurrentWorkingDirectory()
+        .getChildFile("OpenTuneVocoderPreferenceMigration-" + juce::Uuid().toString());
+    OpenTune::AppPreferences::StorageOptions storageOptions;
+    storageOptions.settingsDirectory = temporaryDirectory;
+    temporaryDirectory.createDirectory();
+
+    const auto settingsFile = temporaryDirectory.getChildFile(storageOptions.fileName);
+    juce::PropertiesFile::Options propertiesOptions;
+    propertiesOptions.applicationName = settingsFile.getFileNameWithoutExtension();
+    propertiesOptions.filenameSuffix = settingsFile.getFileExtension();
+    propertiesOptions.folderName = temporaryDirectory.getFullPathName();
+    propertiesOptions.storageFormat = juce::PropertiesFile::storeAsXML;
+    propertiesOptions.millisecondsBeforeSaving = 0;
+
+    bool legacySaved = false;
+    {
+        juce::PropertiesFile legacySettings(propertiesOptions);
+        legacySettings.setValue("shared.rendering.vocoderWeight", "hifigan_coulin9.onnx");
+        legacySettings.setValue("shared.rendering.priority", "cpu-first");
+        legacySaved = legacySettings.save();
+    }
+    if (!legacySaved) {
+        temporaryDirectory.deleteRecursively();
+        return false;
+    }
+
+    bool priorityPreserved = false;
+    {
+        OpenTune::AppPreferences preferences(storageOptions);
+        priorityPreserved = preferences.getState().shared.renderingPriority
+            == OpenTune::RenderingPriority::CpuFirst;
+    }
+
+    bool legacyKeyRemoved = false;
+    {
+        juce::PropertiesFile migratedSettings(propertiesOptions);
+        legacyKeyRemoved = !migratedSettings.containsKey("shared.rendering.vocoderWeight")
+            && migratedSettings.getValue("shared.rendering.priority") == "cpu-first";
+    }
+
+    temporaryDirectory.deleteRecursively();
+    return priorityPreserved && legacyKeyRemoved;
+}
+
 bool testMacShortcutDefaultMigration()
 {
-    const auto temporaryDirectory = juce::File::getSpecialLocation(juce::File::tempDirectory)
+    const auto temporaryDirectory = juce::File::getCurrentWorkingDirectory()
         .getChildFile("OpenTuneShortcutDefaultMigration-" + juce::Uuid().toString());
     OpenTune::AppPreferences::StorageOptions storageOptions;
     storageOptions.settingsDirectory = temporaryDirectory;
+    temporaryDirectory.createDirectory();
 #if JUCE_MAC
     const auto transportModifiers = juce::ModifierKeys::commandModifier
         | juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier;
@@ -491,6 +539,11 @@ int main()
 
     if (!testLegacyShortcutMigration()) {
         std::fputs("FAIL: legacy shortcut schema migration\n", stderr);
+        return 1;
+    }
+
+    if (!testLegacyVocoderWeightPreferenceRemoved()) {
+        std::fputs("FAIL: legacy vocoder weight preference removal\n", stderr);
         return 1;
     }
 

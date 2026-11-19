@@ -20,7 +20,6 @@
 #include "../Standalone/UI/ThemeTokens.h"
 #include "TimelineDisplayMode.h"
 #include "TuningConfig.h"
-#include "VocoderModelWeight.h"
 #include "ZoomSensitivityConfig.h"
 
 namespace OpenTune {
@@ -64,7 +63,6 @@ struct SharedPreferencesState {
     ZoomSensitivityConfig::ZoomSensitivitySettings zoomSensitivity =
         ZoomSensitivityConfig::ZoomSensitivitySettings::getDefault();
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
-    VocoderModelWeight vocoderModelWeight = kDefaultVocoderWeight;
     bool experimentalFeaturesEnabled = false;
     std::vector<juce::String> recentProjects;   // Most recently used project paths (MRU, max 10)
     SnapSettings snap;
@@ -129,7 +127,6 @@ public:
     void setShortcuts(const KeyShortcutConfig::KeyShortcutSettings& shortcuts);
     void setSuppressEqRemoveConfirmation(bool suppress);
     void setRenderingPriority(RenderingPriority priority);
-    void setVocoderModelWeight(const VocoderModelWeight& weight);
     void setExperimentalFeaturesEnabled(bool enabled);
     void setMouseTrailTheme(MouseTrailConfig::TrailTheme theme);
     void setCursorStyle(CursorStyleId style);
@@ -183,7 +180,6 @@ struct ProcessingPreferencePatch
     std::optional<AudioEditingScheme::Scheme> audioEditingScheme;
     std::optional<bool> lightPitchCorrectionEnabled;
     std::optional<bool> experimentalFeaturesEnabled;
-    std::optional<VocoderModelWeight> vocoderModelWeight;
     std::optional<RenderingPriority> renderingPriority;
     std::optional<F0ModelType> f0ModelType;
     std::optional<bool> accessibilityModeEnabled;
@@ -195,7 +191,6 @@ struct ProcessingPreferenceState
     AudioEditingScheme::Scheme audioEditingScheme = AudioEditingScheme::Scheme::CorrectedF0Primary;
     bool lightPitchCorrectionEnabled = true;
     bool experimentalFeaturesEnabled = false;
-    VocoderModelWeight vocoderModelWeight = kDefaultVocoderWeight;
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
     F0ModelType f0ModelType = F0ModelType::FCPE;
     bool accessibilityModeEnabled = false;
@@ -207,7 +202,6 @@ struct ProcessingPreferenceDelta
     bool scheme = false;
     bool hybrid = false;
     bool experimental = false;
-    bool vocoder = false;
     bool priority = false;
     bool f0 = false;
     bool accessibilityMode = false;
@@ -240,8 +234,6 @@ struct ProcessingPreferenceRuntimeCompletion
 struct ProcessingPreferenceRuntimeOperations
 {
     std::function<bool(F0ModelType, juce::String&)> setF0ModelType;
-    std::function<bool(const VocoderModelWeight&, std::optional<bool>, ProcessingPreferenceRuntimeCallback)>
-        setVocoderModelWeight;
     std::function<bool(bool, ProcessingPreferenceRuntimeCallback)> resetInferenceBackend;
     std::function<void()> invalidateAllContentCaches;
 };

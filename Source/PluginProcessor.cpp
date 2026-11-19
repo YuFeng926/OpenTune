@@ -1753,33 +1753,6 @@ bool OpenTuneAudioProcessor::resetInferenceBackend(bool forceCpu,
         }, gate);
 }
 
-bool OpenTuneAudioProcessor::setVocoderModelWeight(const VocoderModelWeight& weight,
-                                                   ProcessingPreferenceRuntimeCallback completion,
-                                                   std::optional<bool> forceCpu)
-{
-    auto gate = completionGate_;
-    return ProcessRenderRuntime::getInstance().setVocoderModelWeight(weight, contentRenderService_,
-        [completion = std::move(completion)](ProcessRenderRuntime::ControlResult result,
-                                            juce::String errorMessage) mutable {
-            if (result == ProcessRenderRuntime::ControlResult::Failed) {
-                AppLogger::error("[Processor] vocoder model control failed: " + errorMessage);
-                ConfirmDialogContent::showDiagnostic(
-                    nullptr,
-                    "Vocoder model initialization failed",
-                    errorMessage,
-                    AppLogger::makeDiagnosticText("Vocoder initialization", errorMessage));
-            }
-            if (completion) {
-                const auto status = result == ProcessRenderRuntime::ControlResult::Changed
-                    ? ProcessingPreferenceRuntimeStatus::Changed
-                    : result == ProcessRenderRuntime::ControlResult::Unchanged
-                        ? ProcessingPreferenceRuntimeStatus::Unchanged
-                        : ProcessingPreferenceRuntimeStatus::Failed;
-                completion(status, errorMessage);
-            }
-        }, gate, forceCpu.has_value(), forceCpu.value_or(false));
-}
-
 void OpenTuneAudioProcessor::handleSharedBackendChanged()
 {
 #if JucePlugin_Build_Standalone
@@ -1864,11 +1837,6 @@ OpenTuneAudioProcessor::getProcessingPreferenceRuntimeOperations()
     ProcessingPreferenceRuntimeOperations operations;
     operations.setF0ModelType = [this](F0ModelType type, juce::String& failureReason) {
         return setF0ModelType(type, &failureReason);
-    };
-    operations.setVocoderModelWeight = [this](const VocoderModelWeight& weight,
-                                              std::optional<bool> forceCpu,
-                                              ProcessingPreferenceRuntimeCallback completion) {
-        return setVocoderModelWeight(weight, std::move(completion), forceCpu);
     };
     operations.resetInferenceBackend = [this](bool forceCpu,
                                                ProcessingPreferenceRuntimeCallback completion) {

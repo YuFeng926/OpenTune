@@ -222,52 +222,6 @@ public:
         initialiseComboBox(renderingPrioritySelector_);
         addAndMakeVisible(renderingPrioritySelector_);
 
-        initialiseLabel(vocoderWeightLabel_, LOC(kVocoderWeight));
-        addAndMakeVisible(vocoderWeightLabel_);
-
-        vocoderWeights_ = ModelFactory::getAvailableVocoderWeights(
-            ModelPathResolver::getModelsDirectory());
-        for (size_t i = 0; i < vocoderWeights_.size(); ++i)
-            vocoderWeightSelector_.addItem(juce::String(vocoderWeights_[i].displayName),
-                                           static_cast<int>(i) + 1);
-
-        // 选择当前权重；已持久化的权重文件缺失时回退第一项
-        const auto& currentWeight = state.shared.vocoderModelWeight;
-        int selectedWeightId = 0;
-        for (size_t i = 0; i < vocoderWeights_.size(); ++i) {
-            if (vocoderWeights_[i].fileName == currentWeight) {
-                selectedWeightId = static_cast<int>(i) + 1;
-                break;
-            }
-        }
-        if (selectedWeightId == 0 && !vocoderWeights_.empty())
-            selectedWeightId = 1;
-        vocoderWeightSelector_.setSelectedId(selectedWeightId, juce::dontSendNotification);
-        initialiseComboBox(vocoderWeightSelector_);
-        addAndMakeVisible(vocoderWeightSelector_);
-
-        vocoderWeightSelector_.onChange = [this] {
-            const int id = vocoderWeightSelector_.getSelectedId();
-            if (id <= 0 || id > static_cast<int>(vocoderWeights_.size()))
-                return;
-            const auto& weight = vocoderWeights_[static_cast<size_t>(id) - 1].fileName;
-            ProcessingPreferencePatch patch;
-            patch.vocoderModelWeight = weight;
-            const auto result = applyProcessingPreferencePatch(
-                appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
-            if (!result.succeeded()) {
-                const auto storedWeight = appPreferences_.getState().shared.vocoderModelWeight;
-                int storedId = 0;
-                for (size_t i = 0; i < vocoderWeights_.size(); ++i) {
-                    if (vocoderWeights_[i].fileName == storedWeight) {
-                        storedId = static_cast<int>(i) + 1;
-                        break;
-                    }
-                }
-                vocoderWeightSelector_.setSelectedId(storedId, juce::dontSendNotification);
-            }
-        };
-
         initialiseLabel(f0ModelLabel_, LOC_RAW("Pitch Detection Model"));
         addAndMakeVisible(f0ModelLabel_);
 
@@ -344,7 +298,7 @@ public:
         // 供父容器布局使用的确定内容高度
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
-            const int rows = isVst3Plugin_ ? 4 : 5; // 插件隐藏实验控件
+            const int rows = isVst3Plugin_ ? 3 : 4; // 插件隐藏实验控件
             const int rowH = 34;
             const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
             const int hintHeight = isVst3Plugin_ ? 0 : 42;
@@ -375,11 +329,6 @@ public:
 
         bounds.removeFromTop(8);
         row = bounds.removeFromTop(rowHeight);
-        vocoderWeightLabel_.setBounds(row.removeFromLeft(labelWidth));
-        vocoderWeightSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
-
-        bounds.removeFromTop(8);
-        row = bounds.removeFromTop(rowHeight);
         f0ModelLabel_.setBounds(row.removeFromLeft(labelWidth));
         f0ModelSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
 
@@ -405,12 +354,9 @@ private:
     std::function<void()> onReplayOnboarding_;
     bool isVst3Plugin_ = false;
     int contentHeight_ = 0;
-    std::vector<VocoderWeightInfo> vocoderWeights_;
     juce::Label renderingPriorityLabel_;
     a11y::AccessibleComboBox renderingPrioritySelector_;
     juce::TextButton replayOnboardingButton_;
-    juce::Label vocoderWeightLabel_;
-    a11y::AccessibleComboBox vocoderWeightSelector_;
     juce::Label f0ModelLabel_;
     a11y::AccessibleComboBox f0ModelSelector_;
     a11y::AccessibleToggleButton experimentalFeaturesToggle_;

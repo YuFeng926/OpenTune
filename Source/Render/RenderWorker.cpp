@@ -517,9 +517,9 @@ void RenderWorker::pause()
     std::unique_lock<std::mutex> lk(mutex_);
     paused_ = true;
     // 只等待正在执行的 renderJobCallback 完成（inFlight_ 归零），绝不等待
-    // 异步 vocoder 推理：卡住的 DML Run 只能由调用方随后 resetVocoder /
-    // setVocoderModelWeight 的 SetTerminate + join 终止，onComplete 经
-    // shared_ptr 回调归还计数。paused_ 保证等待期间不取新 job，resume() 再放行。
+    // 异步 vocoder 推理：卡住的 DML Run 由随后 resetVocoder / resetInferenceBackend
+    // 的 SetTerminate + join 终止，onComplete 经 shared_ptr 回调归还计数。
+    // paused_ 保证等待期间不取新 job，resume() 再放行。
     cv_.wait(lk, [this] { return inFlight_ == 0; });
 }
 
