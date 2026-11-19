@@ -343,6 +343,11 @@ void NotePitchAudition::setTargetRegion(const void* region) noexcept
     nextTargetRegion_.store(region, std::memory_order_release);
 }
 
+void NotePitchAudition::clearActiveTargetRegion() noexcept
+{
+    activeTargetRegion_.store(nullptr, std::memory_order_release);
+}
+
 const void* NotePitchAudition::activeTargetRegion() const noexcept
 {
     return activeTargetRegion_.load(std::memory_order_acquire);

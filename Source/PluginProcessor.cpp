@@ -1665,6 +1665,9 @@ OpenTuneAudioProcessor::~OpenTuneAudioProcessor() {
             route->keyboardMixer.compare_exchange_strong(expectedMixer, nullptr,
                                                          std::memory_order_acq_rel,
                                                          std::memory_order_relaxed);
+            releaseOwnedNotePitchMixer(route->notePitchMixer,
+                                       route->notePitchAudition,
+                                       editorRenderer);
         }
     }
     auditionRoute_.store(nullptr, std::memory_order_release);
@@ -2114,6 +2117,26 @@ bool OpenTuneAudioProcessor::externalEditLaunchRequested(ContentKey key, const E
 #endif // !JucePlugin_Build_Standalone
 
 #if JucePlugin_Enable_ARA
+bool OpenTuneAudioProcessor::releaseOwnedNotePitchMixer(
+    std::atomic<juce::ARAEditorRenderer*>& mixer,
+    std::atomic<NotePitchAudition*>& auditionSource,
+    juce::ARAEditorRenderer* owner) noexcept
+{
+    auto* expected = owner;
+    if (!mixer.compare_exchange_strong(expected, nullptr,
+                                       std::memory_order_acq_rel,
+                                       std::memory_order_relaxed))
+        return false;
+
+    if (auto* audition = auditionSource.load(std::memory_order_acquire))
+    {
+        audition->setTargetRegion(nullptr);
+        audition->stop();
+        audition->clearActiveTargetRegion();
+    }
+    return true;
+}
+
 OpenTuneDocumentController* OpenTuneAudioProcessor::getDocumentController() const
 {
     auto* controller = AudioProcessorARAExtension::getDocumentController();
@@ -4094,7 +4117,6 @@ void OpenTuneAudioProcessor::stopNotePitchAudition()
         auto* route = auditionRoute_.load(std::memory_order_acquire);
         if (route == nullptr)
             return;
-        route->notePitchMixer.store(nullptr, std::memory_order_release);
         if (auto* audition = route->notePitchAudition.load(std::memory_order_acquire))
         {
             audition->setTargetRegion(nullptr);

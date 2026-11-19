@@ -77,6 +77,8 @@
 #include "Runtime/ProcessRenderRuntime.h"
 #include <functional>
 
+namespace juce { class ARAEditorRenderer; }
+
 namespace OpenTune {
 
 // ============================================================================
@@ -363,6 +365,11 @@ private:
     int currentBlockSize_ = 512;
 
     friend struct PluginProcessorTransportTestAccessor;
+    friend struct PluginProcessorARALifecycleTestAccess;
+    static bool releaseOwnedNotePitchMixer(
+        std::atomic<juce::ARAEditorRenderer*>& mixer,
+        std::atomic<NotePitchAudition*>& audition,
+        juce::ARAEditorRenderer* owner) noexcept;
 
     juce::AudioBuffer<float> doublePrecisionScratch_;
     juce::AudioBuffer<float> trackMixScratch_;

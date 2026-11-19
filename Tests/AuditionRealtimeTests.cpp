@@ -415,6 +415,8 @@ bool testPitchWorkerRequestPlaybackAndStopFade()
     OpenTune::TimeStretchCache timeStretchCache;
     OpenTune::NotePitchAudition audition;
     constexpr double sampleRate = 44100.0;
+    static const int targetRegionToken = 0;
+    audition.setTargetRegion(&targetRegionToken);
     audition.request(makeWorkerPitchSource(timeStretchCache),
                      0.1, 0.5, 246.94f, sampleRate);
 
@@ -432,18 +434,40 @@ bool testPitchWorkerRequestPlaybackAndStopFade()
     output.clear();
     mixAudited(audition, output, output.getNumSamples(), sampleRate, "pitch_worker_next_block");
     if (!check(audition.isActive()
-                   && output.getMagnitude(0, 0, output.getNumSamples()) > 1.0e-5f,
+                    && output.getMagnitude(0, 0, output.getNumSamples()) > 1.0e-5f,
                "worker-rendered PCM continues across mix blocks"))
         return false;
 
+    if (!check(audition.activeTargetRegion() == &targetRegionToken,
+               "the active voice publishes its target region for playback suppression"))
+        return false;
+
+    const uint64_t previousStopGeneration =
+        AuditionRealtimeTestAccess::pitchStopGeneration(audition);
+    audition.setTargetRegion(nullptr);
     audition.stop();
-    juce::AudioBuffer<float> fadeOut(1, 600);
+    if (!check(AuditionRealtimeTestAccess::pitchStopGeneration(audition)
+                   > previousStopGeneration,
+               "stop publishes a newer stop generation"))
+        return false;
+
+    juce::AudioBuffer<float> fadeOut(1, 128);
     fadeOut.clear();
     mixAudited(audition, fadeOut, fadeOut.getNumSamples(), sampleRate, "pitch_worker_stop_fade");
-    return check(fadeOut.getMagnitude(0, 0, 128) > 1.0e-5f
-                     && fadeOut.getMagnitude(0, 512, 88) == 0.0f
-                     && !audition.isActive(),
-                 "stop fades the worker-rendered voice to silence");
+    if (!check(fadeOut.getMagnitude(0, 0, fadeOut.getNumSamples()) > 1.0e-5f
+                   && audition.isActive()
+                   && audition.activeTargetRegion() == &targetRegionToken,
+               "the target remains suppressed while its voice fades"))
+        return false;
+
+    juce::AudioBuffer<float> fadeRemainder(1, 512);
+    fadeRemainder.clear();
+    mixAudited(audition, fadeRemainder, fadeRemainder.getNumSamples(), sampleRate,
+               "pitch_worker_stop_fade_remainder");
+    return check(fadeRemainder.getMagnitude(0, 424, 88) == 0.0f
+                     && !audition.isActive()
+                     && audition.activeTargetRegion() == nullptr,
+                 "the audio mix completes the stop fade and clears its target");
 }
 
 bool testReturnedNotePcmCanBeReusedAndDestroyed()

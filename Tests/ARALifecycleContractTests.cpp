@@ -96,6 +96,51 @@ struct OpenTunePlaybackRendererTestAccess
             && renderer.notePitchAudition_.load(std::memory_order_acquire) == nullptr;
     }
 };
+
+struct AuditionRealtimeTestAccess
+{
+    static int stagePitch(NotePitchAudition& audition,
+                          uint64_t generation,
+                          float value,
+                          double sampleRate,
+                          const void* targetRegion)
+    {
+        const int index = audition.claimBuildSlot();
+        if (index < 0)
+            return -1;
+
+        audition.discardPendingSlots();
+        auto& slot = audition.slots_[static_cast<size_t>(index)];
+        slot.snippet.mono.assign(2048, value);
+        slot.snippet.sampleRate = sampleRate;
+        slot.snippet.targetRegion = targetRegion;
+        slot.generation = generation;
+        audition.controlGeneration_.store(generation, std::memory_order_release);
+        slot.state.store(static_cast<uint8_t>(NotePitchAudition::SlotState::Pending),
+                         std::memory_order_release);
+        return index;
+    }
+
+    static uint64_t pitchStopGeneration(const NotePitchAudition& audition)
+    {
+        return audition.stopGeneration_.load(std::memory_order_acquire);
+    }
+
+    static void setActiveTargetRegion(NotePitchAudition& audition, const void* region)
+    {
+        audition.activeTargetRegion_.store(region, std::memory_order_release);
+    }
+};
+
+struct PluginProcessorARALifecycleTestAccess
+{
+    static bool releaseOwnedNotePitchMixer(AuditionRoute& route,
+                                           juce::ARAEditorRenderer* owner)
+    {
+        return OpenTuneAudioProcessor::releaseOwnedNotePitchMixer(
+            route.notePitchMixer, route.notePitchAudition, owner);
+    }
+};
 }
 
 namespace
@@ -236,6 +281,75 @@ bool runPlaybackRendererLifecycleRegression(ARA::ARADocumentControllerRef docume
 
     expectAudible(*firstRenderer, "same_rate_first_renderer_pcm_missing", true);
     expectAudible(*secondRenderer, "same_rate_second_renderer_pcm_missing", true);
+
+    auto* route = controller->getAuditionRoute();
+    auto& audition = controller->getNotePitchAudition();
+    static int ownerTokenStorage = 0;
+    static int replacementOwnerTokenStorage = 0;
+    static const int teardownRegionToken = 0;
+    auto* ownerToken = reinterpret_cast<juce::ARAEditorRenderer*>(&ownerTokenStorage);
+    auto* replacementOwnerToken =
+        reinterpret_cast<juce::ARAEditorRenderer*>(&replacementOwnerTokenStorage);
+    route->notePitchMixer.store(ownerToken, std::memory_order_release);
+
+    if (!expect(OpenTune::AuditionRealtimeTestAccess::stagePitch(
+                    audition, 1, 0.4f, initialSampleRate, playbackRegion) >= 0,
+                "note_pitch_target_voice_stage_failed"))
+        return false;
+    juce::AudioBuffer<float> auditionBlock(1, 1);
+    auditionBlock.clear();
+    audition.mixIntoBuffer(auditionBlock, auditionBlock.getNumSamples(), initialSampleRate);
+    if (!expect(audition.activeTargetRegion() == playbackRegion,
+                "note_pitch_target_region_not_published"))
+        return false;
+    expectSilent(*firstRenderer, "note_pitch_target_region_not_suppressed");
+
+    const uint64_t stopGenerationBefore =
+        OpenTune::AuditionRealtimeTestAccess::pitchStopGeneration(audition);
+    firstProcessor.stopNotePitchAudition();
+    expect(route->notePitchMixer.load(std::memory_order_acquire) == ownerToken,
+           "ordinary_stop_released_the_editor_mixer_owner");
+    expect(OpenTune::AuditionRealtimeTestAccess::pitchStopGeneration(audition)
+               > stopGenerationBefore,
+           "ordinary_stop_did_not_publish_a_stop_generation");
+
+    juce::AudioBuffer<float> fadeBlock(1, 128);
+    fadeBlock.clear();
+    audition.mixIntoBuffer(fadeBlock, fadeBlock.getNumSamples(), initialSampleRate);
+    expect(audition.isActive() && audition.activeTargetRegion() == playbackRegion,
+           "stop_cleared_target_before_audio_fade_completed");
+    expectSilent(*firstRenderer, "playback_resumed_during_note_pitch_fade");
+
+    juce::AudioBuffer<float> fadeRemainder(1, 512);
+    fadeRemainder.clear();
+    audition.mixIntoBuffer(fadeRemainder, fadeRemainder.getNumSamples(), initialSampleRate);
+    expect(!audition.isActive() && audition.activeTargetRegion() == nullptr,
+           "note_pitch_fade_did_not_clear_its_target");
+    expectAudible(*firstRenderer, "playback_did_not_resume_after_note_pitch_stop", true);
+
+    OpenTune::AuditionRealtimeTestAccess::setActiveTargetRegion(
+        audition, &teardownRegionToken);
+    route->notePitchMixer.store(replacementOwnerToken, std::memory_order_release);
+    const uint64_t beforeForeignRelease =
+        OpenTune::AuditionRealtimeTestAccess::pitchStopGeneration(audition);
+    expect(!OpenTune::PluginProcessorARALifecycleTestAccess::releaseOwnedNotePitchMixer(
+               *route, ownerToken)
+               && route->notePitchMixer.load(std::memory_order_acquire) == replacementOwnerToken
+               && audition.activeTargetRegion() == &teardownRegionToken
+               && OpenTune::AuditionRealtimeTestAccess::pitchStopGeneration(audition)
+                   == beforeForeignRelease,
+           "owner_teardown_cleared_a_new_renderer_route");
+
+    route->notePitchMixer.store(ownerToken, std::memory_order_release);
+    const uint64_t beforeOwnerRelease =
+        OpenTune::AuditionRealtimeTestAccess::pitchStopGeneration(audition);
+    expect(OpenTune::PluginProcessorARALifecycleTestAccess::releaseOwnedNotePitchMixer(
+               *route, ownerToken)
+               && route->notePitchMixer.load(std::memory_order_acquire) == nullptr
+               && audition.activeTargetRegion() == nullptr
+               && OpenTune::AuditionRealtimeTestAccess::pitchStopGeneration(audition)
+                   > beforeOwnerRelease,
+           "owner_teardown_did_not_clear_its_route_and_suppression_target");
 
     std::thread firstRelease([&] { firstRenderer->releaseResources(); });
     std::thread secondRelease([&] { secondRenderer->releaseResources(); });

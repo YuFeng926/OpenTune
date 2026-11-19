@@ -88,6 +88,9 @@ public:
     /// Message thread: set the target region carried by the next request.
     void setTargetRegion(const void* region) noexcept;
 
+    /// Owner teardown: clear suppression after its mixer claim has been released.
+    void clearActiveTargetRegion() noexcept;
+
     /// Any thread: target region currently sounding or fading to suppress.
     const void* activeTargetRegion() const noexcept;
 
