@@ -270,11 +270,12 @@ void ControlCompletion::respondFinalResult(const JsonValue& result, SendCallback
 }
 
 void ControlCompletion::respondError(std::string_view kind, std::string_view reason, std::string_view detail,
-                                     bool executed, std::optional<bool> retryable) const
+                                     bool executed, std::optional<bool> retryable,
+                                     const JsonValue* extraData) const
 {
     if (state_ == nullptr || state_->done.exchange(true))
         return;
-    state_->deliver(controlErrorResponse(state_->id, kind, reason, detail, executed, retryable));
+    state_->deliver(controlErrorResponse(state_->id, kind, reason, detail, executed, retryable, extraData));
 }
 
 bool ControlCompletion::isPending() const

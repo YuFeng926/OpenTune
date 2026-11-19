@@ -239,8 +239,9 @@ constexpr const char* kCursorStyleCapitaine = "Capitaine";
 constexpr const char* kCursorStyleBreeze = "Breeze";
 
 constexpr const char* kAudio = "Audio";
-constexpr const char* kAudioDeviceType = "Device Type";
+constexpr const char* kAudioDeviceType = "Browse Device Type";
 constexpr const char* kAudioOutput = "Output";
+constexpr const char* kAudioSelectDevice = "Select a device";
 constexpr const char* kAudioSampleRate = "Sample Rate";
 constexpr const char* kAudioBufferSize = "Buffer Size";
 constexpr const char* kAudioBufferFormat = "{0} samples ({1} ms)";
@@ -591,8 +592,9 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kCursorStyleBreeze, "Breeze", "Breeze", "Breeze", "Breeze", "Breeze" },
         
         { Keys::kAudio, "Audio", "音频", "オーディオ", "Аудио", "Audio" },
-        { Keys::kAudioDeviceType, "Device Type", "设备类型", "デバイスタイプ", "Тип устройства", "Tipo de dispositivo" },
+        { Keys::kAudioDeviceType, "Browse Device Type", "浏览设备类型", "参照するデバイスの種類", "Тип просматриваемого устройства", "Tipo de dispositivo para explorar" },
         { Keys::kAudioOutput, "Output", "输出", "出力", "Выход", "Salida" },
+        { Keys::kAudioSelectDevice, "Select a device", "请选择设备", "デバイスを選択", "Выберите устройство", "Seleccionar dispositivo" },
         { Keys::kAudioSampleRate, "Sample Rate", "采样率", "サンプルレート", "Частота дискретизации", "Frecuencia de muestreo" },
         { Keys::kAudioBufferSize, "Buffer Size", "缓冲区大小", "バッファサイズ", "Размер буфера", "Tamaño del búfer" },
         { Keys::kAudioBufferFormat, "{0} samples ({1} ms)", "{0} 采样（{1} 毫秒）", "{0} サンプル（{1} ミリ秒）", "{0} сэмплов ({1} мс)", "{0} muestras ({1} ms)" },

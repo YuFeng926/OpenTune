@@ -3,8 +3,6 @@
 
 #include <cmath>
 
-#include "Utils/AppLogger.h"
-
 namespace OpenTune::AudioDeviceSettings {
 
 constexpr double kSameRateHz = 0.01;
@@ -36,9 +34,9 @@ int outputChannelPairCount(juce::AudioIODevice& device)
     return channels <= 0 ? 0 : (channels + 1) / 2;
 }
 
-void scanCurrentType(juce::AudioDeviceManager& manager)
+void scanType(juce::AudioIODeviceType* type)
 {
-    if (auto* type = manager.getCurrentDeviceTypeObject())
+    if (type != nullptr)
         type->scanForDevices();
 }
 
@@ -67,32 +65,26 @@ bool restoreToPrior(juce::AudioDeviceManager& manager, const juce::String& type,
     };
 
     auto currentType = manager.getCurrentAudioDeviceType();
-    if (currentType == "ASIO" && currentType != type)
+    if (currentType == "ASIO" && currentType != type) {
         restoreAsio("audio type rollback");
-    if (currentType != type)
-        manager.setCurrentAudioDeviceType(type, true);
-
-    if (manager.getCurrentAudioDeviceType() != type) {
-        error = "the previous audio device type could not be restored";
-        if (!hadDevice)
-            manager.closeAudioDevice();
-        return false;
+    } else if (currentType == "ASIO"
+               && manager.getAudioDeviceSetup().outputDeviceName != setup.outputDeviceName) {
+        restoreAsio("audio output rollback");
     }
 
-    currentType = manager.getCurrentAudioDeviceType();
-    const auto currentSetup = manager.getAudioDeviceSetup();
-    if (currentType == "ASIO" && currentSetup.outputDeviceName != setup.outputDeviceName)
-        restoreAsio("audio output rollback");
-
-    error = manager.setAudioDeviceSetup(setup, true);
-    if (!hadDevice)
-        manager.closeAudioDevice();
-    if (error.isNotEmpty()) {
-        AppLogger::logNoThrow("audio device settings: the previous setup could not be restored");
+    error = manager.setCurrentAudioDeviceTypeAndSetup(type, setup, true, hadDevice);
+    if (error.isNotEmpty())
+        return false;
+    if (manager.getCurrentAudioDeviceType() != type) {
+        error = "the previous audio device type could not be restored";
         return false;
     }
     if (hadDevice && manager.getCurrentAudioDevice() == nullptr) {
         error = "the previous audio device did not reopen";
+        return false;
+    }
+    if (!hadDevice && manager.getCurrentAudioDevice() != nullptr) {
+        error = "the previous audio device should remain closed";
         return false;
     }
     if (manager.getAudioDeviceSetup() != setup) {
@@ -100,15 +92,6 @@ bool restoreToPrior(juce::AudioDeviceManager& manager, const juce::String& type,
         return false;
     }
     return true;
-}
-
-juce::String applySetup(juce::AudioDeviceManager& manager,
-                        const juce::AudioDeviceManager::AudioDeviceSetup& setup)
-{
-    auto error = manager.setAudioDeviceSetup(setup, true);
-    if (error.isNotEmpty())
-        AppLogger::logNoThrow("audio device settings: the requested setup could not be opened");
-    return error;
 }
 
 } // namespace
@@ -125,9 +108,12 @@ DeviceState readDevice(juce::AudioDeviceManager& manager)
 
     state.open = true;
     state.running = device->isPlaying();
-    state.outputDevice = state.configuredOutputDevice.isEmpty()
-        ? device->getName()
-        : state.configuredOutputDevice;
+    if (auto* type = manager.getCurrentDeviceTypeObject()) {
+        const int outputIndex = type->getIndexOfDevice(device, false);
+        const auto outputNames = type->getDeviceNames(false);
+        if (outputIndex >= 0 && outputIndex < outputNames.size())
+            state.outputDevice = outputNames[outputIndex];
+    }
     state.sampleRateHz = device->getCurrentSampleRate();
     state.bufferSizeFrame = device->getCurrentBufferSizeSamples();
     state.outputChannelNames = device->getOutputChannelNames();
@@ -139,18 +125,19 @@ DeviceState readDevice(juce::AudioDeviceManager& manager)
     return state;
 }
 
-Snapshot scanAndRead(juce::AudioDeviceManager& manager)
+Snapshot scanAndRead(juce::AudioDeviceManager& manager, const juce::String& browsedType)
 {
-    scanCurrentType(manager);
-
     Snapshot snapshot;
     snapshot.device = readDevice(manager);
     for (auto* type : manager.getAvailableDeviceTypes())
         if (type != nullptr)
             snapshot.available.deviceTypes.add(type->getTypeName());
 
-    if (auto* type = manager.getCurrentDeviceTypeObject())
+    const auto typeName = browsedType.isEmpty() ? manager.getCurrentAudioDeviceType() : browsedType;
+    if (auto* type = findType(manager, typeName)) {
+        scanType(type);
         snapshot.available.outputDevices = type->getDeviceNames(false);
+    }
 
     if (auto* device = manager.getCurrentAudioDevice()) {
         snapshot.available.sampleRatesHz = device->getAvailableSampleRates();
@@ -162,33 +149,52 @@ Snapshot scanAndRead(juce::AudioDeviceManager& manager)
 
 ApplyResult apply(juce::AudioDeviceManager& manager, const Request& request, const AsioRateRestore& restoreAsioRate)
 {
-    scanCurrentType(manager);
+    scanType(manager.getCurrentDeviceTypeObject());
 
     const auto priorType = manager.getCurrentAudioDeviceType();
     const auto priorSetup = manager.getAudioDeviceSetup();
     const bool hadDevice = manager.getCurrentAudioDevice() != nullptr;
     const auto before = readDevice(manager);
 
-    auto rejected = [](RejectedSetting setting) {
+    auto rejected = [&before](RejectedSetting setting) {
         ApplyResult result;
         result.kind = ApplyKind::unavailable;
         result.cause = ApplyKind::unavailable;
         result.rejectedSetting = setting;
+        result.before = before;
+        result.after = before;
         return result;
     };
 
     juce::String targetType = priorType;
+    juce::AudioIODeviceType* targetDeviceType = nullptr;
+    if (request.outputChannelPair
+        && (*request.outputChannelPair < -1 || *request.outputChannelPair > 0))
+        return rejected(RejectedSetting::outputChannelPair);
+
     if (request.deviceType) {
         targetType = *request.deviceType;
-        if (findType(manager, targetType) == nullptr)
+        targetDeviceType = findType(manager, targetType);
+        if (targetDeviceType == nullptr)
             return rejected(RejectedSetting::deviceType);
     }
 
-    if (request.outputDevice && request.outputDevice->isNotEmpty()) {
+    auto targetOutputDevice = request.outputDevice;
+    if (request.deviceType && targetType != priorType) {
+        scanType(targetDeviceType);
+
+        const auto outputDevices = targetDeviceType->getDeviceNames(false);
+        if (!targetOutputDevice) {
+            if (outputDevices.size() != 1)
+                return rejected(RejectedSetting::outputDevice);
+            targetOutputDevice = outputDevices[0];
+        }
+        if (targetOutputDevice->isNotEmpty() && !outputDevices.contains(*targetOutputDevice))
+            return rejected(RejectedSetting::outputDevice);
+    }
+    else if (targetOutputDevice && targetOutputDevice->isNotEmpty()) {
         auto* type = findType(manager, targetType);
-        if (type != nullptr && targetType != priorType)
-            type->scanForDevices();
-        if (type == nullptr || !type->getDeviceNames(false).contains(*request.outputDevice))
+        if (type == nullptr || !type->getDeviceNames(false).contains(*targetOutputDevice))
             return rejected(RejectedSetting::outputDevice);
     }
 
@@ -221,6 +227,7 @@ ApplyResult apply(juce::AudioDeviceManager& manager, const Request& request, con
             result.recovery = Recovery::restored;
             if (!restoreToPrior(manager, priorType, priorSetup, hadDevice, restoreAsioRate,
                                 asioRateRestoreFailed, result.recoveryError)) {
+                manager.closeAudioDevice();
                 result.kind = ApplyKind::priorSetupNotRestored;
                 result.recovery = Recovery::failed;
             }
@@ -230,98 +237,121 @@ ApplyResult apply(juce::AudioDeviceManager& manager, const Request& request, con
         return result;
     };
 
-    if (request.deviceType && targetType != priorType) {
-        const bool hadOpenDevice = manager.getCurrentAudioDevice() != nullptr;
-        if (priorType == "ASIO")
-            restoreAsio("audio type switch");
-        manager.setCurrentAudioDeviceType(targetType, true);
-        changed = true;
+    const bool typeChanged = targetType != priorType;
+    const auto currentOutputDevice = hadDevice ? before.outputDevice : priorSetup.outputDeviceName;
+    const bool outputChanged = request.outputDevice && *request.outputDevice != currentOutputDevice;
+    const bool reopenClosedSelection = !hadDevice && request.outputDevice.has_value();
+    const bool changesTarget = typeChanged || outputChanged;
+    auto setup = changesTarget ? juce::AudioDeviceManager::AudioDeviceSetup{} : priorSetup;
+    bool needsApply = changesTarget || reopenClosedSelection;
 
-        auto* newType = manager.getCurrentDeviceTypeObject();
-        const bool targetHasDevices = newType != nullptr
-            && (!newType->getDeviceNames(false).isEmpty() || !newType->getDeviceNames(true).isEmpty());
-        const bool openFailed = manager.getCurrentAudioDevice() == nullptr && (hadOpenDevice || targetHasDevices);
-        if (manager.getCurrentAudioDeviceType() != targetType || openFailed)
-            return fail(ApplyKind::openFailed, RejectedSetting::deviceType, {});
-    }
-
-    if (request.outputDevice) {
-        const auto currentSetup = manager.getAudioDeviceSetup();
+    if (typeChanged) {
+        if (targetOutputDevice && targetOutputDevice->isNotEmpty()) {
+            setup.outputDeviceName = *targetOutputDevice;
+            if (!targetDeviceType->hasSeparateInputsAndOutputs())
+                setup.inputDeviceName = *targetOutputDevice;
+        }
+        setup.sampleRate = request.sampleRateHz.value_or(0.0);
+        setup.bufferSize = request.bufferSizeFrame.value_or(0);
+    } else if (outputChanged) {
         const auto& name = *request.outputDevice;
-        if (manager.getCurrentAudioDevice() == nullptr || currentSetup.outputDeviceName != name) {
-            auto setup = currentSetup;
-            auto* type = manager.getCurrentDeviceTypeObject();
-            setup.outputChannels.clear();
-            setup.useDefaultOutputChannels = true;
-            setup.outputDeviceName = name;
-            if (name.isEmpty()) {
-                if (type == nullptr || !type->hasSeparateInputsAndOutputs())
-                    setup.inputDeviceName.clear();
-            } else if (type == nullptr || !type->hasSeparateInputsAndOutputs()) {
-                setup.inputDeviceName = name;
-            }
-
-            if (manager.getCurrentAudioDeviceType() == "ASIO" && name != currentSetup.outputDeviceName)
-                restoreAsio("audio output switch");
-            changed = true;
-            const auto error = applySetup(manager, setup);
-            if (error.isNotEmpty())
-                return fail(ApplyKind::openFailed, RejectedSetting::outputDevice, error);
+        auto* type = manager.getCurrentDeviceTypeObject();
+        setup.outputChannels.clear();
+        setup.useDefaultOutputChannels = true;
+        setup.outputDeviceName = name;
+        setup.sampleRate = request.sampleRateHz.value_or(0.0);
+        setup.bufferSize = request.bufferSizeFrame.value_or(0);
+        if (name.isEmpty()) {
+            if (type == nullptr || !type->hasSeparateInputsAndOutputs())
+                setup.inputDeviceName.clear();
+        } else if (type == nullptr || !type->hasSeparateInputsAndOutputs()) {
+            setup.inputDeviceName = name;
         }
     }
 
-    if (request.sampleRateHz || request.bufferSizeFrame || request.outputChannelPair) {
-        auto* device = manager.getCurrentAudioDevice();
-        if (device == nullptr)
-            return fail(ApplyKind::unavailable, RejectedSetting::noAudioDevice, {});
+    const bool modifyingCurrentDevice = !changesTarget && !reopenClosedSelection;
+    auto* currentDevice = modifyingCurrentDevice ? manager.getCurrentAudioDevice() : nullptr;
+    if (modifyingCurrentDevice
+        && (request.sampleRateHz || request.bufferSizeFrame || request.outputChannelPair)
+        && currentDevice == nullptr)
+        return fail(ApplyKind::unavailable, RejectedSetting::noAudioDevice, {});
 
-        auto setup = manager.getAudioDeviceSetup();
-        bool differs = false;
-        if (request.sampleRateHz) {
-            const auto offered = offeredSampleRate(*device, *request.sampleRateHz);
+    if (request.sampleRateHz) {
+        if (modifyingCurrentDevice) {
+            const auto offered = offeredSampleRate(*currentDevice, *request.sampleRateHz);
             if (!offered)
                 return fail(ApplyKind::unavailable, RejectedSetting::sampleRate, {});
-            if (std::abs(*offered - device->getCurrentSampleRate()) >= kSameRateHz) {
+            if (std::abs(*offered - currentDevice->getCurrentSampleRate()) >= kSameRateHz) {
                 setup.sampleRate = *offered;
-                differs = true;
+                needsApply = true;
             }
+        } else if (!typeChanged && !outputChanged) {
+            setup.sampleRate = *request.sampleRateHz;
+            needsApply = true;
         }
-        if (request.bufferSizeFrame) {
+    }
+
+    if (request.bufferSizeFrame) {
+        if (modifyingCurrentDevice) {
             const int size = *request.bufferSizeFrame;
-            if (!device->getAvailableBufferSizes().contains(size))
+            if (!currentDevice->getAvailableBufferSizes().contains(size))
                 return fail(ApplyKind::unavailable, RejectedSetting::bufferSize, {});
-            if (size != device->getCurrentBufferSizeSamples()) {
+            if (size != currentDevice->getCurrentBufferSizeSamples()) {
                 setup.bufferSize = size;
-                differs = true;
+                needsApply = true;
             }
+        } else if (!typeChanged && !outputChanged) {
+            setup.bufferSize = *request.bufferSizeFrame;
+            needsApply = true;
         }
-        if (request.outputChannelPair) {
-            const int pair = *request.outputChannelPair;
-            if (pair < -1 || (pair >= 0 && pair >= outputChannelPairCount(*device)))
+    }
+
+    if (request.outputChannelPair) {
+        const int pair = *request.outputChannelPair;
+        if (modifyingCurrentDevice) {
+            if (pair < -1 || (pair >= 0 && pair >= outputChannelPairCount(*currentDevice)))
                 return fail(ApplyKind::unavailable, RejectedSetting::outputChannelPair, {});
 
-            const int active = device->getActiveOutputChannels().findNextSetBit(0);
+            const int active = currentDevice->getActiveOutputChannels().findNextSetBit(0);
             if (pair < 0) {
                 if (active >= 0) {
                     setup.outputChannels.clear();
                     setup.useDefaultOutputChannels = false;
-                    differs = true;
+                    needsApply = true;
                 }
             } else if (active < 0 || active / 2 != pair) {
-                juce::BigInteger channels;
-                channels.setBit(pair * 2);
-                if (pair * 2 + 1 < outputChannelCount(*device))
-                    channels.setBit(pair * 2 + 1);
-                setup.outputChannels = channels;
+                setup.outputChannels.clear();
+                setup.outputChannels.setBit(pair * 2);
+                if (pair * 2 + 1 < outputChannelCount(*currentDevice))
+                    setup.outputChannels.setBit(pair * 2 + 1);
                 setup.useDefaultOutputChannels = false;
-                differs = true;
+                needsApply = true;
             }
+        } else {
+            setup.outputChannels.clear();
+            setup.useDefaultOutputChannels = false;
+            if (pair >= 0) {
+                setup.outputChannels.setBit(pair * 2);
+                setup.outputChannels.setBit(pair * 2 + 1);
+            }
+            needsApply = true;
         }
-        if (differs) {
-            changed = true;
-            const auto error = applySetup(manager, setup);
-            if (error.isNotEmpty())
-                return fail(ApplyKind::openFailed, RejectedSetting::none, error);
+    }
+
+    if (needsApply) {
+        if (typeChanged && priorType == "ASIO")
+            restoreAsio("audio type switch");
+        else if (outputChanged && priorType == "ASIO")
+            restoreAsio("audio output switch");
+
+        changed = true;
+        const auto error = manager.setCurrentAudioDeviceTypeAndSetup(targetType, setup, true, true);
+        if (error.isNotEmpty()) {
+            const auto setting = typeChanged
+                ? (request.outputDevice ? RejectedSetting::outputDevice : RejectedSetting::deviceType)
+                : ((outputChanged || reopenClosedSelection) ? RejectedSetting::outputDevice
+                                                             : RejectedSetting::none);
+            return fail(ApplyKind::openFailed, setting, error);
         }
     }
 

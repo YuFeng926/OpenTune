@@ -49,7 +49,7 @@ public:
 
     /** Sends an error response (see controlErrorResponse for the rules on detail). */
     void respondError(std::string_view kind, std::string_view reason, std::string_view detail, bool executed,
-                      std::optional<bool> retryable = std::nullopt) const;
+                      std::optional<bool> retryable = std::nullopt, const JsonValue* extraData = nullptr) const;
 
     /** True until a response has been sent. */
     bool isPending() const;

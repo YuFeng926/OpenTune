@@ -1738,10 +1738,21 @@ if(OPENTUNE_BUILD_TESTS)
     target_include_directories(OpenTuneRealtimeSnapshotTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     add_test(NAME RealtimeSnapshotTests COMMAND OpenTuneRealtimeSnapshotTests)
 
+    add_executable(OpenTuneAudioDeviceSettingsTests
+        Tests/AudioDeviceSettingsTests.cpp
+        Source/Utils/AudioDeviceSettings.cpp
+    )
+    target_include_directories(OpenTuneAudioDeviceSettingsTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneAudioDeviceSettingsTests PRIVATE
+        juce::juce_audio_devices)
+    add_test(NAME AudioDeviceSettingsTests COMMAND OpenTuneAudioDeviceSettingsTests)
+
     if(MSVC)
         target_compile_options(OpenTuneOutputSpectrumAnalyzerTests PRIVATE /utf-8 /EHsc)
         target_compile_options(OpenTunePlayHeadStateTests PRIVATE /utf-8 /EHsc)
         target_compile_options(OpenTuneRealtimeSnapshotTests PRIVATE /utf-8 /EHsc)
+        target_compile_options(OpenTuneAudioDeviceSettingsTests PRIVATE /utf-8 /EHsc)
     endif()
 
     add_executable(OpenTuneComponentListenerSubscriptionTests

@@ -104,6 +104,10 @@ public:
         Throws ControlThreadViolation off the message thread. */
     std::shared_ptr<ControlHistory> history();
 
+    /** Structured members to append to this request's error.data, when the operation fails. */
+    void setErrorData(JsonValue data) { errorData_ = std::move(data); }
+    const std::optional<JsonValue>& errorData() const noexcept { return errorData_; }
+
     /**
      * For a method that ends the instance (app.quit), called once, when the method is about to return its result:
      * the dispatcher answers every other request with SHUTTING_DOWN from the moment the method returns, so that
@@ -129,6 +133,7 @@ private:
     std::shared_ptr<ControlHistory> history_;
     std::string instanceShort_;
     std::function<void()> endInstanceAction_;
+    std::optional<JsonValue> errorData_;
 };
 
 /**
@@ -160,6 +165,8 @@ struct ControlErrorReply
         empty for other OpenTune errors, for which the dispatcher assumes that a write may have changed
         state. */
     std::optional<bool> executed;
+    /** Additional members of error.data, set by an operation for its structured failure details. */
+    std::optional<JsonValue> extraData;
 };
 
 /**

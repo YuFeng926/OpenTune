@@ -25,6 +25,6 @@ export const applicationTools = [
     sampleRateHz: z.number().min(2.2250738585072014e-308).max(1e9).optional(), bufferSizeFrame: z.number().int().min(1).max(2147483647).optional(),
     outputChannelPair: z.number().int().min(0).max(2147483647).optional(),
   }).refine(v => Object.keys(v).some(k => k !== 'instanceId'), 'Supply at least one audio setting.'),
-  'Set audio device configuration. Read audio_get for supported values first; changes can restart the audio device.', { open: true }),
+  'Set audio device configuration. Read audio_get for supported values first; when changing deviceType, provide outputDevice if the type offers multiple outputs. A different device uses its own defaults for omitted sampleRateHz and bufferSizeFrame. Changes can restart the audio device.', { open: true }),
   tool('app.quit', 'app.quit', obj({ discardUnsaved: bool }), 'Explicitly quit the selected OpenTune instance. discardUnsaved permits discarding dirty state. OpenTune replies before exiting.', { open: true }),
 ];

@@ -230,7 +230,7 @@ const char* unavailableMessage(AudioDeviceSettings::RejectedSetting setting)
         case AudioDeviceSettings::RejectedSetting::deviceType:
             return "the audio device type is not offered by this instance";
         case AudioDeviceSettings::RejectedSetting::outputDevice:
-            return "the output device is not offered by the audio device type";
+            return "specify an output device offered by the requested audio device type";
         case AudioDeviceSettings::RejectedSetting::noAudioDevice:
             return "no audio device is open, so no sample rate, buffer size or output channel pair is on offer";
         case AudioDeviceSettings::RejectedSetting::sampleRate:
@@ -267,6 +267,25 @@ std::string applyFailureMessage(const AudioDeviceSettings::ApplyResult& result)
     if (result.asioRateRestoreFailed)
         detail += "; the ASIO sample rate could not be restored to the system";
     return detail;
+}
+
+void setAudioFailureData(ControlOpContext& context, juce::AudioDeviceManager& manager,
+                         const AudioSetRequest& request, const AudioDeviceSettings::ApplyResult& outcome)
+{
+    const auto browsedType = request.deviceType ? fromUtf8(*request.deviceType) : outcome.before.deviceType;
+    const auto snapshot = AudioDeviceSettings::scanAndRead(manager, browsedType);
+
+    auto audioDevice = JsonValue::object();
+    audioDevice.appendMember("device", deviceJson(outcome.after, "no_audio_device"));
+    audioDevice.appendMember("deviceError", JsonValue::string(outcome.deviceError.toStdString()));
+    audioDevice.appendMember("recoveryError", JsonValue::string(outcome.recoveryError.toStdString()));
+    auto available = JsonValue::object();
+    available.appendMember("outputDevices", textArray(snapshot.available.outputDevices, kMaxDeviceCodePoints));
+    audioDevice.appendMember("available", std::move(available));
+
+    auto extraData = JsonValue::object();
+    extraData.appendMember("audioDevice", std::move(audioDevice));
+    context.setErrorData(std::move(extraData));
 }
 
 Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& request)
@@ -308,11 +327,14 @@ Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& 
         case AudioDeviceSettings::ApplyKind::applied:
             break;
         case AudioDeviceSettings::ApplyKind::unavailable:
+            setAudioFailureData(context, *manager, request, outcome);
             return controlOpError("INVALID_ARGUMENT", "audio_setting_unavailable",
                                   applyFailureMessage(outcome));
         case AudioDeviceSettings::ApplyKind::openFailed:
+            setAudioFailureData(context, *manager, request, outcome);
             return controlOpError("IO_ERROR", "device_open_failed", applyFailureMessage(outcome));
         case AudioDeviceSettings::ApplyKind::priorSetupNotRestored:
+            setAudioFailureData(context, *manager, request, outcome);
             return controlOpErrorAfterChange("IO_ERROR", "device_open_failed", applyFailureMessage(outcome));
     }
     recordChange(context, envelope, outcome.before, outcome.after);

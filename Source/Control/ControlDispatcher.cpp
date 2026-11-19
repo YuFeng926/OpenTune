@@ -218,6 +218,7 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
             }
         } else {
             outcome.error = controlMapError(result.error());
+            outcome.error.extraData = context.errorData();
             // As the operation stated it: controlOpError fails before any change, controlOpErrorAfterChange
             // after one. Another error of a write may have changed state.
             outcome.executed = outcome.error.executed.value_or(method.write);
@@ -288,7 +289,9 @@ void ControlDispatcher::respond(Outcome& outcome, const ControlCompletion& compl
         else
             completion.respondResult(*outcome.result);
     } else {
-        completion.respondError(outcome.error.kind, outcome.error.reason, outcome.error.detail, outcome.executed);
+        const auto* extraData = outcome.error.extraData ? &*outcome.error.extraData : nullptr;
+        completion.respondError(outcome.error.kind, outcome.error.reason, outcome.error.detail, outcome.executed,
+                                std::nullopt, extraData);
     }
 }
 

@@ -87,7 +87,7 @@ struct ApplyResult
 
 using AsioRateRestore = std::function<bool(const juce::String& reason)>;
 
-Snapshot scanAndRead(juce::AudioDeviceManager& manager);
+Snapshot scanAndRead(juce::AudioDeviceManager& manager, const juce::String& browsedType = {});
 DeviceState readDevice(juce::AudioDeviceManager& manager);
 int findSampleRateIndex(const juce::Array<double>& sampleRates, double sampleRateHz);
 bool sameSampleRate(double firstHz, double secondHz);

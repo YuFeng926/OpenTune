@@ -349,7 +349,8 @@ bool controlErrorRetryable(std::string_view kind, std::string_view reason)
 }
 
 std::string controlErrorResponse(const ControlRequestId& id, std::string_view kind, std::string_view reason,
-                                 std::string_view detail, bool executed, std::optional<bool> retryable)
+                                 std::string_view detail, bool executed, std::optional<bool> retryable,
+                                 const JsonValue* extraData)
 {
     std::string line = "{\"jsonrpc\":\"2.0\",\"id\":";
     id.appendJson(line);
@@ -369,6 +370,14 @@ std::string controlErrorResponse(const ControlRequestId& id, std::string_view ki
     appendJsonQuoted(line, sanitizeDetail(detail));
     line += ",\"executed\":";
     line += executed ? "true" : "false";
+    if (extraData != nullptr && extraData->isObject()) {
+        for (std::size_t i = 0; i < extraData->size(); ++i) {
+            line += ',';
+            appendJsonQuoted(line, extraData->keyAt(i));
+            line += ':';
+            line += toJsonString(extraData->at(i));
+        }
+    }
     line += "}}}";
     return line;
 }

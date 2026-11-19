@@ -27,6 +27,65 @@ void require(bool ok, const char* detail)
     }
 }
 
+void testErrorResponseExtraData()
+{
+    const std::string rawDetail = "driver error: 驱动启动失败";
+    auto device = JsonValue::object();
+    device.appendMember("outputDevice", JsonValue::string("扬声器输出"));
+    auto outputDevices = JsonValue::array();
+    outputDevices.append(JsonValue::string("扬声器输出"));
+    auto available = JsonValue::object();
+    available.appendMember("outputDevices", std::move(outputDevices));
+    auto audioDevice = JsonValue::object();
+    audioDevice.appendMember("device", std::move(device));
+    audioDevice.appendMember("deviceError", JsonValue::string("驱动启动失败"));
+    audioDevice.appendMember("recoveryError", JsonValue::string("恢复设备失败"));
+    audioDevice.appendMember("available", std::move(available));
+    auto extraData = JsonValue::object();
+    extraData.appendMember("audioDevice", std::move(audioDevice));
+
+    const auto response = controlErrorResponse(ControlRequestId::fromInteger(1), "IO_ERROR", "device_open_failed",
+                                               rawDetail, false, std::nullopt, &extraData);
+    const auto parsed = parseJson(response);
+    const auto* error = parsed.ok ? parsed.value.find("error") : nullptr;
+    const auto* data = error != nullptr ? error->find("data") : nullptr;
+    const auto* returnedAudioDevice = data != nullptr ? data->find("audioDevice") : nullptr;
+    require(returnedAudioDevice != nullptr && returnedAudioDevice->isObject(), "structured audio error data serialized");
+
+    const auto* returnedDevice = returnedAudioDevice->find("device");
+    const auto* returnedOutput = returnedDevice != nullptr ? returnedDevice->find("outputDevice") : nullptr;
+    require(returnedOutput != nullptr && returnedOutput->isString() && returnedOutput->text() == "扬声器输出",
+            "Chinese current device name survives error response roundtrip");
+    const auto* returnedDeviceError = returnedAudioDevice->find("deviceError");
+    require(returnedDeviceError != nullptr && returnedDeviceError->isString()
+                && returnedDeviceError->text() == "驱动启动失败",
+            "Chinese driver error survives error response roundtrip");
+    const auto* returnedRecoveryError = returnedAudioDevice->find("recoveryError");
+    require(returnedRecoveryError != nullptr && returnedRecoveryError->isString()
+                && returnedRecoveryError->text() == "恢复设备失败",
+            "Chinese recovery error survives error response roundtrip");
+    const auto* returnedAvailable = returnedAudioDevice->find("available");
+    const auto* returnedOutputDevices = returnedAvailable != nullptr ? returnedAvailable->find("outputDevices") : nullptr;
+    require(returnedOutputDevices != nullptr && returnedOutputDevices->isArray() && returnedOutputDevices->size() == 1
+                && returnedOutputDevices->at(0).isString() && returnedOutputDevices->at(0).text() == "扬声器输出",
+            "Chinese output device choice survives error response roundtrip");
+
+    std::string expectedDetail;
+    for (const unsigned char c : rawDetail)
+        expectedDetail += c >= 0x20 && c <= 0x7E ? static_cast<char>(c) : '?';
+    const auto* returnedDetail = data != nullptr ? data->find("detail") : nullptr;
+    require(returnedDetail != nullptr && returnedDetail->isString() && returnedDetail->text() == expectedDetail,
+            "error detail keeps its printable ASCII contract");
+
+    const auto plainResponse = controlErrorResponse(ControlRequestId::fromInteger(1), "IO_ERROR", "device_open_failed",
+                                                    "plain error", false);
+    const auto plainParsed = parseJson(plainResponse);
+    const auto* plainError = plainParsed.ok ? plainParsed.value.find("error") : nullptr;
+    const auto* plainData = plainError != nullptr ? plainError->find("data") : nullptr;
+    require(plainData != nullptr && plainData->size() == 5 && plainData->find("audioDevice") == nullptr,
+            "error without extra data retains the original data fields");
+}
+
 template <typename Predicate>
 void pumpUntil(Predicate done)
 {
@@ -387,6 +446,7 @@ void testFinalReply(bool closeBeforeRespond)
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juce;
+    testErrorResponseExtraData();
     testReplyDestruction();
     testNestedStop();
     testDeadlineArbitration();

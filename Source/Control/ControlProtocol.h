@@ -109,10 +109,13 @@ bool controlErrorRetryable(std::string_view kind, std::string_view reason);
 /**
  * One error response line, without the LF. reason may be empty. detail is reduced to
  * printable ASCII and at most 1024 characters; callers must never put secrets or text taken from
- * files or projects into it. retryable defaults to the kind's default.
+ * files or projects into it. retryable defaults to the kind's default. extraData, when present, is an
+ * object whose members are added to error.data as JSON without ASCII sanitization. Its members must
+ * be operation-defined public data and must not contain secrets or text taken from files or projects.
  */
 std::string controlErrorResponse(const ControlRequestId& id, std::string_view kind, std::string_view reason,
-                                 std::string_view detail, bool executed, std::optional<bool> retryable = std::nullopt);
+                                 std::string_view detail, bool executed, std::optional<bool> retryable = std::nullopt,
+                                 const JsonValue* extraData = nullptr);
 
 /** One success response line, without the LF. */
 std::string controlResultResponse(const ControlRequestId& id, const JsonValue& result);

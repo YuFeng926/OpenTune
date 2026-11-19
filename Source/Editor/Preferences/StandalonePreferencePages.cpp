@@ -53,6 +53,7 @@ public:
     {
         initialiseLabel(typeLabel_, LOC(kAudioDeviceType));
         initialiseLabel(outputLabel_, LOC(kAudioOutput));
+        initialiseLabel(currentDeviceLabel_, juce::String());
         initialiseLabel(sampleRateLabel_, LOC(kAudioSampleRate));
         initialiseLabel(bufferSizeLabel_, LOC(kAudioBufferSize));
         initialiseLabel(channelsLabel_, LOC(kAudioActiveOutputChannels));
@@ -69,13 +70,14 @@ public:
         testButton_.setButtonText(LOC(kAudioTest));
         testButton_.onClick = [this] { deviceManager_.playTestSound(); };
 
-        typeSelector_.onChange = [this] { typeChanged(); };
+        typeSelector_.onChange = [this] { browseTypeChanged(); };
         outputDeviceSelector_.onChange = [this] { outputDeviceChanged(); };
         sampleRateSelector_.onChange = [this] { sampleRateChanged(); };
         bufferSizeSelector_.onChange = [this] { bufferSizeChanged(); };
 
         addAndMakeVisible(typeLabel_);
         addAndMakeVisible(typeSelector_);
+        addAndMakeVisible(currentDeviceLabel_);
         addAndMakeVisible(outputLabel_);
         addAndMakeVisible(outputDeviceSelector_);
         addAndMakeVisible(testButton_);
@@ -86,6 +88,7 @@ public:
         addAndMakeVisible(channelsLabel_);
         addAndMakeVisible(errorLabel_);
 
+        browsedType_ = deviceManager_.getCurrentAudioDeviceType();
         deviceManager_.addChangeListener(this);
         refresh();
     }
@@ -100,6 +103,7 @@ public:
         const int selectorRows = typeSelector_.isVisible() ? 4 : 3;
         const int channelRows = juce::jmax(1, (channelToggles_.size() + 1) / 2);
         return selectorRows * kRowHeight + selectorRows * kRowGap
+             + kRowHeight + kRowGap
              + kRowHeight
              + channelRows * kRowHeight + (channelRows - 1) * 4
              + kRowGap + kRowHeight;
@@ -119,6 +123,9 @@ public:
             typeLabel_.setBounds({});
             typeSelector_.setBounds({});
         }
+
+        currentDeviceLabel_.setBounds(bounds.removeFromTop(kRowHeight));
+        bounds.removeFromTop(kRowGap);
 
         row = bounds.removeFromTop(kRowHeight);
         outputLabel_.setBounds(row.removeFromLeft(kLabelWidth));
@@ -167,8 +174,12 @@ private:
             return;
         const juce::ScopedValueSetter<bool> guard(refreshing_, true);
 
-        const auto snapshot = AudioDeviceSettings::scanAndRead(deviceManager_);
+        const auto snapshot = AudioDeviceSettings::scanAndRead(deviceManager_, browsedType_);
+        if (!snapshot.available.deviceTypes.contains(browsedType_)) {
+            browsedType_ = snapshot.device.deviceType;
+        }
         refreshTypeSelector(snapshot);
+        refreshCurrentDeviceLabel(snapshot);
         refreshDeviceSelector(snapshot);
         refreshSampleRateSelector(snapshot);
         refreshBufferSizeSelector(snapshot);
@@ -191,22 +202,43 @@ private:
             typeSelector_.addItem(types[i], availableTypeNames_.size());
         }
 
-        const int currentIndex = availableTypeNames_.indexOf(snapshot.device.deviceType);
+        const int currentIndex = availableTypeNames_.indexOf(browsedType_);
         typeSelector_.setSelectedId(currentIndex >= 0 ? currentIndex + 1 : 0, juce::dontSendNotification);
+    }
+
+    void refreshCurrentDeviceLabel(const AudioDeviceSettings::Snapshot& snapshot)
+    {
+        const auto& device = snapshot.device;
+        testButton_.setEnabled(device.open);
+        auto text = LOC(kCurrent) + ": ";
+        if (!device.open) {
+            text += LOC(kAudioNoDevice);
+        } else {
+            text += device.deviceType + " / " + device.outputDevice;
+        }
+        currentDeviceLabel_.setText(text, juce::dontSendNotification);
     }
 
     void refreshDeviceSelector(const AudioDeviceSettings::Snapshot& snapshot)
     {
         availableDeviceNames_ = snapshot.available.outputDevices;
         outputDeviceSelector_.clear(juce::dontSendNotification);
+        outputDeviceSelector_.setTextWhenNothingSelected(LOC(kAudioSelectDevice));
 
         outputDeviceSelector_.addItem(LOC(kAudioNoDevice), 1);
         for (int i = 0; i < availableDeviceNames_.size(); ++i)
             outputDeviceSelector_.addItem(availableDeviceNames_[i], i + 2);
 
-        const int currentIndex = availableDeviceNames_.indexOf(snapshot.device.configuredOutputDevice);
-        outputDeviceSelector_.setSelectedId(currentIndex >= 0 ? currentIndex + 2 : 1, juce::dontSendNotification);
-        outputDeviceSelector_.setEnabled(deviceManager_.getCurrentDeviceTypeObject() != nullptr);
+        if (browsedType_ != snapshot.device.deviceType) {
+            outputDeviceSelector_.setSelectedId(0, juce::dontSendNotification);
+        } else if (!snapshot.device.open) {
+            outputDeviceSelector_.setSelectedId(1, juce::dontSendNotification);
+        } else {
+            const int currentIndex = availableDeviceNames_.indexOf(snapshot.device.outputDevice);
+            outputDeviceSelector_.setSelectedId(currentIndex >= 0 ? currentIndex + 2 : 0,
+                                                juce::dontSendNotification);
+        }
+        outputDeviceSelector_.setEnabled(availableTypeNames_.contains(browsedType_));
     }
 
     void refreshSampleRateSelector(const AudioDeviceSettings::Snapshot& snapshot)
@@ -311,15 +343,14 @@ private:
 
         juce::String error;
         if (result.kind != AudioDeviceSettings::ApplyKind::applied) {
-            if (result.rejectedSetting == AudioDeviceSettings::RejectedSetting::deviceType) {
+            if (result.deviceError.isNotEmpty()) {
+                error = LOC(kAudioDeviceError) + ": " + result.deviceError;
+            } else if (result.rejectedSetting == AudioDeviceSettings::RejectedSetting::deviceType) {
                 error = LOC(kAudioDeviceSwitchFailed);
             } else if (result.cause == AudioDeviceSettings::ApplyKind::unavailable) {
                 error = LOC(kAudioDeviceError);
-            } else {
-                error = result.deviceError.isNotEmpty()
-                    ? LOC(kAudioDeviceError) + ": " + result.deviceError
-                    : LOC(kAudioDeviceSwitchFailed);
-            }
+            } else
+                error = LOC(kAudioDeviceSwitchFailed);
         }
         if (result.recovery == AudioDeviceSettings::Recovery::failed)
             error += "; rollback failed: " + result.recoveryError;
@@ -330,10 +361,11 @@ private:
         }
 
         errorLabel_.setText(error, juce::dontSendNotification);
+        errorLabel_.setTooltip(error);
         refresh();
     }
 
-    void typeChanged()
+    void browseTypeChanged()
     {
         if (refreshing_)
             return;
@@ -342,9 +374,8 @@ private:
         if (! juce::isPositiveAndBelow(index, availableTypeNames_.size()))
             return;
 
-        AudioDeviceSettings::Request request;
-        request.deviceType = availableTypeNames_[index];
-        applyRequest(request);
+        browsedType_ = availableTypeNames_[index];
+        refresh();
     }
 
     void outputDeviceChanged()
@@ -357,6 +388,7 @@ private:
             return;
 
         AudioDeviceSettings::Request request;
+        request.deviceType = browsedType_;
         if (selectedId == 1) {
             request.outputDevice = juce::String();
         } else {
@@ -411,6 +443,7 @@ private:
     juce::AudioDeviceManager& deviceManager_;
     juce::Label typeLabel_;
     a11y::AccessibleComboBox typeSelector_;
+    juce::Label currentDeviceLabel_;
     juce::Label outputLabel_;
     a11y::AccessibleComboBox outputDeviceSelector_;
     juce::TextButton testButton_;
@@ -423,6 +456,7 @@ private:
     juce::Label errorLabel_;
     juce::StringArray availableTypeNames_;
     juce::StringArray availableDeviceNames_;
+    juce::String browsedType_;
     juce::Array<double> availableSampleRates_;
     juce::Array<int> availableBufferSizes_;
     bool refreshing_ = false;
