@@ -44,12 +44,12 @@ bool runRenderCacheCompletionContract()
     OpenTune::RenderCache cache;
     const std::vector<float> audio(256, 1.0f);
 
-    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     auto jobs = cache.getPendingJobs();
     if (! checkRenderContract(jobs.size() == 1, "success_pending_setup_failed"))
         return false;
     const auto pendingRevision = jobs.front().targetRevision;
-    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     jobs = cache.getPendingJobs();
     if (! checkRenderContract(jobs.size() == 1
                                   && jobs.front().targetRevision == pendingRevision
@@ -63,7 +63,7 @@ bool runRenderCacheCompletionContract()
         || ! checkRenderContract(cache.getChunkStats().idle == 1, "success_state_not_idle"))
         return false;
 
-    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 2);
+    cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 2);
     jobs = cache.getPendingJobs();
     if (! checkRenderContract(jobs.size() == 1 && cache.claimPendingJob(jobs.front()), "old_revision_claim_failed"))
         return false;
@@ -79,7 +79,7 @@ bool runRenderCacheCompletionContract()
         || ! checkRenderContract(cache.getChunkStats().idle == 1, "current_revision_state_not_idle"))
         return false;
 
-    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 3);
+    cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 3);
     jobs = cache.getPendingJobs();
     if (! checkRenderContract(jobs.size() == 1 && cache.claimPendingJob(jobs.front()), "failure_claim_failed"))
         return false;
@@ -89,7 +89,7 @@ bool runRenderCacheCompletionContract()
         || ! checkRenderContract(cache.getChunkStats().failed == 1, "failure_state_not_failed"))
         return false;
 
-    cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 4);
+    cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 4);
     jobs = cache.getPendingJobs();
     if (! checkRenderContract(jobs.size() == 1 && cache.claimPendingJob(jobs.front()), "blank_claim_failed"))
         return false;
@@ -205,7 +205,7 @@ bool runRenderCacheCapacityContract()
                                   uint64_t contentRevision,
                                   float sample) {
         cache.reconcileFullPlanAndRequest(
-            {{startSample, endSampleExclusive}}, startSample, endSampleExclusive, contentRevision);
+            {{startSample, endSampleExclusive}}, {{startSample, endSampleExclusive}}, contentRevision);
         const auto jobs = cache.getPendingJobs();
         if (jobs.size() != 1 || !cache.claimPendingJob(jobs.front()))
             return false;
@@ -221,7 +221,7 @@ bool runRenderCacheCapacityContract()
         limit.store(baseline + 1024, std::memory_order_release);
         OpenTune::RenderCache cache;
         const std::vector<OpenTune::RenderCache::PlannedChunk> firstPlan{{0, 256}};
-        cache.reconcileFullPlanAndRequest(firstPlan, 0, 256, 1);
+        cache.reconcileFullPlanAndRequest(firstPlan, {{0, 256}}, 1);
         const auto firstJob = cache.getPendingJobs();
         passed = passed && firstJob.size() == 1 && cache.claimPendingJob(firstJob.front());
         if (passed)
@@ -233,7 +233,7 @@ bool runRenderCacheCapacityContract()
         }
 
         const std::vector<OpenTune::RenderCache::PlannedChunk> expandedPlan{{0, 256}, {256, 512}};
-        cache.reconcileFullPlanAndRequest(expandedPlan, 0, 512, 1);
+        cache.reconcileFullPlanAndRequest(expandedPlan, {{0, 512}}, 1);
         const auto secondJob = cache.getPendingJobs();
         passed = passed && secondJob.size() == 1 && cache.claimPendingJob(secondJob.front());
         if (passed)
@@ -258,7 +258,7 @@ bool runRenderCacheCapacityContract()
     {
         limit.store(baseline + 8192, std::memory_order_release);
         OpenTune::RenderCache cache;
-        cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto job = cache.getPendingJobs();
         passed = passed && job.size() == 1 && cache.claimPendingJob(job.front());
         if (passed)
@@ -284,7 +284,7 @@ bool runRenderCacheCapacityContract()
                 && destination.getSample(0, 0) != 0.0f;
 
             limit.store(preparedBytes + 1024, std::memory_order_release);
-            cache.reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 2);
+            cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 2);
             const auto rebuiltJob = cache.getPendingJobs();
             passed = passed && rebuiltJob.size() == 1 && cache.claimPendingJob(rebuiltJob.front());
             if (passed)
@@ -341,7 +341,7 @@ bool runRenderCacheCapacityContract()
 
         const OpenTune::ContentKey staleKey{OpenTune::DomainKind::StandaloneClip, 923, 0};
         auto staleCache = registry.getOrCreate(staleKey);
-        staleCache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        staleCache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto staleJobs = staleCache->getPendingJobs();
         const bool staleClaimed = staleJobs.size() == 1
             && staleCache->claimPendingJob(staleJobs.front());
@@ -361,7 +361,7 @@ bool runRenderCacheCapacityContract()
         limit.store(baseline + 65536, std::memory_order_release);
         OpenTune::RenderCache cache;
         const std::vector<OpenTune::RenderCache::PlannedChunk> plan{{0, 256}, {256, 512}};
-        cache.reconcileFullPlanAndRequest(plan, 0, 512, 1);
+        cache.reconcileFullPlanAndRequest(plan, {{0, 512}}, 1);
         auto jobs = cache.getPendingJobs();
         bool ready = jobs.size() == 2;
         for (const auto& job : jobs)
@@ -402,7 +402,7 @@ bool runRenderCacheCapacityContract()
                 + changedChunkPcmBytes + neighborChunkPcmBytes;
             limit.store(rebuildPeakBytes, std::memory_order_release);
 
-            cache.reconcileFullPlanAndRequest(plan, 0, 256, 2);
+            cache.reconcileFullPlanAndRequest(plan, {{0, 256}}, 2);
             jobs = cache.getPendingJobs();
             bool edited = jobs.size() == 1 && jobs.front().startSample == 0
                 && cache.claimPendingJob(jobs.front());
@@ -448,7 +448,7 @@ bool runRenderWorkerRequeueContract()
     auto service = std::make_shared<OpenTune::ContentRenderService>();
     const OpenTune::ContentKey key{OpenTune::DomainKind::StandaloneClip, 902, 0};
     auto cache = service->getOrCreateRenderCache(key);
-    cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    cache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     const auto pending = cache->getPendingJobs();
     if (!checkRenderContract(pending.size() == 1 && cache->claimPendingJob(pending.front()),
                              "requeue_initial_claim_failed"))
@@ -482,7 +482,7 @@ bool runRenderWorkerRequeueContract()
 
     const OpenTune::ContentKey detachedKey{OpenTune::DomainKind::StandaloneClip, 903, 0};
     auto detachedCache = service->getOrCreateRenderCache(detachedKey);
-    detachedCache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    detachedCache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     const auto detachedPending = detachedCache->getPendingJobs();
     if (!checkRenderContract(detachedPending.size() == 1
                                  && detachedCache->claimPendingJob(detachedPending.front()),
@@ -504,9 +504,14 @@ bool runRenderWorkerRequeueContract()
     detachedSnapshot->contentRevision = 2;
     auto detachedAudio = std::make_shared<juce::AudioBuffer<float>>(1, 256);
     detachedAudio->clear();
-    service->enqueueRender(OpenTune::RenderJob{
-        OpenTune::RenderJob::Kind::Stage1Render, key, detachedSnapshot, cache,
-        detachedAudio, 44100.0, 0, detachedAudio->getNumSamples(), -1, 2});
+    OpenTune::RenderJob detachedJob;
+    detachedJob.kind = OpenTune::RenderJob::Kind::Stage1Render;
+    detachedJob.contentKey = key;
+    detachedJob.contentSnapshot = detachedSnapshot;
+    detachedJob.renderCache = cache;
+    detachedJob.audioBuffer = detachedAudio;
+    detachedJob.audioSampleRate = 44100.0;
+    service->enqueueRender(std::move(detachedJob), {{0, detachedAudio->getNumSamples()}});
     const auto detachedStats = cache->getChunkStats();
     return passed
         && checkRenderContract(detachedStats.pending == 0 && detachedStats.failed == 1,
@@ -517,8 +522,7 @@ int runChild(int argc, char** argv)
 {
     juce::ignoreUnused(argc, argv);
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "process_begin", {
-        {"watchdogMs", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs)},
-        {"queueLimit", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleQueueApprovalLimit)}
+        {"watchdogMs", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs)}
     });
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     constexpr std::size_t payloadFloats =
@@ -606,10 +610,15 @@ int runChild(int argc, char** argv)
         runtime.processChunkRenderJob(std::move(strongService), job, false, std::move(completion));
         OpenTuneTest::trace("RenderRuntimeLifecycleTests", "job_completion_posted");
     }});
+    OpenTune::RenderJob initialRender;
+    initialRender.kind = OpenTune::RenderJob::Kind::Stage1Render;
+    initialRender.contentKey = key;
+    initialRender.contentSnapshot = snapshot;
+    initialRender.renderCache = cache;
+    initialRender.audioBuffer = audio;
+    initialRender.audioSampleRate = 44100.0;
     service->pauseRenderWorker();
-    service->enqueueRender(OpenTune::RenderJob{
-        OpenTune::RenderJob::Kind::Stage1Render, key, snapshot, cache, audio, 44100.0,
-        0, audio->getNumSamples(), -1, snapshot->contentRevision});
+    service->enqueueRender(std::move(initialRender), {{0, audio->getNumSamples()}});
     const auto pending = cache->getPendingJobs();
     const bool initialRenderPending = pending.size() == 1;
     service->resumeRenderWorker();

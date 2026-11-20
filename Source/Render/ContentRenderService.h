@@ -5,6 +5,7 @@
 #include "PlaybackReadSource.h"
 #include "RenderJob.h"
 #include "PlaybackSourcePublisher.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include "RenderCacheRegistry.h"
 #include "RenderWorker.h"
 #include "StretcherPool.h"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace OpenTune {
 
@@ -67,7 +69,8 @@ public:
     // Message thread: forwards a shared backend change to the attached lease.
     void notifyBackendChanged();
     // notes/silentGaps 从 job.contentSnapshot 读取，不复制、不额外传参。
-    void enqueueRender(RenderJob job);
+    void enqueueRender(RenderJob job,
+                       const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges);
     // stale-generation 回退：只回退 RenderCache 状态机（Running→Pending）并投递
     // 一个带 chunk 身份的队列项，不重算几何/快照、不 bump desired。
     RenderWorker::RequeueResult requeueRenderChunk(const RenderJob& job);

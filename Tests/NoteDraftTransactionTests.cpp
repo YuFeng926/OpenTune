@@ -152,10 +152,62 @@ bool runCorrectionDraftTransaction()
                   "Correction redo must restore the committed draft");
 }
 
+bool runInsertionAndDeletionTransactions()
+{
+    OpenTuneAudioProcessor processor;
+    processor.prepareToPlay(44100.0, 512);
+    auto& repository = *processor.getStandaloneContentRepository();
+    auto& history = processor.getUndoManager();
+    const auto key = repository.createClip();
+    const std::vector<Note> original{
+        makeNote(0.125, 0.375, 220.0f),
+        makeNote(0.625, 0.875, 330.0f)
+    };
+    repository.findClip(key)->applyNotes(original);
+
+    const auto initial = processor.getContentSnapshot(key);
+    auto inserted = initial->notes;
+    inserted.push_back(makeNote(1.125, 1.375, 440.0f));
+    auto result = processor.commitNoteDraft(key, initial->notesRevision, inserted, "Insert draft note");
+    if (!expect(result.status == Status::Applied && result.contentSnapshot->notes.size() == 3
+                    && history.size() == 1,
+                "Draft insertion must commit as one transaction"))
+        return false;
+
+    history.undo();
+    if (!expect(processor.getContentSnapshot(key)->notes.size() == 2,
+                "Draft insertion undo must remove the inserted note"))
+        return false;
+    history.redo();
+    const auto afterInsert = processor.getContentSnapshot(key);
+    if (!expect(afterInsert->notes.size() == 3 && afterInsert->notes.back().pitch == 440.0f,
+                "Draft insertion redo must restore the inserted note"))
+        return false;
+
+    auto deleted = afterInsert->notes;
+    deleted.erase(deleted.begin() + 1);
+    result = processor.commitNoteDraft(key, afterInsert->notesRevision, deleted, "Delete draft note");
+    if (!expect(result.status == Status::Applied && result.contentSnapshot->notes.size() == 2
+                    && result.contentSnapshot->notes[1].pitch == 440.0f && history.size() == 2,
+                "Draft deletion must commit the remaining notes as one transaction"))
+        return false;
+
+    history.undo();
+    if (!expect(processor.getContentSnapshot(key)->notes.size() == 3
+                    && processor.getContentSnapshot(key)->notes[1].pitch == 330.0f,
+                "Draft deletion undo must restore the removed note"))
+        return false;
+    history.redo();
+    const auto afterDelete = processor.getContentSnapshot(key);
+    return expect(afterDelete->notes.size() == 2 && afterDelete->notes[1].pitch == 440.0f,
+                  "Draft deletion redo must retain the remaining notes");
+}
+
 } // namespace
 
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
-    return runTransactions() && runCorrectionDraftTransaction() ? 0 : 1;
+    return runTransactions() && runCorrectionDraftTransaction() && runInsertionAndDeletionTransactions()
+        ? 0 : 1;
 }

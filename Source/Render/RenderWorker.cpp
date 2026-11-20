@@ -3,7 +3,7 @@
 #include "../Utils/AppLogger.h"
 #include <algorithm>
 #include <iterator>
-#include <set>
+#include <map>
 
 namespace OpenTune {
 
@@ -190,15 +190,19 @@ void RenderWorker::syncStage1QueueLocked(
     const auto* cache = templateJob.renderCache.get();
 
     const auto pendingJobs = templateJob.renderCache->getPendingJobs();
-    std::set<int64_t> desired;
+    std::map<int64_t, RenderCache::PendingJob> desired;
     for (const auto& pending : pendingJobs)
-        desired.insert(pending.startSample);
+        desired.emplace(pending.startSample, pending);
 
     queue_.erase(std::remove_if(queue_.begin(), queue_.end(),
         [cache, &desired](const RenderJob& queued) {
-            return queued.kind == RenderJob::Kind::Stage1Render
-                && queued.renderCache.get() == cache
-                && desired.count(queued.queuedChunkStartSample) == 0;
+            if (queued.kind != RenderJob::Kind::Stage1Render || queued.renderCache.get() != cache)
+                return false;
+            const auto pending = desired.find(queued.queuedChunkStartSample);
+            return pending == desired.end()
+                || queued.startSample != pending->second.startSample
+                || queued.endSampleExclusive != pending->second.endSampleExclusive
+                || queued.targetRevision != pending->second.targetRevision;
         }), queue_.end());
 
     for (const auto& pending : pendingJobs)

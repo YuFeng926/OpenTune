@@ -4126,43 +4126,37 @@ ContentRenderService* OpenTuneAudioProcessor::resolveMutableLocalContentRenderSe
     return nullptr;
 }
 
-void OpenTuneAudioProcessor::onContentLocalMutationCompleted(ContentKey key,
-                                                              ContentEditRangeFrames affectedRange)
+void OpenTuneAudioProcessor::onContentLocalMutationCompleted(
+    ContentKey key,
+    const std::vector<ContentEditRangeFrames>& affectedRanges)
 {
     auto snap = getContentSnapshot(key);
-    if (!snap || !snap->pitchCurve) return;
+    if (!snap || !snap->pitchCurve || affectedRanges.empty()) return;
     const double secondsPerFrame = static_cast<double>(snap->pitchCurve->getHopSize())
                                  / snap->pitchCurve->getSampleRate();
-    onContentLocalMutationCompletedSeconds(
-        key,
-        static_cast<double>(affectedRange.startFrame) * secondsPerFrame,
-        static_cast<double>(affectedRange.endFrameExclusive) * secondsPerFrame,
-        std::move(snap));
+    std::vector<NoteRangeSeconds> secondsRanges;
+    secondsRanges.reserve(affectedRanges.size());
+    for (const auto& range : affectedRanges)
+        secondsRanges.push_back({static_cast<double>(range.startFrame) * secondsPerFrame,
+                                 static_cast<double>(range.endFrameExclusive) * secondsPerFrame});
+    onContentLocalMutationCompletedSeconds(key, secondsRanges, std::move(snap));
 }
 
-void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(ContentKey key,
-                                                                     double startSeconds,
-                                                                     double endSeconds,
-                                                                     std::shared_ptr<const EditableContentSnapshot> snapshot)
+void OpenTuneAudioProcessor::onContentLocalMutationCompletedSeconds(
+    ContentKey key,
+    const std::vector<NoteRangeSeconds>& affectedRanges,
+    std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
 #if JucePlugin_Enable_ARA
     if (key.domainKind == DomainKind::ARAAudioModification)
     {
-        auto* dc = getDocumentController();
-        if (dc != nullptr)
-        {
-            dc->requestModificationRender(
-                key, startSeconds, endSeconds, std::move(snapshot));
-        }
+        if (auto* dc = getDocumentController())
+            dc->requestModificationRenderRanges(key, affectedRanges, std::move(snapshot));
         return;
     }
 #endif
 
-    // Non-ARA path: processor-local CRS
-    requestRenderForLocalMutationRange(key,
-                                       startSeconds,
-                                       endSeconds,
-                                       std::move(snapshot));
+    requestRenderForLocalMutationRanges(key, affectedRanges, std::move(snapshot));
 }
 
 void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
@@ -4186,7 +4180,8 @@ void OpenTuneAudioProcessor::onContentFullMutationCompleted(ContentKey key)
     // Non-ARA path
     const double durationSeconds = contentDurationSeconds(*snapshot);
     if (durationSeconds > 0.0)
-        requestRenderForLocalMutationRange(key, 0.0, durationSeconds, std::move(snapshot));
+        requestRenderForLocalMutationRanges(
+            key, std::vector<NoteRangeSeconds>{{0.0, durationSeconds}}, std::move(snapshot));
 }
 
 void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key)
@@ -4195,13 +4190,14 @@ void OpenTuneAudioProcessor::requestFullContentRender(ContentKey key)
     if (!snap) return;
     const double durationSeconds = contentDurationSeconds(*snap);
     if (durationSeconds <= 0.0) return;
-    requestRenderForLocalMutationRange(key, 0.0, durationSeconds, std::move(snap));
+    requestRenderForLocalMutationRanges(
+        key, std::vector<NoteRangeSeconds>{{0.0, durationSeconds}}, std::move(snap));
 }
 
-void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
-                                                                 double startSeconds,
-                                                                 double endSeconds,
-                                                                 std::shared_ptr<const EditableContentSnapshot> snap)
+void OpenTuneAudioProcessor::requestRenderForLocalMutationRanges(
+    ContentKey key,
+    const std::vector<NoteRangeSeconds>& affectedRanges,
+    std::shared_ptr<const EditableContentSnapshot> snap)
 {
     if (!snap) return;
 
@@ -4235,24 +4231,28 @@ void OpenTuneAudioProcessor::requestRenderForLocalMutationRange(ContentKey key,
     if (!snap->hasUsableOriginalF0()) return;
 
     const int64_t totalSamples = audioBuffer->getNumSamples();
-    const int64_t startSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, crsSampleRate));
-    const int64_t endSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, crsSampleRate));
-
-    if (endSample <= startSample) return;
+    std::vector<PlaybackSampleGeometry::SampleSpan> requestRanges;
+    requestRanges.reserve(affectedRanges.size());
+    for (const auto& range : affectedRanges)
+    {
+        const int64_t startSample = juce::jlimit<int64_t>(
+            0, totalSamples, TimeCoordinate::secondsToSamplesFloor(range.startSeconds, crsSampleRate));
+        const int64_t endSample = juce::jlimit<int64_t>(
+            0, totalSamples, TimeCoordinate::secondsToSamplesCeil(range.endSeconds, crsSampleRate));
+        if (endSample > startSample)
+            requestRanges.push_back({startSample, endSample});
+    }
+    if (requestRanges.empty()) return;
 
     RenderJob job;
     job.contentKey = key;
     job.renderCache = crs->getOrCreateRenderCache(key);
     job.audioBuffer = audioBuffer;
     job.audioSampleRate = crsSampleRate;
-    job.startSample = startSample;
-    job.endSampleExclusive = endSample;
     job.contentSnapshot = snap;
     job.contentRevision = snap->contentRevision;
 
-    crs->enqueueRender(std::move(job));
+    crs->enqueueRender(std::move(job), requestRanges);
 }
 
 void OpenTuneAudioProcessor::enqueueStage2WhenCanonicalSettled(
@@ -5270,7 +5270,7 @@ bool OpenTuneAudioProcessor::replaceContentNotesForFullMutation(ContentKey key, 
 
     // 发布由调用方统一负责：Scissors 提交事务（applyScissorsNotes）内
     // republishPlaybackSource；requestContentRefresh 经 onContentFullMutationCompleted
-    // → render 请求内 requestRenderForLocalMutationRange 的 republishPlaybackSource
+    // → render 请求内 requestRenderForLocalMutationRanges 的 republishPlaybackSource
     // 重建包络。此处不再发布，避免同一变更两次 publish（不含包络的中间态双发布）。
     return true;
 }
@@ -6094,14 +6094,9 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNotesAndSegmentsInter
     }
     if (ok) {
         notifyContentChanged(key);
-        auto renderRange = affectedRanges.front();
-        for (const auto& range : affectedRanges) {
-            renderRange.startFrame = std::min(renderRange.startFrame, range.startFrame);
-            renderRange.endFrameExclusive = std::max(renderRange.endFrameExclusive, range.endFrameExclusive);
-        }
-        onContentLocalMutationCompleted(key, renderRange);
         auto committedSnap = getContentSnapshot(key);
         jassert(committedSnap != nullptr);
+        onContentLocalMutationCompletedSeconds(key, secondsRanges, committedSnap);
         return committedSnap;
     }
     return {};
@@ -6153,8 +6148,7 @@ ContentCommitSnapshot OpenTuneAudioProcessor::commitContentNoteTopologyPatch(Con
         auto committedSnap = getContentSnapshot(key);
         onContentLocalMutationCompletedSeconds(
             key,
-            patch.affectedRange.startSeconds,
-            patch.affectedRange.endSeconds,
+            std::vector<NoteRangeSeconds>{patch.affectedRange},
             committedSnap);
         jassert(committedSnap != nullptr);
         return committedSnap;
@@ -6857,13 +6851,14 @@ bool OpenTuneAudioProcessor::commitAutoTunePlanByContentKey(ContentKey key,
 
     notifyContentChanged(key);
 
-    // render range 必须覆盖 applyCorrectionToRange 的 calculationRange（两侧各
+    // 渲染请求范围列表必须覆盖 applyCorrectionToRange 的 calculationRange（两侧各
     // expand getCorrectedF0BoundaryContextFrames 帧），否则边界处 chunk 保留旧
     // 音频，与新 correction segment 产生不连续 → click。
     const int maxFrame = static_cast<int>(snap->pitchCurve->getOriginalF0().size());
     const auto expandedRange = PitchCurve::expandNoteBasedCorrectionRange(
         startFrame, endFrameExclusive, maxFrame);
-    onContentLocalMutationCompleted(key, ContentEditRangeFrames{ expandedRange.startFrame, expandedRange.endFrameExclusive });
+    onContentLocalMutationCompleted(
+        key, std::vector<ContentEditRangeFrames>{{expandedRange.startFrame, expandedRange.endFrameExclusive}});
     return true;
 }
 

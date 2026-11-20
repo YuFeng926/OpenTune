@@ -15,6 +15,7 @@
 #include "Utils/LocalizationManager.h"
 #include "Utils/NoteGeneratorTypes.h"
 #include "Utils/PianoRollEditAction.h"
+#include "Utils/PitchCurve.h"
 #include "Utils/ScaleUiMapping.h"
 
 #include <algorithm>
@@ -478,6 +479,45 @@ std::vector<F0FrameRange> frameRanges(const PitchCurveSnapshot& curve, const Aut
                 out.push_back(*range);
         }
     }
+
+    std::sort(out.begin(), out.end(), [](const F0FrameRange& lhs, const F0FrameRange& rhs) {
+        return lhs.startFrame < rhs.startFrame;
+    });
+    std::vector<F0FrameRange> merged;
+    for (const auto& range : out) {
+        if (merged.empty() || range.startFrame > merged.back().endFrameExclusive) {
+            merged.push_back(range);
+            continue;
+        }
+        merged.back().endFrameExclusive = std::max(merged.back().endFrameExclusive,
+                                                    range.endFrameExclusive);
+    }
+    return merged;
+}
+
+/** Merge requested ranges only when their pitch-correction boundary contexts meet. */
+std::vector<F0FrameRange> correctionPlanningRanges(const PitchCurveSnapshot& curve,
+                                                    const std::vector<F0FrameRange>& requestedRanges)
+{
+    std::vector<F0FrameRange> out;
+    const int frameCount = static_cast<int>(curve.size());
+    for (const auto& range : requestedRanges) {
+        const auto expanded = PitchCurve::expandNoteBasedCorrectionRange(
+            range.startFrame, range.endFrameExclusive, frameCount);
+        if (expanded.isEmpty())
+            continue;
+
+        if (!out.empty()) {
+            const auto previous = PitchCurve::expandNoteBasedCorrectionRange(
+                out.back().startFrame, out.back().endFrameExclusive, frameCount);
+            if (expanded.startFrame <= previous.endFrameExclusive) {
+                out.back().endFrameExclusive = std::max(out.back().endFrameExclusive,
+                                                        range.endFrameExclusive);
+                continue;
+            }
+        }
+        out.push_back(range);
+    }
     return out;
 }
 
@@ -503,7 +543,6 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     std::vector<Note> afterNotes = beforeNotes;
     const juce::String description = autoTuneDescription();
     EditableContentSnapshot planning = *ref.snapshot;
-    F0FrameRange editRange;
     for (const auto& range : ranges) {
         planning.notes = afterNotes;
         auto predicted = commands->planAutoTuneContentRange(
@@ -511,40 +550,47 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         if (!predicted)
             continue;
         afterNotes = std::move(*predicted);
-        if (committed.empty())
-            editRange = range;
-        else {
-            editRange.startFrame = std::min(editRange.startFrame, range.startFrame);
-            editRange.endFrameExclusive = std::max(editRange.endFrameExclusive, range.endFrameExclusive);
-        }
         committed.push_back(range);
     }
-    std::string revisionAfter = versions.revision();
-    if (!committed.empty()) {
+
+    const auto correctionPlanRanges = correctionPlanningRanges(curve, committed);
+    std::vector<ContentEditRangeFrames> affectedRanges;
+    for (const auto& range : correctionPlanRanges) {
         planning.notes = afterNotes;
-        const auto correction = commands->planNoteCorrection(planning, afterNotes, editRange, generator);
+        const auto correction = commands->planNoteCorrection(planning, afterNotes, range, generator);
         if (!correction)
             return controlOpError("INTERNAL", "", "OpenTune did not plan the generated notes");
+
         afterNotes = correction->notes;
+        planning.notes = afterNotes;
         planning.pitchCurve = correction->correctedCurve;
-        if (!params.dryRun) {
-            auto edit = commands->commitNotesAndSegmentsUndoable(
-                ref.key, correction->notes, correction->segments,
-                ContentEditRangeFrames{correction->affectedRange.startFrame,
-                                       correction->affectedRange.endFrameExclusive},
-                description);
-            if (edit.snapshot == nullptr || edit.undoAction == nullptr)
-                return controlOpError("INTERNAL", "", "OpenTune did not commit the generated notes");
-            afterNotes = edit.snapshot->notes;
-            auto& manager = processor.getUndoManager();
-            const auto undoId = history.value()->assignUndoId(
-                manager, *edit.undoAction, manager.cursor() - 1, controlContentEpoch(context),
-                context.instanceShort());
-            const std::vector<std::string> names{controlUndoActionName(*edit.undoAction)};
-            envelope.setUndoable(undoId, description.toStdString(), names);
-            if (const auto now = controlLiveSnapshot(context, ref.key))
-                revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
-        }
+        affectedRanges.push_back({correction->affectedRange.startFrame,
+                                  correction->affectedRange.endFrameExclusive});
+    }
+
+    std::vector<PitchCorrectionSegment> segments;
+    for (const auto& segment : planning.pitchCurve->getCorrectionSegments())
+        if (std::any_of(affectedRanges.begin(), affectedRanges.end(), [&segment](const auto& range) {
+                return segment.startFrame < range.endFrameExclusive
+                    && segment.endFrame > range.startFrame;
+            }))
+            segments.push_back(segment);
+
+    std::string revisionAfter = versions.revision();
+    if (!affectedRanges.empty() && !params.dryRun) {
+        auto edit = commands->commitNotesAndSegmentsUndoableInRanges(
+            ref.key, afterNotes, segments, affectedRanges, description);
+        if (edit.snapshot == nullptr || edit.undoAction == nullptr)
+            return controlOpError("INTERNAL", "", "OpenTune did not commit the generated notes");
+        afterNotes = edit.snapshot->notes;
+        auto& manager = processor.getUndoManager();
+        const auto undoId = history.value()->assignUndoId(
+            manager, *edit.undoAction, manager.cursor() - 1, controlContentEpoch(context),
+            context.instanceShort());
+        const std::vector<std::string> names{controlUndoActionName(*edit.undoAction)};
+        envelope.setUndoable(undoId, description.toStdString(), names);
+        if (const auto now = controlLiveSnapshot(context, ref.key))
+            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
     }
 
     // Read a committed result back from the content owner for the response.

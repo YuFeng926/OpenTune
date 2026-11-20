@@ -626,12 +626,11 @@ void RenderCache::collectPlaybackSnapshots()
 
 RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
     const std::vector<PlannedChunk>& fullPlan,
-    int64_t requestStartSample,
-    int64_t requestEndSampleExclusive,
+    const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges,
     uint64_t contentRevision)
 {
     jassert(!fullPlan.empty());
-    jassert(requestEndSampleExclusive > requestStartSample);
+    jassert(!requestRanges.empty());
     jassert(contentRevision != 0);
 
     ReconcileResult result;
@@ -673,8 +672,11 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
                 && oldIt->first == startSample
                 && oldIt->second.endSampleExclusive == endSampleExclusive;
 
-            const bool intersectsRequest = planned.startSample < requestEndSampleExclusive
-                && endSampleExclusive > requestStartSample;
+            const PlaybackSampleGeometry::SampleSpan plannedSpan{startSample, endSampleExclusive};
+            const bool intersectsRequest = std::any_of(
+                requestRanges.begin(), requestRanges.end(), [&plannedSpan](const auto& requestRange) {
+                    return !PlaybackSampleGeometry::intersect(plannedSpan, requestRange).empty();
+                });
 
             if (sameSpan)
             {
@@ -796,8 +798,7 @@ RenderCache::ReconcileResult RenderCache::reconcileFullPlanAndRequest(
 
     AppLogger::log("RenderCache::reconcileFullPlanAndRequest"
         " fullPlan=" + juce::String(static_cast<juce::int64>(fullPlan.size()))
-        + " requestStart=" + juce::String(requestStartSample)
-        + " requestEnd=" + juce::String(requestEndSampleExclusive)
+        + " requestRangeCount=" + juce::String(static_cast<juce::int64>(requestRanges.size()))
         + " pendingChunks=" + juce::String(static_cast<juce::int64>(pendingChunkCount))
         + " stateChanged=" + juce::String(result.stateChanged ? 1 : 0)
         + " geometryChanged=" + juce::String(geometryChanged ? 1 : 0));

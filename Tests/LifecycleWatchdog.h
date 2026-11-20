@@ -12,7 +12,6 @@
 namespace OpenTuneTest {
 
 inline constexpr unsigned long lifecycleWatchdogApprovalTimeoutMs = 3000;
-inline constexpr unsigned long lifecycleQueueApprovalLimit = 100;
 
 #if defined(_WIN32)
 

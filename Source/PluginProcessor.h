@@ -48,6 +48,7 @@
 #include "Utils/SourceWindow.h"
 #include "Utils/SilentGapDetector.h"
 #include "Utils/TimeCoordinate.h"
+#include "Utils/Note.h"
 #include "Utils/UndoManager.h"
 #include "Plugin/ReaperHostBridge.h"   // declarations only; the .cpp is built for the plugin
 #include "Utils/PianoKeyAudition.h"
@@ -713,15 +714,14 @@ public:
 
     std::shared_ptr<ContentEditCommands> getContentCommands() const { return contentCommands_; }
 
-    // Local edits carry their precise range; full mutations rebuild all content.
+    // Local edits carry their precise ranges; full mutations rebuild all content.
     // 秒域 local-mutation helper：保持现有 ARA/非 ARA 单一 Stage1 调度；
     // 帧域入口只负责按 pitchCurve hop 换算后调用它。
     void onContentLocalMutationCompletedSeconds(ContentKey key,
-                                               double startSeconds,
-                                               double endSeconds,
+                                               const std::vector<NoteRangeSeconds>& affectedRanges,
                                                std::shared_ptr<const EditableContentSnapshot> snapshot);
     void onContentLocalMutationCompleted(ContentKey key,
-                                         ContentEditRangeFrames affectedRange);
+                                         const std::vector<ContentEditRangeFrames>& affectedRanges);
     void onContentFullMutationCompleted(ContentKey key);
     void notifyContentEditCompleted(ContentKey key);
 
@@ -1123,10 +1123,9 @@ private:
     // Hard-cut render mutation request primitive. This is the only path
     // that builds RenderJob and enqueues into ContentRenderService; every other
     // mutation entry point funnels through the two sinks above.
-    void requestRenderForLocalMutationRange(
+    void requestRenderForLocalMutationRanges(
         ContentKey key,
-        double startSeconds,
-        double endSeconds,
+        const std::vector<NoteRangeSeconds>& affectedRanges,
         std::shared_ptr<const EditableContentSnapshot> snapshot);
 
     // Owner-truth-only write helpers. These update the underlying content stores without triggering

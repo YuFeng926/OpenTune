@@ -470,8 +470,7 @@ int runChild(int argc, char** argv)
 {
     juce::ignoreUnused(argc, argv);
     OpenTuneTest::trace("ARALifecycleContractTests", "process_begin", {
-        {"watchdogMs", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs)},
-        {"queueLimit", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleQueueApprovalLimit)}
+        {"watchdogMs", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs)}
     });
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     const auto* factory = createARAFactory();

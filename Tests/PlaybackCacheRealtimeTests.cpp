@@ -83,7 +83,7 @@ bool testBlankPreparedBuildFailureRollsBack()
     {
         OpenTune::RenderCache cache;
         cache.prepareForPlaybackSampleRate(48000.0);
-        cache.reconcileFullPlanAndRequest({{0, 256}, {256, 512}}, 0, 512, 1);
+        cache.reconcileFullPlanAndRequest({{0, 256}, {256, 512}}, {{0, 512}}, 1);
         const auto jobs = cache.getPendingJobs();
         bool claimed = jobs.size() == 2;
         for (const auto& job : jobs)

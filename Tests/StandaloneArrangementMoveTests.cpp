@@ -16,10 +16,13 @@
 #include "../Source/Control/ControlUiBridge.h"
 #include "../Source/Control/Edit/ControlOriginAction.h"
 #include "../Source/Control/Ops/ArrangementOps.h"
+#include "../Source/Control/Ops/ContentTuneOps.h"
 #include "../Source/Control/Ops/OpsRegistry.h"
+#include "../Source/Control/Ops/OpsSupport.h"
 #include "../Source/Control/Ops/ProjectReadOps.h"
 #include "../Source/Control/Ops/TrackOps.h"
 #include "../Source/Control/Ops/UndoOps.h"
+#include "../Source/Render/RenderChunkPlanner.h"
 
 #include <string>
 #endif
@@ -759,6 +762,206 @@ bool testControlDeleteUndoSurvivesSweep()
            });
 }
 
+bool testControlAutoTunePreservesUnrequestedCorrectionGap()
+{
+    ProcessorFixture fixture;
+    auto& processor = fixture.processor;
+    auto* repository = processor.getStandaloneContentRepository();
+    if (repository == nullptr)
+        return false;
+
+    const auto key = repository->createClip();
+    auto* content = repository->findClip(key);
+    if (content == nullptr)
+        return false;
+
+    constexpr int sampleCount = 1058304;
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(2, sampleCount);
+    for (int channel = 0; channel < audio->getNumChannels(); ++channel)
+    {
+        auto* samples = audio->getWritePointer(channel);
+        for (int sample = 0; sample < sampleCount; ++sample)
+            samples[sample] = (sample & 1) == 0 ? 0.012f : -0.012f;
+        std::fill_n(samples + 348390, 8820, 0.0f);
+        std::fill_n(samples + 701190, 8820, 0.0f);
+    }
+    content->content().sourceWindow = {
+        111, {}, 0.0, static_cast<double>(sampleCount) / OpenTune::RenderCache::kSampleRate};
+    content->content().nativeSource = {audio, OpenTune::RenderCache::kSampleRate, 0};
+    content->applyAudioBuffer(audio, OpenTune::RenderCache::kSampleRate);
+    content->content().analysis.silentGaps = OpenTune::SilentGapDetector::detectAllGapsAdaptive(*audio);
+    if (!expect(content->content().analysis.silentGaps.size() == 2,
+                "multi-range AUTO fixture must detect its two split gaps"))
+        return false;
+
+    auto curve = std::make_shared<OpenTune::PitchCurve>();
+    curve->setSampleRate(16000.0);
+    curve->setHopSize(160);
+    curve->setOriginalF0(std::vector<float>(2400, 220.0f));
+    curve->setManualCorrectionRange(
+        1000, 1010, std::vector<float>(10, 330.0f), OpenTune::PitchCorrectionSegment::Source::HandDraw);
+    content->applyOriginalF0(std::move(curve));
+
+    const auto makeNote = [](double start, double end, float pitch) {
+        OpenTune::Note note;
+        note.startTime = start;
+        note.endTime = end;
+        note.pitch = pitch;
+        note.originalPitch = pitch;
+        return note;
+    };
+    content->applyNotes({makeNote(0.02, 0.18, 330.0f), makeNote(10.0, 10.1, 220.0f),
+                         makeNote(20.02, 20.18, 330.0f)});
+
+    const auto correctionAt = [](const std::vector<OpenTune::PitchCorrectionSegment>& segments,
+                                 int frame) {
+        for (const auto& segment : segments)
+            if (frame >= segment.startFrame && frame < segment.endFrame)
+                return segment.f0Data[static_cast<std::size_t>(frame - segment.startFrame)];
+        return -1.0f;
+    };
+    const auto hasNoteInRange = [](const std::vector<OpenTune::Note>& notes, double start, double end) {
+        return std::any_of(notes.begin(), notes.end(), [start, end](const OpenTune::Note& note) {
+            return note.endTime > start && note.startTime < end;
+        });
+    };
+    const auto hasOriginalSelectedPitch = [](const std::vector<OpenTune::Note>& notes) {
+        return std::any_of(notes.begin(), notes.end(), [](const OpenTune::Note& note) {
+            return std::abs(note.pitch - 330.0f) <= 0.001f;
+        });
+    };
+    const auto before = processor.getContentSnapshot(key);
+    if (before == nullptr || before->pitchCurve == nullptr
+        || std::abs(correctionAt(before->pitchCurve->getCorrectionSegments(), 1005) - 330.0f) > 0.001f)
+        return false;
+
+    auto* renderService = processor.getContentRenderService();
+    if (renderService == nullptr)
+        return false;
+    renderService->pauseRenderWorker();
+    auto renderCache = renderService->getOrCreateRenderCache(key);
+    renderService->publishPlaybackSource(
+        key, OpenTune::makePlaybackReadSource(
+                 key, before, before->nativeSource, before->audioBuffer, before->audioSampleRate,
+                 before->firstCanonicalSample, renderCache, renderService->getTimeStretchCache()));
+
+    const auto plannedChunks = OpenTune::RenderChunkPlanner::selectChunksIntersectingRange(
+        sampleCount, before->silentGaps, {}, 0, sampleCount,
+        OpenTune::RenderChunkPlanner::kRenderHopSize);
+    std::vector<OpenTune::RenderCache::PlannedChunk> fullPlan;
+    fullPlan.reserve(plannedChunks.size());
+    for (const auto& range : plannedChunks)
+        fullPlan.push_back({range.startSample, range.endSampleExclusive});
+    renderCache->reconcileFullPlanAndRequest(fullPlan, {{0, sampleCount}}, before->contentRevision);
+
+    auto initialJobs = renderCache->getPendingJobs();
+    if (!expect(initialJobs.size() == 3
+                    && initialJobs[0].startSample == 0 && initialJobs[0].endSampleExclusive == 352768
+                    && initialJobs[1].startSample == 352768 && initialJobs[1].endSampleExclusive == 705536
+                    && initialJobs[2].startSample == 705536 && initialJobs[2].endSampleExclusive == sampleCount,
+                "multi-range AUTO fixture must plan three stable cache chunks"))
+        return false;
+    for (const auto& job : initialJobs)
+        if (!renderCache->claimPendingJob(job)
+            || renderCache->completeChunkRenderWithAudio(
+                   job.startSample, job.endSampleExclusive,
+                   std::vector<float>(static_cast<std::size_t>(job.endSampleExclusive - job.startSample), 0.0f),
+                   job.targetRevision) != OpenTune::RenderCache::ChunkRenderResult::Published)
+            return expect(false, "multi-range AUTO fixture must settle its initial cache chunks");
+    if (!expect(renderCache->isCanonicalSettled(), "multi-range AUTO fixture cache must start settled"))
+        return false;
+
+    const auto pendingOnlyAtRequestedEdges = [&renderCache, &initialJobs]() {
+        const auto pending = renderCache->getPendingJobs();
+        const auto stats = renderCache->getChunkStats();
+        return pending.size() == 2
+            && pending[0].startSample == initialJobs[0].startSample
+            && pending[0].endSampleExclusive == initialJobs[0].endSampleExclusive
+            && pending[1].startSample == initialJobs[2].startSample
+            && pending[1].endSampleExclusive == initialJobs[2].endSampleExclusive
+            && stats.pending == 2 && stats.idle == 1 && stats.running == 0
+            && stats.total() == static_cast<int>(initialJobs.size());
+    };
+
+    ArrangementUndoBridge bridge(processor);
+    OpenTune::ControlInstanceFacts facts;
+    facts.instanceId = "0123456789abcdef0123456789abcdef";
+    auto history = std::make_shared<OpenTune::ControlHistory>();
+    OpenTune::ControlOpContext context(processor, &bridge, facts, nullptr, {}, history);
+    const auto contentId = OpenTune::controlContentId(context, key);
+    const auto revision = OpenTune::controlContentVersions(context, contentId, *before).revision();
+
+    auto params = OpenTune::JsonValue::object();
+    params.appendMember("contentId", OpenTune::JsonValue::string(contentId));
+    params.appendMember("mode", OpenTune::JsonValue::string("regenerate"));
+    params.appendMember("expectedRevision", OpenTune::JsonValue::string(revision));
+    auto tuneKey = OpenTune::JsonValue::object();
+    tuneKey.appendMember("root", OpenTune::JsonValue::integer(0));
+    tuneKey.appendMember("scale", OpenTune::JsonValue::string("major"));
+    params.appendMember("key", std::move(tuneKey));
+    auto ranges = OpenTune::JsonValue::array();
+    const auto appendRange = [&ranges](const char* startText, double start,
+                                       const char* endText, double end) {
+        auto range = OpenTune::JsonValue::object();
+        range.appendMember("startContentSec", OpenTune::JsonValue::number(startText, start));
+        range.appendMember("endContentSec", OpenTune::JsonValue::number(endText, end));
+        ranges.append(std::move(range));
+    };
+    appendRange("20", 20.0, "20.2", 20.2);
+    appendRange("0", 0.0, "0.2", 0.2);
+    params.appendMember("ranges", std::move(ranges));
+
+    OpenTune::ControlMethodTable methods;
+    OpenTune::registerContentTuneOps(methods);
+    OpenTune::JsonValue response;
+    if (!runControlMethod(methods, "content.autoTune", context, params, response)
+        || processor.getUndoManager().size() != 1)
+        return false;
+
+    if (!expect(pendingOnlyAtRequestedEdges(),
+                "multi-range AUTO commit must queue only intersecting edge chunks"))
+        return false;
+    const auto after = processor.getContentSnapshot(key);
+    if (!expect(after != nullptr && after->pitchCurve != nullptr
+                    && hasNoteInRange(after->notes, 0.0, 0.2)
+                    && hasNoteInRange(after->notes, 20.0, 20.2)
+                    && !hasOriginalSelectedPitch(after->notes)
+                    && std::abs(correctionAt(after->pitchCurve->getCorrectionSegments(), 1005) - 330.0f)
+                           <= 0.001f,
+                "multi-range AUTO must edit selected notes and preserve the gap correction"))
+        return false;
+
+    auto& editHistory = processor.getUndoManager();
+    if (!expect(editHistory.undo() != nullptr, "multi-range AUTO must be undoable"))
+        return false;
+    if (!expect(pendingOnlyAtRequestedEdges(),
+                "multi-range AUTO undo must queue only intersecting edge chunks"))
+        return false;
+    const auto undone = processor.getContentSnapshot(key);
+    if (!expect(undone != nullptr && undone->pitchCurve != nullptr && undone->notes.size() == 3
+                    && hasNoteInRange(undone->notes, 0.0, 0.2)
+                    && hasNoteInRange(undone->notes, 20.0, 20.2)
+                    && hasOriginalSelectedPitch(undone->notes)
+                    && std::abs(correctionAt(undone->pitchCurve->getCorrectionSegments(), 1005) - 330.0f)
+                           <= 0.001f,
+                "multi-range AUTO undo must restore requested notes and preserve the gap correction"))
+        return false;
+
+    if (!expect(editHistory.redo() != nullptr, "multi-range AUTO must be redoable"))
+        return false;
+    if (!expect(pendingOnlyAtRequestedEdges(),
+                "multi-range AUTO redo must queue only intersecting edge chunks"))
+        return false;
+    const auto redone = processor.getContentSnapshot(key);
+    return expect(redone != nullptr && redone->pitchCurve != nullptr
+                      && hasNoteInRange(redone->notes, 0.0, 0.2)
+                      && hasNoteInRange(redone->notes, 20.0, 20.2)
+                      && !hasOriginalSelectedPitch(redone->notes)
+                      && std::abs(correctionAt(redone->pitchCurve->getCorrectionSegments(), 1005) - 330.0f)
+                             <= 0.001f,
+                  "multi-range AUTO redo must restore requested edits and preserve the gap correction");
+}
+
 bool runTrackSet(const OpenTune::ControlMethod& method, OpenTune::ControlOpContext& context,
                  const char* field, const char* value, OpenTune::JsonValue& response)
 {
@@ -883,6 +1086,8 @@ int main()
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
     passed = passed && expect(testTrackSetVolumeWarnings(), "Control track volume regression failed");
     passed = passed && expect(testControlDeleteUndoSurvivesSweep(), "Control delete/undo regression failed");
+    passed = passed && expect(testControlAutoTunePreservesUnrequestedCorrectionGap(),
+                              "Control multi-range AUTO correction regression failed");
 #endif
     if (!passed)
         std::cerr << "StandaloneArrangementMoveTests failed\n";

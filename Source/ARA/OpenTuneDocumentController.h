@@ -22,6 +22,8 @@
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "../Content/OriginalF0FailureEvent.h"
+#include "../Utils/Note.h"
+#include "../Utils/PlaybackSampleGeometry.h"
 #include "../Utils/PlayHeadState.h"
 #include "../Utils/HostTransportCoalescer.h"
 #include "PlaybackRegion.h"
@@ -91,10 +93,9 @@ public:
     const ContentRenderService* getContentRenderService() const noexcept;
     std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
     // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
-    void requestModificationRender(
+    void requestModificationRenderRanges(
         ContentKey key,
-        double startSeconds,
-        double endSeconds,
+        const std::vector<NoteRangeSeconds>& affectedRanges,
         std::shared_ptr<const EditableContentSnapshot> snapshot);
     void requestFullModificationRender(
         ContentKey key,
@@ -185,10 +186,10 @@ protected:
     juce::ARAEditorView* doCreateEditorView() override;
 
 private:
-    void requestModificationRenderSamples(ContentKey key,
-                                          int64_t startSample,
-                                          int64_t endSampleExclusive,
-                                          std::shared_ptr<const EditableContentSnapshot> snapshot);
+    void requestModificationRenderSampleRanges(
+        ContentKey key,
+        const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges,
+        std::shared_ptr<const EditableContentSnapshot> snapshot);
 
     std::vector<AudioSource> audioSources_;
     std::list<AudioModification> audioModifications_;

@@ -2778,10 +2778,9 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneDocumentController::snaps
     return mod->snapshotContent();
 }
 
-void OpenTuneDocumentController::requestModificationRender(
+void OpenTuneDocumentController::requestModificationRenderRanges(
     ContentKey key,
-    double startSeconds,
-    double endSeconds,
+    const std::vector<NoteRangeSeconds>& affectedRanges,
     std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
     PlaybackReadSource readSource;
@@ -2792,20 +2791,28 @@ void OpenTuneDocumentController::requestModificationRender(
         return;
 
     const int64_t totalSamples = readSource.canonicalBuffer->getNumSamples();
-    const int64_t startSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesFloor(startSeconds, readSource.canonicalSampleRate));
-    const int64_t endSample = juce::jlimit<int64_t>(
-        0, totalSamples, TimeCoordinate::secondsToSamplesCeil(endSeconds, readSource.canonicalSampleRate));
-    requestModificationRenderSamples(key, startSample, endSample, std::move(snapshot));
+    std::vector<PlaybackSampleGeometry::SampleSpan> requestRanges;
+    requestRanges.reserve(affectedRanges.size());
+    for (const auto& range : affectedRanges)
+    {
+        const int64_t startSample = juce::jlimit<int64_t>(
+            0, totalSamples,
+            TimeCoordinate::secondsToSamplesFloor(range.startSeconds, readSource.canonicalSampleRate));
+        const int64_t endSample = juce::jlimit<int64_t>(
+            0, totalSamples,
+            TimeCoordinate::secondsToSamplesCeil(range.endSeconds, readSource.canonicalSampleRate));
+        if (endSample > startSample)
+            requestRanges.push_back({startSample, endSample});
+    }
+    requestModificationRenderSampleRanges(key, requestRanges, std::move(snapshot));
 }
 
-void OpenTuneDocumentController::requestModificationRenderSamples(
+void OpenTuneDocumentController::requestModificationRenderSampleRanges(
     ContentKey key,
-    int64_t startSample,
-    int64_t endSampleExclusive,
+    const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges,
     std::shared_ptr<const EditableContentSnapshot> snapshot)
 {
-    if (contentRenderService_ == nullptr || endSampleExclusive <= startSample)
+    if (contentRenderService_ == nullptr || requestRanges.empty())
         return;
 
     PlaybackReadSource readSource;
@@ -2815,9 +2822,16 @@ void OpenTuneDocumentController::requestModificationRenderSamples(
         return;
 
     const int64_t totalSamples = readSource.canonicalBuffer->getNumSamples();
-    startSample = juce::jlimit<int64_t>(0, totalSamples, startSample);
-    endSampleExclusive = juce::jlimit<int64_t>(0, totalSamples, endSampleExclusive);
-    if (endSampleExclusive <= startSample)
+    std::vector<PlaybackSampleGeometry::SampleSpan> clampedRanges;
+    clampedRanges.reserve(requestRanges.size());
+    for (const auto& range : requestRanges)
+    {
+        const int64_t startSample = juce::jlimit<int64_t>(0, totalSamples, range.begin);
+        const int64_t endSample = juce::jlimit<int64_t>(0, totalSamples, range.end);
+        if (endSample > startSample)
+            clampedRanges.push_back({startSample, endSample});
+    }
+    if (clampedRanges.empty())
         return;
 
     if (!snapshot || !contentRenderService_->republishPlaybackSource(key, snapshot))
@@ -2833,13 +2847,11 @@ void OpenTuneDocumentController::requestModificationRenderSamples(
     job.contentKey = key;
     job.audioBuffer = readSource.canonicalBuffer;
     job.audioSampleRate = readSource.canonicalSampleRate;
-    job.startSample = startSample;
-    job.endSampleExclusive = endSampleExclusive;
     job.renderCache = contentRenderService_->getOrCreateRenderCache(key);
     job.contentSnapshot = std::move(snapshot);
     job.contentRevision = job.contentSnapshot->contentRevision;
 
-    contentRenderService_->enqueueRender(std::move(job));
+    contentRenderService_->enqueueRender(std::move(job), clampedRanges);
 }
 
 void OpenTuneDocumentController::requestFullModificationRender(
@@ -2861,8 +2873,10 @@ void OpenTuneDocumentController::requestFullModificationRender(
     if (readSource.canonicalBuffer == nullptr || readSource.canonicalSampleRate <= 0.0)
         return;
 
-    requestModificationRenderSamples(
-        key, 0, readSource.canonicalBuffer->getNumSamples(), std::move(snapshot));
+    requestModificationRenderSampleRanges(
+        key,
+        std::vector<PlaybackSampleGeometry::SampleSpan>{{0, readSource.canonicalBuffer->getNumSamples()}},
+        std::move(snapshot));
 }
 
 void OpenTuneDocumentController::invalidateAllModificationCaches()

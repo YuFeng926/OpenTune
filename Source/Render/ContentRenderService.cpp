@@ -196,13 +196,15 @@ void ContentRenderService::notifyBackendChanged()
     renderWorker_.notifyBackendChanged();
 }
 
-void ContentRenderService::enqueueRender(RenderJob job)
+void ContentRenderService::enqueueRender(
+    RenderJob job,
+    const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges)
 {
     if (job.kind != RenderJob::Kind::Stage1Render
         || job.renderCache == nullptr
         || job.contentSnapshot == nullptr
         || job.audioBuffer == nullptr
-        || job.endSampleExclusive <= job.startSample)
+        || requestRanges.empty())
         return;
 
     job.contentRevision = job.contentSnapshot->contentRevision;
@@ -251,8 +253,7 @@ void ContentRenderService::enqueueRender(RenderJob job)
     renderWorker_.reconcileAndSyncStage1Queue(job, [&]() {
         const auto reconcileResult = job.renderCache->reconcileFullPlanAndRequest(
             fullPlan,
-            job.startSample,
-            job.endSampleExclusive,
+            requestRanges,
             job.contentSnapshot->contentRevision);
 
         if (reconcileResult.stateChanged)

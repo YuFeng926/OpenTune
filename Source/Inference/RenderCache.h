@@ -56,10 +56,10 @@ public:
     struct ReconcileResult {
         bool stateChanged{false};
     };
-    ReconcileResult reconcileFullPlanAndRequest(const std::vector<PlannedChunk>& fullPlan,
-                                                int64_t requestStartSample,
-                                                int64_t requestEndSampleExclusive,
-                                                uint64_t contentRevision);
+    ReconcileResult reconcileFullPlanAndRequest(
+        const std::vector<PlannedChunk>& fullPlan,
+        const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges,
+        uint64_t contentRevision);
 
     struct PendingJob {
         int64_t startSample{0};

@@ -1937,19 +1937,6 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME DrawNoteEditTests COMMAND OpenTuneDrawNoteEditTests)
 
-    add_executable(OpenTuneNoteDraftEditTests
-        Tests/NoteDraftEditTests.cpp
-        Source/Utils/NoteDraftEdit.cpp)
-    target_include_directories(OpenTuneNoteDraftEditTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_compile_definitions(OpenTuneNoteDraftEditTests PRIVATE
-        JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_USE_CURL=0)
-    target_link_libraries(OpenTuneNoteDraftEditTests PRIVATE
-        juce::juce_audio_basics juce::juce_core)
-    if(MSVC)
-        target_compile_options(OpenTuneNoteDraftEditTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME NoteDraftEditTests COMMAND OpenTuneNoteDraftEditTests)
-
     add_executable(OpenTuneNoteResizeEditTests
         Tests/NoteResizeEditTests.cpp
         Source/Utils/NoteResizeEdit.cpp

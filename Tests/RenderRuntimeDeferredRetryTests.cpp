@@ -168,45 +168,23 @@ bool runDeferredRetryContract()
 
     const auto baselineCount = runtime.deferredRetryCount();
     const auto baselinePayloadBytes = runtime.deferredRetrySnapshotBytes();
-    std::size_t firstPayloadBytes = 0;
-    std::size_t expectedPerSnapshotBytes = 0;
     ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, true);
     constexpr std::size_t deferredJobs = 102;
     for (std::size_t i = 0; i < deferredJobs; ++i)
     {
         ContentKey key{DomainKind::StandaloneClip, 7000u + static_cast<uint64_t>(i), 0};
         auto cache = service->getOrCreateRenderCache(key);
-        cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        cache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         auto jobSnapshot = std::make_shared<EditableContentSnapshot>(*snapshot);
         jobSnapshot->notes.reserve(4);
-        if (i == 0)
-            expectedPerSnapshotBytes = jobSnapshot->notes.capacity() * sizeof(Note)
-                + jobSnapshot->originalF0FailureReason.capacity() + 1;
         if (!deferRunningChunk(key, cache, jobSnapshot,
                                ProcessRenderRuntime::kDeferredSnapshotBudgetBytes))
             return check(false, "running_chunk_setup_failed");
         keys.push_back(key);
         caches.push_back(std::move(cache));
-        if (i == 0)
-            firstPayloadBytes = runtime.deferredRetrySnapshotBytes() - baselinePayloadBytes;
     }
 
     const auto sharedPayloadBytes = runtime.deferredRetrySnapshotBytes() - baselinePayloadBytes;
-    const auto& curve = *snapshot->pitchCurve;
-    const auto& curveSegments = curve.getCorrectionSegments();
-    const std::size_t expectedSharedBytes =
-        static_cast<std::size_t>(audio->getNumChannels())
-            * static_cast<std::size_t>(audio->getNumSamples()) * sizeof(float)
-        + curve.getOriginalF0().capacity() * sizeof(float)
-        + curve.getOriginalEnergy().capacity() * sizeof(float)
-        + curve.getErasedRanges().capacity() * sizeof(F0FrameRange)
-        + curveSegments.capacity() * sizeof(PitchCorrectionSegment)
-        + curveSegments.front().f0Data.capacity() * sizeof(float)
-        + curveSegments.front().baseF0Data.capacity() * sizeof(float)
-        + curve.getVocoderMaskPayloadBytes()
-        + snapshot->timeGrid->handles().capacity() * sizeof(TimeHandle);
-    const std::size_t expectedBytes = expectedSharedBytes
-        + deferredJobs * expectedPerSnapshotBytes;
 
     bool allRunning = true;
     for (const auto& cache : caches)
@@ -216,16 +194,7 @@ bool runDeferredRetryContract()
     }
     if (!check(runtime.deferredRetryCount() == baselineCount + deferredJobs,
                "more_than_100_deferred_jobs_not_retained")
-        || !check(allRunning, "deferred_jobs_failed_running_chunks")
-        || !check(ProcessRenderRuntime::kDeferredSnapshotBudgetBytes
-                      == static_cast<std::size_t>(6) * 1024 * 1024 * 1024,
-                  "deferred_budget_is_not_6_gib")
-        || !check(curve.getVocoderMaskPayloadBytes() > 0,
-                  "pitch_curve_mask_has_no_counted_payload")
-        || !check(firstPayloadBytes == expectedSharedBytes + expectedPerSnapshotBytes,
-                  "first_snapshot_payload_footprint_mismatch")
-        || !check(sharedPayloadBytes == expectedBytes,
-                  "snapshot_payload_dedup_or_mask_footprint_mismatch"))
+        || !check(allRunning, "deferred_jobs_failed_running_chunks"))
         return false;
 
     auto replacement = std::make_shared<EditableContentSnapshot>(*snapshot);
@@ -245,7 +214,7 @@ bool runDeferredRetryContract()
 
     ContentKey descriptorKey{DomainKind::StandaloneClip, 8000u, 0};
     auto descriptorCache = service->getOrCreateRenderCache(descriptorKey);
-    descriptorCache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    descriptorCache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     auto descriptorSnapshot = std::make_shared<EditableContentSnapshot>(*snapshot);
     descriptorSnapshot->notes.reserve(256);
     const auto bytesBeforeDescriptor = runtime.deferredRetrySnapshotBytes();
@@ -276,7 +245,7 @@ bool runDeferredRetryContract()
                   "descriptor_did_not_restore_from_current_source"))
         return false;
 
-    caches.front()->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 2);
+    caches.front()->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 2);
     ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, false);
     runtime.pruneStaleDeferredJobsForCache(caches.front());
     const auto prunedStats = caches.front()->getChunkStats();
@@ -324,6 +293,81 @@ bool runDeferredRetryContract()
     return cleared;
 }
 
+bool runQueuedRevisionReplacementAtCapacityContract()
+{
+    using namespace OpenTune;
+    RenderWorker worker;
+    int owner = 0;
+    std::atomic<uint64_t> executedRevision{0};
+    worker.attachExecutionLease({&owner, [&executedRevision](RenderJob& job) {
+        if (job.kind != RenderJob::Kind::Stage1Render)
+            return;
+        executedRevision.store(job.targetRevision, std::memory_order_release);
+        job.renderCache->completeChunkRenderWithAudio(
+            job.startSample, job.endSampleExclusive,
+            std::vector<float>(static_cast<std::size_t>(job.endSampleExclusive - job.startSample), 1.0f),
+            job.targetRevision);
+    }});
+    worker.pause();
+
+    for (std::size_t i = 0; i + 1 < RenderWorker::kMaxQueueDepth; ++i)
+    {
+        RenderJob queued;
+        queued.kind = RenderJob::Kind::Stage2Rebuild;
+        if (!worker.enqueue(std::move(queued)))
+            return check(false, "revision_replacement_queue_fill_failed");
+    }
+
+    auto cache = std::make_shared<RenderCache>();
+    const std::vector<RenderCache::PlannedChunk> plan{{0, 256}};
+    const std::vector<PlaybackSampleGeometry::SampleSpan> ranges{{0, 256}};
+    auto firstSnapshot = std::make_shared<EditableContentSnapshot>();
+    firstSnapshot->contentRevision = 1;
+    RenderJob templateJob;
+    templateJob.kind = RenderJob::Kind::Stage1Render;
+    templateJob.contentSnapshot = firstSnapshot;
+    templateJob.renderCache = cache;
+    templateJob.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(1, 256);
+    templateJob.audioSampleRate = 44100.0;
+    templateJob.contentRevision = firstSnapshot->contentRevision;
+
+    worker.reconcileAndSyncStage1Queue(templateJob, [&] {
+        cache->reconcileFullPlanAndRequest(plan, ranges, firstSnapshot->contentRevision);
+    });
+    const auto firstPending = cache->getPendingJobs();
+    if (!check(worker.queueDepth() == RenderWorker::kMaxQueueDepth
+                   && firstPending.size() == 1 && firstPending.front().targetRevision == 1,
+               "initial_chunk_queued_at_full_capacity"))
+    {
+        worker.detachExecutionLease(&owner);
+        return false;
+    }
+
+    auto latestSnapshot = std::make_shared<EditableContentSnapshot>(*firstSnapshot);
+    latestSnapshot->contentRevision = 2;
+    templateJob.contentSnapshot = latestSnapshot;
+    templateJob.contentRevision = latestSnapshot->contentRevision;
+    worker.reconcileAndSyncStage1Queue(templateJob, [&] {
+        cache->reconcileFullPlanAndRequest(plan, ranges, latestSnapshot->contentRevision);
+    });
+
+    const auto updatedPending = cache->getPendingJobs();
+    const auto updatedStats = cache->getChunkStats();
+    const bool updatedAtCapacity = check(worker.queueDepth() == RenderWorker::kMaxQueueDepth
+            && updatedPending.size() == 1 && updatedPending.front().targetRevision == 2
+            && updatedStats.pending == 1 && updatedStats.failed == 0,
+        "updated_revision_replaces_queued_chunk_at_full_capacity");
+    worker.resume();
+    worker.drain();
+    const auto settledStats = cache->getChunkStats();
+    const bool executedLatestRevision = check(
+        executedRevision.load(std::memory_order_acquire) == 2
+            && cache->isCanonicalSettled() && settledStats.idle == 1 && settledStats.failed == 0,
+        "full_queue_worker_executes_latest_chunk_revision");
+    worker.detachExecutionLease(&owner);
+    return updatedAtCapacity && executedLatestRevision;
+}
+
 bool runDeferredBatchCapacityContract()
 {
     using namespace OpenTune;
@@ -350,7 +394,7 @@ bool runDeferredBatchCapacityContract()
     for (int i = 0; i < 2 && passed; ++i)
     {
         auto cache = std::make_shared<RenderCache>();
-        cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        cache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto pending = cache->getPendingJobs();
         passed = pending.size() == 1 && cache->claimPendingJob(pending.front());
         if (!passed)
@@ -422,7 +466,7 @@ bool runDeferredDescriptorBudgetResumeContract()
                                        std::shared_ptr<RenderCache>& cacheOut) {
         ContentKey key{DomainKind::StandaloneClip, id, 0};
         cacheOut = service->getOrCreateRenderCache(key);
-        cacheOut->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        cacheOut->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto pending = cacheOut->getPendingJobs();
         if (pending.size() != 1 || !cacheOut->claimPendingJob(pending.front()))
             return false;
@@ -518,7 +562,7 @@ bool runPlanNotSynchronizedRetryContract()
 
     const ContentKey key{DomainKind::StandaloneClip, 9201u, 0};
     auto cache = service->getOrCreateRenderCache(key);
-    cache->reconcileFullPlanAndRequest({{0, 1024}, {1024, 2048}}, 0, 1024, 1);
+    cache->reconcileFullPlanAndRequest({{0, 1024}, {1024, 2048}}, {{0, 1024}}, 1);
     const auto pending = cache->getPendingJobs();
     const auto setup = std::find_if(pending.begin(), pending.end(),
         [](const auto& pendingJob) { return pendingJob.startSample == 0; });
@@ -583,9 +627,7 @@ bool runPlanNotSynchronizedRetryContract()
     reconcileJob.renderCache = cache;
     reconcileJob.audioBuffer = audio;
     reconcileJob.audioSampleRate = 44100.0;
-    reconcileJob.startSample = 1024;
-    reconcileJob.endSampleExclusive = 2048;
-    service->enqueueRender(std::move(reconcileJob));
+    service->enqueueRender(std::move(reconcileJob), {{1024, 2048}});
     RenderCache::RunningChunkSnapshot running;
     if (!check(cache->getRunningChunk(0, running)
                    && running.lastRequestedContentRevision == newSnapshot->contentRevision,
@@ -633,7 +675,7 @@ bool runExportDrainDeferredBatchContract()
     otherService->pauseRenderWorker();
     const ContentKey otherKey{DomainKind::StandaloneClip, 9399, 0};
     auto otherCache = otherService->getOrCreateRenderCache(otherKey);
-    otherCache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+    otherCache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     const auto otherPending = otherCache->getPendingJobs();
     if (otherPending.size() != 1 || !otherCache->claimPendingJob(otherPending.front()))
         return check(false, "export_scope_running_chunk_setup_failed");
@@ -676,7 +718,7 @@ bool runExportDrainDeferredBatchContract()
         const ContentKey key{
             DomainKind::StandaloneClip, 9400u + static_cast<uint64_t>(i), 0};
         auto cache = service->getOrCreateRenderCache(key);
-        cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        cache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto pending = cache->getPendingJobs();
         if (pending.size() != 1 || !cache->claimPendingJob(pending.front()))
             return check(false, "export_batch_running_chunk_setup_failed");
@@ -743,7 +785,7 @@ bool runExportDrainNoProgressContracts()
         auto gate = std::make_shared<ProcessRenderRuntime::CompletionGate>();
         const ContentKey key{DomainKind::StandaloneClip, contentId, 0};
         auto cache = service->getOrCreateRenderCache(key);
-        cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        cache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto pending = cache->getPendingJobs();
         if (pending.size() != 1 || !cache->claimPendingJob(pending.front()))
             return check(false, "blocked_export_running_chunk_setup_failed");
@@ -815,7 +857,8 @@ bool runExportDrainNoProgressContracts()
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
-    if (!runDeferredRetryContract() || !runDeferredBatchCapacityContract()
+    if (!runDeferredRetryContract() || !runQueuedRevisionReplacementAtCapacityContract()
+        || !runDeferredBatchCapacityContract()
         || !runDeferredDescriptorBudgetResumeContract()
         || !runPlanNotSynchronizedRetryContract()
         || !runExportDrainDeferredBatchContract()

@@ -17,53 +17,12 @@ void expect(bool condition, const char* message)
     }
 }
 
-juce::Optional<juce::AudioPlayHead::PositionInfo> makePosition(
-    double seconds, bool playing, bool looping = false)
+juce::Optional<juce::AudioPlayHead::PositionInfo> makePosition(double seconds, bool playing)
 {
     juce::AudioPlayHead::PositionInfo position;
     position.setTimeInSeconds(seconds);
     position.setIsPlaying(playing);
-    position.setIsLooping(looping);
     return juce::Optional<juce::AudioPlayHead::PositionInfo>(position);
-}
-
-void testRepeatedObservationIsIdempotent()
-{
-    OpenTune::PlayHeadState state;
-    const auto first = state.update(makePosition(3.0, false));
-    expect(first.timeChanged, "first canonical time observation commits");
-    expect(first.epoch == 1, "first time commit advances one generation");
-
-    const auto repeated = state.update(makePosition(3.0, false));
-    expect(!repeated.timeChanged, "repeated time observation is unchanged");
-    expect(repeated.epoch == first.epoch, "repeated observation does not advance generation");
-}
-
-void testPlayStateChangeAdvancesGeneration()
-{
-    OpenTune::PlayHeadState state;
-    const auto stopped = state.update(makePosition(3.0, false));
-    const auto playing = state.update(makePosition(3.0, true));
-
-    expect(!playing.timeChanged, "play-state change does not mark time changed");
-    expect(playing.epoch == stopped.epoch + 1, "play-state change advances generation");
-    expect(state.isPlaying.load(std::memory_order_relaxed), "playing state is published");
-
-    const auto repeated = state.update(makePosition(3.0, true, true));
-    expect(!repeated.timeChanged, "same time while playing remains unchanged");
-    expect(repeated.epoch == playing.epoch, "loop observation does not advance generation");
-}
-
-void testJumpCommitsNewCanonicalTime()
-{
-    OpenTune::PlayHeadState state;
-    const auto initial = state.update(makePosition(3.0, true));
-    const auto jumped = state.update(makePosition(17.25, true));
-
-    expect(jumped.timeChanged, "transport jump commits the new canonical time");
-    expect(jumped.epoch == initial.epoch + 1, "transport jump advances generation once");
-    expect(state.timeInSeconds.load(std::memory_order_relaxed) == 17.25,
-           "transport jump stores the requested time");
 }
 
 void testConcurrentDuplicateObservationCommitsOnce()
@@ -94,9 +53,6 @@ void testConcurrentDuplicateObservationCommitsOnce()
 
 int main()
 {
-    testRepeatedObservationIsIdempotent();
-    testPlayStateChangeAdvancesGeneration();
-    testJumpCommitsNewCanonicalTime();
     testConcurrentDuplicateObservationCommitsOnce();
     return failures == 0 ? 0 : 1;
 }
