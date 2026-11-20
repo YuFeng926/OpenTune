@@ -2,6 +2,7 @@
 #include "ModelFactory.h"
 #include "FCPEExtractor.h"
 #include "../DSP/ResamplingManager.h"
+#include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppLogger.h"
 #include <onnxruntime_cxx_api.h>
 #include <algorithm>
@@ -39,13 +40,57 @@ public:
         return true;
     }
 
+    std::optional<F0ExtractionConfigSnapshot> snapshotExtractionConfig(bool includeModelDigest) const
+    {
+        F0ExtractionConfigSnapshot config;
+        {
+            std::lock_guard<std::mutex> lock(extractorMutex_);
+            if (!initialized_.load(std::memory_order_acquire))
+                return std::nullopt;
+            config.modelType = currentModelType_;
+            config.modelDirectory = modelDir_;
+            config.confidence = confidenceThreshold_;
+            config.f0Min = f0Min_;
+            config.f0Max = f0Max_;
+        }
+
+        config.modelPath = ModelFactory::getModelPath(config.modelType, config.modelDirectory);
+        if (includeModelDigest) {
+            if (const auto digest = ModelFactory::getModelWeightDigest(config.modelPath)) {
+                config.modelWeightDigest = *digest;
+                config.modelWeightDigestAvailable = true;
+            }
+        }
+        const bool forceCpu = cpuFallbackSticky_.load(std::memory_order_acquire);
+        const auto backend = AccelerationDetector::getInstance().getSelection().backend;
+        if (forceCpu || backend == AccelerationDetector::AccelBackend::CPU)
+            config.backend = "CPU";
+#if defined(_WIN32)
+        else if (backend == AccelerationDetector::AccelBackend::DirectML)
+            config.backend = "DirectML";
+#elif defined(__APPLE__)
+        else if (backend == AccelerationDetector::AccelBackend::CoreML)
+            config.backend = "CoreML";
+#else
+        else
+            config.backend = "CPU";
+#endif
+        config.algorithmVersion = FCPEExtractor::kCacheAlgorithmVersion;
+        config.resamplingAlgorithmVersion = ResamplingManager::kCacheAlgorithmVersion;
+        return config;
+    }
+
     Result<std::vector<float>> extractF0(
         const float* audio,
         size_t length,
         int sampleRate,
         std::shared_ptr<F0RunOwnerState> ownerState,
         std::function<void(float)> progressCallback,
-        std::function<void(const std::vector<float>&, int)> partialCallback)
+        std::function<void(const std::vector<float>&, int)> partialCallback,
+        const F0ExtractionConfigSnapshot* requestedConfig = nullptr,
+        int* actualHopSize = nullptr,
+        int* actualSampleRate = nullptr,
+        std::string* actualBackend = nullptr)
     {
         // DML 合同：同一 Session 同一时刻仅允许一个线程 Run()。
         // admission gate：pendingLeases_ 排队，runCv_ 唤醒；无活跃 Run 或自身
@@ -102,29 +147,23 @@ public:
             }
         } stateGuard{runMutex_, runCv_, runInProgress_, activeLease_};
 
-        // 在获得 admission 后快照当前配置。排队期间的模型切换因此会作用于
-        // 本次实际创建的 session；配置在本调用内保持不变。
-        struct ExtractionConfig {
-            F0ModelType modelType;
-            std::string modelDir;
-            float confidence;
-            float f0Min;
-            float f0Max;
-        };
-
-        ExtractionConfig config;
+        F0ExtractionConfigSnapshot config;
         {
             std::lock_guard<std::mutex> lock(extractorMutex_);
             if (!initialized_.load(std::memory_order_acquire)) {
                 return Result<std::vector<float>>::failure(
                     ErrorCode::NotInitialized, "F0InferenceService not configured");
             }
-            config.modelType = currentModelType_;
-            config.modelDir = modelDir_;
-            config.confidence = confidenceThreshold_;
-            config.f0Min = f0Min_;
-            config.f0Max = f0Max_;
+            if (requestedConfig == nullptr) {
+                config.modelType = currentModelType_;
+                config.modelDirectory = modelDir_;
+                config.confidence = confidenceThreshold_;
+                config.f0Min = f0Min_;
+                config.f0Max = f0Max_;
+            }
         }
+        if (requestedConfig != nullptr)
+            config = *requestedConfig;
 
         Result<std::vector<float>> result = Result<std::vector<float>>::failure(
             ErrorCode::ModelInferenceFailed, "F0 extraction did not produce a result");
@@ -137,9 +176,10 @@ public:
             // 发生 DML Run 失败，本 service 生命周期内的后续提取全部走 CPU，
             // 避免每个任务重复 DML 失败。不影响全局 AccelerationDetector，
             // 也不影响 vocoder。
-            bool forceCpuForExtractor = cpuFallbackSticky_.load(std::memory_order_acquire);
+            const bool forceCpuForExtractor = cpuFallbackSticky_.load(std::memory_order_acquire)
+                || (requestedConfig != nullptr && requestedConfig->backend == "CPU");
             auto extractorResult = ModelFactory::createF0Extractor(
-                config.modelType, config.modelDir, *env_, resamplingManager_,
+                config.modelType, config.modelDirectory, *env_, resamplingManager_,
                 forceCpuForExtractor);
 
             if (!extractorResult) {
@@ -148,10 +188,23 @@ public:
                 result = Result<std::vector<float>>::failure(extractorResult.error());
             } else {
                 auto extractor = std::move(extractorResult).value();
+                const auto updateActualBackend = [&] {
+                    if (actualBackend == nullptr)
+                        return;
+                    *actualBackend = config.backend;
+                    if (const auto* fcpe = dynamic_cast<const FCPEExtractor*>(extractor.get());
+                        fcpe != nullptr && !fcpe->isGpuActive())
+                        *actualBackend = "CPU";
+                };
+                updateActualBackend();
 
                 // 缓存 hop/sample rate 供 getter 在 session 释放后使用
                 const int hopSize = extractor->getHopSize();
                 const int targetSampleRate = extractor->getTargetSampleRate();
+                if (actualHopSize != nullptr)
+                    *actualHopSize = hopSize;
+                if (actualSampleRate != nullptr)
+                    *actualSampleRate = targetSampleRate;
                 {
                     std::unique_lock<std::mutex> elock(extractorMutex_);
                     f0HopSize_ = hopSize;
@@ -190,6 +243,7 @@ public:
 
                     auto f0 = extractor->extractF0(audio, length, sampleRate,
                                                     runOptions_, progressCallback, partialCallback);
+                    updateActualBackend();
                     result = Result<std::vector<float>>::success(f0);
                 } catch (const FCPEExtractor::RetryCancelled&) {
                     // CPU retry 被授权 gate 拒绝（terminate 赢得 runMutex_）：
@@ -388,6 +442,25 @@ Result<std::vector<float>> F0InferenceService::extractF0(
 {
     return pImpl_->extractF0(audio, length, sampleRate, std::move(ownerState),
                              std::move(progressCallback), std::move(partialCallback));
+}
+
+std::optional<F0ExtractionConfigSnapshot> F0InferenceService::snapshotExtractionConfig(bool includeModelDigest) const
+{
+    return pImpl_->snapshotExtractionConfig(includeModelDigest);
+}
+
+Result<std::vector<float>> F0InferenceService::extractF0ForAnalysis(
+    const float* audio,
+    size_t length,
+    int sampleRate,
+    std::shared_ptr<F0RunOwnerState> ownerState,
+    const F0ExtractionConfigSnapshot* config,
+    int& actualHopSize,
+    int& actualSampleRate,
+    std::string& actualBackend)
+{
+    return pImpl_->extractF0(audio, length, sampleRate, std::move(ownerState), {}, {},
+                             config, &actualHopSize, &actualSampleRate, &actualBackend);
 }
 
 void F0InferenceService::terminateActiveRun(const std::shared_ptr<F0RunOwnerState>& ownerState) {

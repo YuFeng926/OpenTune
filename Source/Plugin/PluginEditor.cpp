@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
-#include <set>
+#include <map>
 
 #include "Editor/ConfirmDialogContent.h"
 #include "Editor/AboutDialogContent.h"
@@ -341,6 +341,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+#if JucePlugin_Enable_ARA
+    clearPendingNoteGenerationSubscription();
+#endif
     preferencesDialog_.reset();
     onboardingOverlay_.reset();
     // Save current viewport state before teardown — unconditionally,
@@ -675,51 +678,6 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     // before identity change) and editor destructor. No per-tick save needed —
     // restore only ever reads at placement switch, right after the switch-time save.
 
-    // Revision detection (aligned with Standalone pattern)
-    const ContentKey activeKey = sync.activeContentKey;
-    std::set<ContentKey> observedF0Keys;
-
-    const auto observeOriginalF0State = [this, &getTickSnapshot, &observedF0Keys](ContentKey contentKey) {
-        observedF0Keys.insert(contentKey);
-        const auto snapshot = getTickSnapshot(contentKey);
-        const auto currentState = snapshot
-            ? snapshot->originalF0State
-            : OriginalF0State::NotRequested;
-        const auto previous = lastObservedOriginalF0States_.find(contentKey);
-        if (previous != lastObservedOriginalF0States_.end()
-            && (previous->second == OriginalF0State::Extracting
-                || previous->second == OriginalF0State::NotRequested)
-            && currentState == OriginalF0State::Ready) {
-            const auto intentIt = pendingNoteGenerationOnReady_.find(contentKey);
-            if (intentIt != pendingNoteGenerationOnReady_.end()) {
-                // 仅生成音符，不写修正曲线（还原 Melodyne 初始状态）。
-                // f0Count 由 generateNotesOnly 内部从同一 snapshot 派生，调用方不传范围。
-                contentCommands_->generateNotesOnly(contentKey, intentIt->second);
-                pendingNoteGenerationOnReady_.erase(intentIt);
-            }
-        }
-        lastObservedOriginalF0States_[contentKey] = currentState;
-    };
-
-    for (const auto& placement : sync.placements)
-        observeOriginalF0State(placement.contentKey);
-
-    if (auto* session = processorRef_.getCaptureSession()) {
-        for (const auto& segment : session->listSegments())
-            observeOriginalF0State(segment.contentKey);
-    }
-
-    // Prune stale F0 observation state: keys no longer observed this tick were
-    // removed from every placement/segment list (or their content was
-    // destroyed) — their map entries would otherwise leak forever.
-    for (auto it = lastObservedOriginalF0States_.begin();
-         it != lastObservedOriginalF0States_.end();) {
-        if (observedF0Keys.count(it->first) != 0)
-            ++it;
-        else
-            it = lastObservedOriginalF0States_.erase(it);
-    }
-
     auto f0FailureEvents = processorRef_.takeOriginalF0FailureEvents();
 #if JucePlugin_Enable_ARA
     if (auto* dc = processorRef_.getDocumentController()) {
@@ -748,6 +706,7 @@ void OpenTuneAudioProcessorEditor::timerCallback()
     }
 
     // Content 切换检测
+    const ContentKey activeKey = sync.activeContentKey;
     bool contentJustSwitched = false;
     if (activeKey != lastRevisionObservedContentKey_) {
         lastRevisionObservedContentKey_ = activeKey;
@@ -1018,6 +977,108 @@ OpenTuneAudioProcessorEditor::resolveContentScopeRegions() const
 #endif
 }
 
+#if JucePlugin_Enable_ARA
+void OpenTuneAudioProcessorEditor::clearPendingNoteGenerationSubscription()
+{
+    if (pendingNoteGenerationListenerTarget_ != nullptr)
+        pendingNoteGenerationListenerTarget_->removeListener(this);
+    pendingNoteGenerationListenerTarget_ = nullptr;
+    pendingNoteGenerationIntent_.reset();
+}
+
+void OpenTuneAudioProcessorEditor::subscribePendingNoteGeneration(
+    ContentKey key,
+    juce::ARAAudioModification* modification,
+    const NoteGeneratorParams& params)
+{
+    clearPendingNoteGenerationSubscription();
+    if (!key.isValid() || modification == nullptr)
+        return;
+
+    auto* dc = processorRef_.getDocumentController();
+    if (dc == nullptr || dc->readOriginalF0State(key) != OriginalF0State::Extracting)
+        return;
+    const auto generation = dc->getAnalysisGeneration(key);
+    if (!generation.has_value())
+        return;
+
+    pendingNoteGenerationIntent_ = PendingNoteGenerationIntent{
+        key, params, generation->first, generation->second};
+    pendingNoteGenerationListenerTarget_ = modification;
+    modification->addListener(this);
+}
+
+void OpenTuneAudioProcessorEditor::didUpdateAudioModificationContent(
+    juce::ARAAudioModification* audioModification,
+    juce::ARAContentUpdateScopes scopeFlags)
+{
+    juce::ignoreUnused(scopeFlags);
+    if (audioModification != pendingNoteGenerationListenerTarget_
+        || !pendingNoteGenerationIntent_.has_value())
+        return;
+
+    auto* dc = processorRef_.getDocumentController();
+    if (dc == nullptr) {
+        clearPendingNoteGenerationSubscription();
+        return;
+    }
+
+    const auto state = dc->readOriginalF0State(pendingNoteGenerationIntent_->key);
+    if (state == OriginalF0State::Ready) {
+        queuePendingNoteGeneration(pendingNoteGenerationIntent_->key, audioModification);
+    } else if (state == OriginalF0State::Failed) {
+        clearPendingNoteGenerationSubscription();
+    }
+}
+
+void OpenTuneAudioProcessorEditor::queuePendingNoteGeneration(
+    ContentKey key,
+    juce::ARAAudioModification* audioModification)
+{
+    if (audioModification != pendingNoteGenerationListenerTarget_
+        || !pendingNoteGenerationIntent_.has_value()
+        || key != pendingNoteGenerationIntent_->key)
+        return;
+
+    auto* dc = processorRef_.getDocumentController();
+    if (dc == nullptr) {
+        clearPendingNoteGenerationSubscription();
+        return;
+    }
+    const auto intent = *pendingNoteGenerationIntent_;
+    const auto generation = dc->getAnalysisGeneration(key);
+    if (!generation.has_value()
+        || generation->first != intent.wrapperGeneration
+        || generation->second != intent.birthRevision) {
+        clearPendingNoteGenerationSubscription();
+        return;
+    }
+
+    clearPendingNoteGenerationSubscription();
+    juce::Component::SafePointer<OpenTuneAudioProcessorEditor> safeThis(this);
+    juce::MessageManager::callAsync([safeThis, intent] {
+        if (safeThis == nullptr)
+            return;
+        auto* currentDc = safeThis->processorRef_.getDocumentController();
+        if (currentDc == nullptr)
+            return;
+        const auto currentGeneration = currentDc->getAnalysisGeneration(intent.key);
+        if (!currentGeneration.has_value()
+            || currentGeneration->first != intent.wrapperGeneration
+            || currentGeneration->second != intent.birthRevision)
+            return;
+        safeThis->contentCommands_->generateNotesOnly(intent.key, intent.params);
+    });
+}
+
+void OpenTuneAudioProcessorEditor::willDestroyAudioModification(
+    juce::ARAAudioModification* audioModification)
+{
+    if (audioModification == pendingNoteGenerationListenerTarget_)
+        clearPendingNoteGenerationSubscription();
+}
+#endif
+
 void OpenTuneAudioProcessorEditor::readScopeAudio()
 {
 #if JucePlugin_Enable_ARA
@@ -1045,14 +1106,18 @@ void OpenTuneAudioProcessorEditor::readScopeAudio()
 
     syncContentProjectionToPianoRoll();
 
-    if (!target.contentKey.isValid())
+    if (!target.contentKey.isValid()) {
+        clearPendingNoteGenerationSubscription();
         return;
+    }
     originalF0OverlayTargetContentKeys_ = { target.contentKey };
-    lastObservedOriginalF0States_[target.contentKey] = OriginalF0State::NotRequested;
-    if (pianoRoll_.isOpenDyne())
-        pendingNoteGenerationOnReady_[target.contentKey] = pianoRoll_.getCurrentAutoTuneParams();
-    else
-        pendingNoteGenerationOnReady_.erase(target.contentKey);
+    if (pianoRoll_.isOpenDyne()) {
+        subscribePendingNoteGeneration(target.contentKey,
+                                       target.playbackRegion->getAudioModification(),
+                                       pianoRoll_.getCurrentAutoTuneParams());
+    } else {
+        clearPendingNoteGenerationSubscription();
+    }
     originalF0OverlayLatched_ = true;
 #endif
 }
@@ -1649,13 +1714,13 @@ void OpenTuneAudioProcessorEditor::recordRequested()
 
             const auto targetKey = targetProjections.front().contentKey;
             originalF0OverlayTargetContentKeys_.push_back(targetKey);
-            // F0 状态机基线重置：防止 F0 完成早于首次 timer 观察导致跳变丢失
-            lastObservedOriginalF0States_[targetKey] = OriginalF0State::NotRequested;
-            // 捕获 OpenDyne 一次性音符生成意图，F0 Ready 跳变时消费
-            if (pianoRoll_.isOpenDyne())
-                pendingNoteGenerationOnReady_[targetKey] = pianoRoll_.getCurrentAutoTuneParams();
-            else
-                pendingNoteGenerationOnReady_.erase(targetKey);
+            if (pianoRoll_.isOpenDyne()) {
+                subscribePendingNoteGeneration(targetKey,
+                                               targetPlaybackRegion->getAudioModification(),
+                                               pianoRoll_.getCurrentAutoTuneParams());
+            } else {
+                clearPendingNoteGenerationSubscription();
+            }
             originalF0OverlayLatched_ = true;
             a11y::announce(pianoRoll_, LOC_RAW("Processing audio"), a11y::SpeechQueue::keepAll);
         });
@@ -1877,6 +1942,12 @@ OpenTuneAudioProcessorEditor::syncContentProjectionToPianoRoll()
     const auto sync = resolveCurrentContentSync();
     const bool identityChanged = sync.activePlacementIdentity.has_value() != presentedPlacementIdentity_.has_value()
         || (sync.activePlacementIdentity.has_value() && !(*sync.activePlacementIdentity == *presentedPlacementIdentity_));
+#if JucePlugin_Enable_ARA
+    if (pendingNoteGenerationListenerTarget_ != nullptr
+        && pendingNoteGenerationIntent_.has_value()
+        && sync.activeContentKey != pendingNoteGenerationIntent_->key)
+        clearPendingNoteGenerationSubscription();
+#endif
 
     // Save old placement viewport before switch
     if (identityChanged)

@@ -1,7 +1,10 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <functional>
@@ -23,6 +26,22 @@ namespace OpenTune {
  */
 struct F0RunOwnerState {
     std::atomic<bool> closed{false};
+};
+
+struct F0ExtractionConfigSnapshot
+{
+    F0ModelType modelType{F0ModelType::FCPE};
+    std::string modelDirectory;
+    std::string modelPath;
+    std::array<uint8_t, 32> modelWeightDigest{};
+    bool modelWeightDigestAvailable{false};
+    float confidence{0.006f};
+    float f0Min{32.7f};
+    float f0Max{1975.5f};
+    std::string backend;
+    int algorithmVersion{1};
+    int resamplingAlgorithmVersion{1};
+    int energyAlgorithmVersion{1};
 };
 
 /**
@@ -82,6 +101,17 @@ public:
         std::shared_ptr<F0RunOwnerState> ownerState,
         std::function<void(float)> progressCallback = nullptr,
         std::function<void(const std::vector<float>&, int)> partialCallback = nullptr);
+
+    std::optional<F0ExtractionConfigSnapshot> snapshotExtractionConfig(bool includeModelDigest = true) const;
+    Result<std::vector<float>> extractF0ForAnalysis(
+        const float* audio,
+        size_t length,
+        int sampleRate,
+        std::shared_ptr<F0RunOwnerState> ownerState,
+        const F0ExtractionConfigSnapshot* config,
+        int& actualHopSize,
+        int& actualSampleRate,
+        std::string& actualBackend);
 
     /**
      * Permanently close the given owner: set state->closed, flag all pending

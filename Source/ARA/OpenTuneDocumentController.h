@@ -14,6 +14,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #include "AudioModification.h"
 #include "AudioSource.h"
@@ -114,6 +115,7 @@ public:
 
     /** 读取 OriginalF0 状态 */
     OriginalF0State readOriginalF0State(ContentKey key) const;
+    std::optional<std::pair<uint64_t, uint64_t>> getAnalysisGeneration(ContentKey key) const;
     std::string readOriginalF0FailureReason(ContentKey key) const;
     std::deque<OriginalF0FailureEvent> takeOriginalF0FailureEvents();
 
@@ -320,13 +322,15 @@ private:
         const AudioModification& modification,
         const juce::String& sourcePersistentId,
         double sourceSampleRate,
+        int sourceChannelCount,
         uint64_t sampleGeneration,
         int64_t sourceSampleCount) const;
     void removeCRSArtifactsForModification(const AudioModification& modification);
     bool scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
-                                   double sourceSampleRate,
-                                   uint64_t wrapperGeneration,
+                                    double sourceSampleRate,
+                                    int sourceChannelCount,
+                                    uint64_t wrapperGeneration,
                                    juce::String persistentId,
                                    OriginalF0InputStamp stamp);
     void commitF0Completion(F0CompletionRecord record);

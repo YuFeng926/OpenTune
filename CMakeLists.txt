@@ -1053,6 +1053,8 @@ set(OPENTUNE_ARA_SOURCES
     Source/ARA/PlaybackRegion.h
     Source/ARA/OpenTuneDocumentController.cpp
     Source/ARA/OpenTuneDocumentController.h
+    Source/Services/F0AnalysisCache.cpp
+    Source/Services/F0AnalysisCache.h
     Source/ARA/OpenTunePlaybackRenderer.cpp
     Source/ARA/OpenTunePlaybackRenderer.h
 )
@@ -1179,6 +1181,7 @@ foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
         PRIVATE
             juce::juce_audio_utils
             juce::juce_audio_processors
+            juce::juce_cryptography
             juce::juce_dsp
             juce::juce_opengl
             juce::juce_graphics
@@ -2213,6 +2216,21 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneCapturePersistenceTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME CapturePersistenceTests COMMAND OpenTuneCapturePersistenceTests)
+
+    add_executable(OpenTuneF0AnalysisCacheTests
+        Tests/F0AnalysisCacheTests.cpp
+    )
+    target_include_directories(OpenTuneF0AnalysisCacheTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneF0AnalysisCacheTests PRIVATE
+        OpenTune
+        juce::juce_core
+        juce::juce_cryptography
+    )
+    if(MSVC)
+        target_compile_options(OpenTuneF0AnalysisCacheTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME F0AnalysisCacheTests COMMAND OpenTuneF0AnalysisCacheTests)
 
     # CaptureSession span-budget exhaustion + scan-coverage lifecycle tests.
     add_executable(OpenTuneCaptureSessionSpanBudgetTests

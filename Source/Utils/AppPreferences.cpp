@@ -34,6 +34,7 @@ constexpr const char* kSharedSnapEnabledKey = "shared.snap.enabled";
 constexpr const char* kSharedSnapModeKey = "shared.snap.mode";
 constexpr const char* kSharedTrackColorModeKey = "shared.trackColor.mode";
 constexpr const char* kSharedLightPitchCorrectionEnabledKey = "shared.rendering.lightPitchCorrection";
+constexpr const char* kSharedAraF0AnalysisCacheEnabledKey = "shared.f0.araAnalysisCacheEnabled";
 constexpr const char* kSharedF0ModelTypeKey = "shared.f0.modelType";
 constexpr const char* kSharedTimelineDisplayModeKey = "shared.timeline.displayMode";
 constexpr const char* kSharedTuningHzKey = "shared.tuning.hz";
@@ -454,6 +455,9 @@ AppPreferencesState loadStateFromProperties(const juce::PropertiesFile& properti
     state.shared.lightPitchCorrectionEnabled = properties.getBoolValue(
         kSharedLightPitchCorrectionEnabledKey,
         state.shared.lightPitchCorrectionEnabled);
+    state.shared.araF0AnalysisCacheEnabled = properties.getBoolValue(
+        kSharedAraF0AnalysisCacheEnabledKey,
+        state.shared.araF0AnalysisCacheEnabled);
     state.shared.noteTransposePreviewEnabled = properties.getBoolValue(
         kSharedNoteTransposePreviewEnabledKey,
         state.shared.noteTransposePreviewEnabled);
@@ -528,6 +532,8 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
                         state.shared.experimentalFeaturesEnabled);
     properties.setValue(kSharedLightPitchCorrectionEnabledKey,
                         state.shared.lightPitchCorrectionEnabled);
+    properties.setValue(kSharedAraF0AnalysisCacheEnabledKey,
+                        state.shared.araF0AnalysisCacheEnabled);
     properties.setValue(kSharedNoteTransposePreviewEnabledKey,
                         state.shared.noteTransposePreviewEnabled);
     properties.setValue(kSharedAccessibilityModeEnabledKey,
@@ -558,7 +564,7 @@ void writeStateToProperties(juce::PropertiesFile& properties, const AppPreferenc
 
 bool ProcessingPreferenceDelta::any() const noexcept
 {
-    return tuning || scheme || hybrid || experimental || priority || f0 || accessibilityMode;
+    return tuning || scheme || hybrid || araF0AnalysisCache || experimental || priority || f0 || accessibilityMode;
 }
 
 bool ProcessingPreferenceDelta::needsJob() const noexcept
@@ -578,6 +584,7 @@ ProcessingPreferenceState readProcessingPreferenceState(const AppPreferences& pr
     state.tuningHz = static_cast<float>(std::round(TuningConfig::currentTuningHz() * 1000.0) / 1000.0);
     state.audioEditingScheme = shared.audioEditingScheme;
     state.lightPitchCorrectionEnabled = shared.lightPitchCorrectionEnabled;
+    state.araF0AnalysisCacheEnabled = shared.araF0AnalysisCacheEnabled;
     state.experimentalFeaturesEnabled = shared.experimentalFeaturesEnabled;
     state.renderingPriority = shared.renderingPriority;
     state.f0ModelType = shared.f0ModelType;
@@ -593,6 +600,8 @@ ProcessingPreferenceDelta computeProcessingPreferenceDelta(const ProcessingPrefe
     delta.scheme = patch.audioEditingScheme && *patch.audioEditingScheme != state.audioEditingScheme;
     delta.hybrid = patch.lightPitchCorrectionEnabled
                    && *patch.lightPitchCorrectionEnabled != state.lightPitchCorrectionEnabled;
+    delta.araF0AnalysisCache = patch.araF0AnalysisCacheEnabled
+                               && *patch.araF0AnalysisCacheEnabled != state.araF0AnalysisCacheEnabled;
     delta.experimental = patch.experimentalFeaturesEnabled
                          && *patch.experimentalFeaturesEnabled != state.experimentalFeaturesEnabled;
     delta.priority = patch.renderingPriority && *patch.renderingPriority != state.renderingPriority;
@@ -609,6 +618,7 @@ ProcessingPreferenceDelta diffProcessingPreferenceStates(const ProcessingPrefere
     delta.tuning = before.tuningHz != after.tuningHz;
     delta.scheme = before.audioEditingScheme != after.audioEditingScheme;
     delta.hybrid = before.lightPitchCorrectionEnabled != after.lightPitchCorrectionEnabled;
+    delta.araF0AnalysisCache = before.araF0AnalysisCacheEnabled != after.araF0AnalysisCacheEnabled;
     delta.experimental = before.experimentalFeaturesEnabled != after.experimentalFeaturesEnabled;
     delta.priority = before.renderingPriority != after.renderingPriority;
     delta.f0 = before.f0ModelType != after.f0ModelType;
@@ -678,6 +688,8 @@ ProcessingPreferenceApplyResult applyProcessingPreferencePatch(
         preferences.setLightPitchCorrectionEnabled(*patch.lightPitchCorrectionEnabled);
         runtimeOperations.invalidateAllContentCaches();
     }
+    if (result.delta.araF0AnalysisCache)
+        preferences.setAraF0AnalysisCacheEnabled(*patch.araF0AnalysisCacheEnabled);
     if (result.delta.experimental)
         preferences.setExperimentalFeaturesEnabled(*patch.experimentalFeaturesEnabled);
     if (result.delta.priority)
@@ -703,6 +715,18 @@ AppPreferences::AppPreferences(const StorageOptions& storageOptions)
 {
     initialiseStorage();
     load();
+}
+
+bool AppPreferences::readAraF0AnalysisCacheEnabledFromDisk()
+{
+    const StorageOptions storageOptions;
+    juce::PropertiesFile properties(makePropertiesOptions(storageOptions, nullptr));
+    return properties.getBoolValue(kSharedAraF0AnalysisCacheEnabledKey, true);
+}
+
+juce::File AppPreferences::getStorageDirectory()
+{
+    return resolveSettingsDirectory(StorageOptions{});
 }
 
 AppPreferencesState AppPreferences::getState() const
@@ -982,6 +1006,13 @@ void AppPreferences::setLightPitchCorrectionEnabled(bool enabled)
 {
     const std::lock_guard<std::mutex> lock(mutex_);
     state_.shared.lightPitchCorrectionEnabled = enabled;
+    saveLocked();
+}
+
+void AppPreferences::setAraF0AnalysisCacheEnabled(bool enabled)
+{
+    const std::lock_guard<std::mutex> lock(mutex_);
+    state_.shared.araF0AnalysisCacheEnabled = enabled;
     saveLocked();
 }
 

@@ -54,6 +54,7 @@ void AudioModification::resetContent() noexcept
     ++birthRevision;
     content.reset();
     originalF0InputStamp.reset();
+    analysisContinuationPending = false;
     birthState = AudioModificationBirthState::Empty;
 }
 
@@ -65,6 +66,7 @@ void AudioModification::invalidateDerivedContent() noexcept
     ++birthRevision;
     content->analysis = AnalysisState{};
     originalF0InputStamp.reset();
+    analysisContinuationPending = false;
     birthState = AudioModificationBirthState::WaitingForSource;
 }
 

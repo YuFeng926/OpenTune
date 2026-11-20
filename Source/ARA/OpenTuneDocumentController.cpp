@@ -5,10 +5,11 @@
 #include "../Audio/NotePitchAudition.h"
 #include "../Utils/NoteAudition.h"
 
-#include "../Inference/F0InferenceService.h"
+#include "../Inference/ModelFactory.h"
 #include "../Runtime/ProcessF0Runtime.h"
 #include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
+#include "../Services/F0AnalysisCache.h"
 #include "../Services/ImportedClipF0Extraction.h"
 #include "../DSP/F0KeyDetector.h"
 #include "../DSP/ResamplingManager.h"
@@ -19,6 +20,7 @@
 #include "../Inference/RenderCache.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
+#include "../Utils/AppPreferences.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Content/ContentSnapshotProjection.h"
 
@@ -1291,7 +1293,7 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
     }
     else if (!hasValidF0)
     {
-        AppLogger::log("ReadAudio: no valid F0, birth, key="
+        AppLogger::log("ReadAudio: analysis_requested key="
             + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
     }
     else
@@ -1678,6 +1680,19 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         targetMod->content = std::move(state);
         targetMod->birthState = AudioModificationBirthState::WaitingForSource;
         ++targetMod->birthRevision;
+        targetMod->originalF0InputStamp.reset();
+    }
+
+    for (const auto& pendingEntry : pending)
+    {
+        auto* targetMod = pendingEntry.first;
+        const auto& restoredAnalysis = targetMod->content->analysis;
+        if (restoredAnalysis.originalF0State == OriginalF0State::Ready
+            && restoredAnalysis.pitchCurve != nullptr
+            && restoredAnalysis.pitchCurve->hasOriginalF0Data()) {
+            if (auto* source = findAudioSource(targetMod->content->sourceWindow.sourcePersistentId))
+                targetMod->originalF0InputStamp = makeF0InputStamp(*source, *targetMod);
+        }
     }
 
     // 提交完成后再通知 Host，避免 Host 观察到半提交状态。
@@ -2073,18 +2088,23 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
 void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSource)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    // archive 恢复且已有有效 OriginalF0 的内容：自动重建 PCM，用户无需 Read。
+    // Restore 归档 F0 自动重建 PCM；已失效但保留输入 stamp 的内容也在访问到达后续接分析。
     // WaitingForSource 由现有生命周期保证 content 存在，直接读 *mod.content。
-    // 新插入插件无有效 F0，自动扫描自然跳过。
+    // 没有有效归档 F0 和输入 stamp 的新内容跳过自动扫描。
     for (auto& mod : audioModifications_)
     {
         if (mod.birthState != AudioModificationBirthState::WaitingForSource)
             continue;
 
         auto& content = *mod.content;
-        if (content.analysis.originalF0State != OriginalF0State::Ready
-            || content.analysis.pitchCurve == nullptr
-            || !content.analysis.pitchCurve->hasOriginalF0Data())
+        const bool hasReadyF0 = content.analysis.originalF0State == OriginalF0State::Ready
+            && content.analysis.pitchCurve != nullptr
+            && content.analysis.pitchCurve->hasOriginalF0Data();
+        const bool hasInvalidatedAnalysis =
+            content.analysis.originalF0State == OriginalF0State::NotRequested
+            && mod.originalF0InputStamp.has_value()
+            && mod.analysisContinuationPending;
+        if (!hasReadyF0 && !hasInvalidatedAnalysis)
             continue;
 
         if (enabledSource != nullptr
@@ -2109,11 +2129,27 @@ void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSou
         if (!hasPlaybackRegion)
             continue;
 
-        // 复用 archive F0 前，建立当前运行时 stamp，使后续 Read 能命中 same-input no-op
-        if (auto* source = findAudioSource(mod.content->sourceWindow.sourcePersistentId))
-            mod.originalF0InputStamp = makeF0InputStamp(*source, mod);
+        bool continueAnalysisAfterBirth = hasInvalidatedAnalysis;
+        if (auto* source = findAudioSource(mod.content->sourceWindow.sourcePersistentId)) {
+            const auto currentStamp = makeF0InputStamp(*source, mod);
+            if (mod.originalF0InputStamp.has_value()) {
+                if (mod.originalF0InputStamp.value() != currentStamp) {
+                    removeCRSArtifactsForModification(mod);
+                    mod.invalidateDerivedContent();
+                    mod.originalF0InputStamp = currentStamp;
+                    mod.analysisContinuationPending = true;
+                    continueAnalysisAfterBirth = true;
+                }
+            } else {
+                mod.originalF0InputStamp = currentStamp;
+            }
+        }
 
         birthContentForModification(mod);
+        if (continueAnalysisAfterBirth
+            && mod.birthState == AudioModificationBirthState::WaitingForSource
+            && mod.content->analysis.originalF0State == OriginalF0State::NotRequested)
+            mod.analysisContinuationPending = true;
     }
 }
 
@@ -2137,6 +2173,7 @@ OriginalF0InputStamp OpenTuneDocumentController::makeF0InputStamp(const AudioSou
 bool OpenTuneDocumentController::birthContentForModification(AudioModification& modification)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    modification.analysisContinuationPending = false;
     // F0 #B.4: 每次 birth 开始前取消该 content 的旧 F0 request
     contentF0ExtractionService_->cancel(F0RequestKey{modification.contentKey()});
 
@@ -2214,6 +2251,7 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     nativeSource.buffer = findReusableNativePcm(modification,
                                                 sourceWindow.sourcePersistentId,
                                                 sourceSampleRate,
+                                                numChannels,
                                                 audioRevision,
                                                 sourceShape.numSamples);
     if (nativeSource.buffer == nullptr)
@@ -2384,7 +2422,8 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     if (!alreadyHasF0)
     {
         scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate,
-                                  modification.wrapperGeneration, modification.persistentId, currentStamp);
+                                  numChannels, modification.wrapperGeneration,
+                                  modification.persistentId, currentStamp);
     }
 
     return true;
@@ -2394,6 +2433,7 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::find
     const AudioModification& modification,
     const juce::String& sourcePersistentId,
     double sourceSampleRate,
+    int sourceChannelCount,
     uint64_t sampleGeneration,
     int64_t sourceSampleCount) const
 {
@@ -2413,6 +2453,7 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::find
 
         const auto& native = published.nativeSource;
         if (native.buffer == nullptr
+            || native.buffer->getNumChannels() != sourceChannelCount
             || native.sampleRate != sourceSampleRate
             || native.audioRevision != sampleGeneration
             || native.firstSourceSample != 0
@@ -2448,6 +2489,7 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
     std::vector<float> channel0Data,
     double sourceSampleRate,
+    int sourceChannelCount,
     uint64_t wrapperGeneration,
     juce::String persistentId,
     OriginalF0InputStamp stamp)
@@ -2488,7 +2530,8 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
 
     auto submitResult = contentF0ExtractionService_->submit(
         F0RequestKey{key},
-        [data = std::move(channel0Data), sourceSampleRate, birthRevision](const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
+        [data = std::move(channel0Data), sourceSampleRate, sourceChannelCount, birthRevision]
+        (const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
         {
             if (data.empty())
             {
@@ -2497,8 +2540,6 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 return failed;
             }
 
-            // Lazy-initialize ProcessF0Runtime and resolve F0 service inside the worker
-            // thread (same pattern as PluginProcessor capture/requestContentRefresh).
             auto& f0Runtime = ProcessF0Runtime::getInstance();
             std::string initializationError;
             if (!f0Runtime.isReady())
@@ -2506,7 +2547,7 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             auto f0Svc = f0Runtime.getF0Service();
             if (!f0Svc)
             {
-                AppLogger::error("ARA-F0: worker lazy-init model Failed — F0 service unavailable (birthRev="
+                AppLogger::error("ARA-F0: worker lazy-init model Failed - F0 service unavailable (birthRev="
                     + juce::String(static_cast<juce::int64>(birthRevision)) + ")");
                 F0ExtractionService::Result failed;
                 failed.errorMessage = initializationError.empty()
@@ -2515,8 +2556,73 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 return failed;
             }
 
-            auto extraction = f0Svc->extractF0(data.data(), data.size(),
-                                                static_cast<int>(sourceSampleRate), runOwnerState);
+            const bool cacheEnabled = AppPreferences::readAraF0AnalysisCacheEnabledFromDisk();
+            auto config = f0Svc->snapshotExtractionConfig(cacheEnabled);
+            F0AnalysisCache::Digest compositeKey{};
+            F0AnalysisCache::Digest pcmDigest{};
+            std::optional<F0AnalysisCache::KeyConfig> keyConfig;
+            bool hasCompositeKey = false;
+            std::string configurationSummary = "config_unavailable";
+
+            if (config.has_value())
+            {
+                configurationSummary = "model=" + std::to_string(static_cast<int>(config->modelType))
+                    + " backend=" + config->backend
+                    + " confidence=" + std::to_string(config->confidence)
+                    + " f0Min=" + std::to_string(config->f0Min)
+                    + " f0Max=" + std::to_string(config->f0Max);
+            }
+
+            if (cacheEnabled && config.has_value() && config->modelWeightDigestAvailable)
+            {
+                keyConfig.emplace();
+                auto& cacheKeyConfig = *keyConfig;
+                cacheKeyConfig.schemaVersion = F0AnalysisCache::kSchemaVersion;
+                cacheKeyConfig.algorithmVersion = config->algorithmVersion;
+                cacheKeyConfig.resamplingAlgorithmVersion = config->resamplingAlgorithmVersion;
+                cacheKeyConfig.f0AlgorithmVersion = config->algorithmVersion;
+                cacheKeyConfig.energyAlgorithmVersion = kFrameEnergyAlgorithmVersion;
+                cacheKeyConfig.modelType = static_cast<int>(config->modelType);
+                cacheKeyConfig.modelWeightDigest = config->modelWeightDigest;
+                cacheKeyConfig.confidence = config->confidence;
+                cacheKeyConfig.f0Min = config->f0Min;
+                cacheKeyConfig.f0Max = config->f0Max;
+                cacheKeyConfig.backend = config->backend;
+                cacheKeyConfig.sourceSampleRate = sourceSampleRate;
+                cacheKeyConfig.sourceChannelCount = sourceChannelCount;
+                cacheKeyConfig.channelPolicyVersion = F0AnalysisCache::kChannelZeroPolicyVersion;
+                cacheKeyConfig.windowSampleCount = data.size();
+                pcmDigest = F0AnalysisCache::digestPcm(data.data(), data.size());
+                compositeKey = F0AnalysisCache::buildKey(cacheKeyConfig, pcmDigest);
+                hasCompositeKey = true;
+                const auto keyHex = F0AnalysisCache::keyToHex(compositeKey);
+
+                if (auto cached = F0AnalysisCache::tryLoad(F0AnalysisCache::cacheDirectory(), compositeKey))
+                {
+                    F0AnalysisCache::touch(F0AnalysisCache::cacheDirectory(), compositeKey);
+                    F0ExtractionService::Result result;
+                    result.success = true;
+                    result.hopSize = cached->hopSize;
+                    result.f0SampleRate = static_cast<int>(cached->f0SampleRate);
+                    result.f0 = std::move(cached->originalF0);
+                    result.energy = std::move(cached->energy);
+                    AppLogger::log("ARA-F0 cache_hit key=" + juce::String(keyHex.substr(0, 16)));
+                    return result;
+                }
+            }
+
+            const auto keyLabel = hasCompositeKey
+                ? F0AnalysisCache::keyToHex(compositeKey).substr(0, 16)
+                : cacheEnabled ? std::string("unavailable") : std::string("disabled");
+            AppLogger::log("ARA-F0 inference_start key=" + juce::String(keyLabel)
+                + " " + juce::String(configurationSummary));
+
+            int hopSize = 0;
+            int f0SampleRate = 0;
+            std::string actualBackend;
+            auto extraction = f0Svc->extractF0ForAnalysis(
+                data.data(), data.size(), static_cast<int>(sourceSampleRate), runOwnerState,
+                config.has_value() ? &*config : nullptr, hopSize, f0SampleRate, actualBackend);
 
             if (!extraction.ok())
             {
@@ -2531,10 +2637,11 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                 return failed;
             }
 
+            if (hasCompositeKey && keyConfig.has_value() && keyConfig->backend != actualBackend) {
+                keyConfig->backend = actualBackend;
+                compositeKey = F0AnalysisCache::buildKey(*keyConfig, pcmDigest);
+            }
             const auto& f0Data = extraction.value();
-            const int hopSize = f0Svc->getF0HopSize();
-            const int f0SampleRate = f0Svc->getF0SampleRate();
-
             const auto energy = computeFrameEnergy(
                 data.data(), static_cast<int>(data.size()),
                 static_cast<int>(sourceSampleRate),
@@ -2545,7 +2652,24 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
             result.f0 = f0Data;
             result.hopSize = hopSize;
             result.f0SampleRate = f0SampleRate;
-            result.energy = std::move(energy);
+            result.energy = energy;
+
+            if (hasCompositeKey && config.has_value() && config->modelWeightDigestAvailable
+                && AppPreferences::readAraF0AnalysisCacheEnabledFromDisk()) {
+                const auto currentModelDigest = ModelFactory::getModelWeightDigest(config->modelPath);
+                if (currentModelDigest.has_value() && *currentModelDigest == config->modelWeightDigest) {
+                    F0AnalysisCache::Record cacheRecord;
+                    cacheRecord.hopSize = result.hopSize;
+                    cacheRecord.f0SampleRate = static_cast<double>(result.f0SampleRate);
+                    cacheRecord.originalF0 = result.f0;
+                    cacheRecord.energy = result.energy;
+                    F0AnalysisCache::publish(F0AnalysisCache::cacheDirectory(), compositeKey, cacheRecord);
+                } else {
+                    AppLogger::log("ARA-F0 cache_publish_skipped key="
+                        + juce::String(F0AnalysisCache::keyToHex(compositeKey).substr(0, 16))
+                        + " reason=model_digest_changed");
+                }
+            }
             return result;
         },
         [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
@@ -2572,21 +2696,17 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
                                      persistentId, birthRevision, stamp});
          });
 
-    // Non-Accepted: set Failed if current modification still matches this submission
-    if (submitResult != F0ExtractionService::SubmitResult::Accepted)
-    {
-        if (submitResult == F0ExtractionService::SubmitResult::AlreadyInProgress)
-            return true;
-        if (submitResult == F0ExtractionService::SubmitResult::ShuttingDown)
-            return false;
-        const char* reason = submitResult == F0ExtractionService::SubmitResult::QueueFull
-            ? "F0 extraction queue is full"
-            : "F0 extraction submission was rejected: invalid task";
-        markFailedIfCurrentBirth(birthRevision, reason);
-        return false;
-    }
+    // Only queue-full and invalid-task submissions fail the current birth.
+    if (submitResult == F0ExtractionService::SubmitResult::Accepted
+        || submitResult == F0ExtractionService::SubmitResult::AlreadyInProgress
+        || submitResult == F0ExtractionService::SubmitResult::ShuttingDown)
+        return true;
 
-    return true;
+    const char* reason = submitResult == F0ExtractionService::SubmitResult::QueueFull
+        ? "F0 extraction queue is full"
+        : "F0 extraction submission was rejected: invalid task";
+    markFailedIfCurrentBirth(birthRevision, reason);
+    return false;
 }
 
 void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
@@ -2647,6 +2767,7 @@ void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
 
     mod->applyOriginalF0(std::move(pitchCurve));
     mod->originalF0InputStamp = record.stamp;
+
     requestFullModificationRender(record.key);
 
     if (hostModificationToNotify != nullptr)
@@ -3095,6 +3216,16 @@ OriginalF0State OpenTuneDocumentController::readOriginalF0State(ContentKey key) 
     const auto* mod = findAudioModificationByContentKey(key);
     if (mod == nullptr || !mod->hasContentState()) return OriginalF0State::NotRequested;
     return mod->content->analysis.originalF0State;
+}
+
+std::optional<std::pair<uint64_t, uint64_t>>
+OpenTuneDocumentController::getAnalysisGeneration(ContentKey key) const
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const auto* mod = findAudioModificationByContentKey(key);
+    if (mod == nullptr || !mod->hasContentState())
+        return std::nullopt;
+    return std::make_pair(mod->wrapperGeneration, mod->birthRevision);
 }
 
 DetectedKey OpenTuneDocumentController::readDetectedKey(ContentKey key) const

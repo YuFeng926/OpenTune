@@ -7,7 +7,11 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/Error.h"
 #include <functional>
+#include <cstring>
+#include <map>
+#include <mutex>
 #include <juce_core/juce_core.h>
+#include <juce_cryptography/juce_cryptography.h>
 #ifdef _WIN32
 #include <dml_provider_factory.h>
 #endif
@@ -134,6 +138,49 @@ std::string ModelFactory::getModelPath(F0ModelType type, const std::string& mode
             return modelDir + "/fcpe.onnx";
     }
     return "";
+}
+
+std::optional<std::array<uint8_t, 32>> ModelFactory::getModelWeightDigest(const std::string& modelPath)
+{
+    struct CachedDigest
+    {
+        int64_t size{0};
+        juce::Time modified;
+        std::array<uint8_t, 32> digest{};
+    };
+    static std::mutex mutex;
+    static std::map<std::string, CachedDigest> cachedByPath;
+
+    const juce::File file(modelPath);
+    if (!file.existsAsFile())
+        return std::nullopt;
+
+    const auto fullPath = file.getFullPathName().toStdString();
+    const auto size = file.getSize();
+    const auto modified = file.getLastModificationTime();
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        const auto found = cachedByPath.find(fullPath);
+        if (found != cachedByPath.end() && found->second.size == size && found->second.modified == modified)
+            return found->second.digest;
+    }
+
+    auto input = file.createInputStream();
+    if (input == nullptr || !input->openedOk())
+        return std::nullopt;
+    const juce::SHA256 hash(*input);
+    const auto rawDigest = hash.getRawData();
+    std::array<uint8_t, 32> digest{};
+    std::memcpy(digest.data(), rawDigest.getData(), digest.size());
+
+    if (file.getSize() != size || file.getLastModificationTime() != modified)
+        return std::nullopt;
+
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        cachedByPath[fullPath] = CachedDigest{size, modified, digest};
+    }
+    return digest;
 }
 
 // ==============================================================================

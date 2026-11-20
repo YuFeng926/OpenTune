@@ -59,6 +59,7 @@ struct AudioModification
     // 内容所有权
     std::optional<ContentState> content;
     std::optional<OriginalF0InputStamp> originalF0InputStamp;
+    bool analysisContinuationPending{false};
 
     // 身份更新
     void updateIdentity(juce::ARAAudioModification* modification);

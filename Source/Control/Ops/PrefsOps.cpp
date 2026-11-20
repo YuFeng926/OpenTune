@@ -38,6 +38,7 @@ struct PrefsRequest
     /** editingScheme: true for openDyne (notes primary), false for openTune. */
     std::optional<bool> notesPrimary;
     std::optional<bool> hybridMode;
+    std::optional<bool> araF0AnalysisCacheEnabled;
     std::optional<bool> experimentalFeatures;
     /** renderingPriority: true for cpuFirst, false for gpuFirst. */
     std::optional<bool> cpuFirst;
@@ -96,7 +97,8 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
     ControlParamReader reader(params);
     std::optional<double> tuning;
     if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures",
-                             "renderingPriority", "f0Model", "accessibilityModeEnabled"})
+                             "renderingPriority", "f0Model", "accessibilityModeEnabled",
+                             "araF0AnalysisCacheEnabled"})
         || !reader.optionalNumber("tuningHz", static_cast<double>(TuningConfig::kMinTuningHz),
                                   static_cast<double>(TuningConfig::kMaxTuningHz), tuning)) {
         why = reader.why();
@@ -110,6 +112,7 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
         out.notesPrimary = scheme->text() == "openDyne";
     }
     if (!readBoolean(reader, "hybridMode", out.hybridMode)
+        || !readBoolean(reader, "araF0AnalysisCacheEnabled", out.araF0AnalysisCacheEnabled)
         || !readBoolean(reader, "experimentalFeatures", out.experimentalFeatures)
         || !readEnumPair(reader, "renderingPriority", "gpuFirst", "cpuFirst", out.cpuFirst)
         || !readOptionName(reader, "f0Model", out.f0Model)
@@ -119,8 +122,8 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
     }
     if (tuning)
         out.tuningHz = roundedTuning(*tuning);
-    if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures && !out.cpuFirst
-        && !out.f0Model && !out.accessibilityModeEnabled) {
+    if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.araF0AnalysisCacheEnabled
+        && !out.experimentalFeatures && !out.cpuFirst && !out.f0Model && !out.accessibilityModeEnabled) {
         why = "params must have at least one member";
         return false;
     }
@@ -137,6 +140,7 @@ ProcessingPreferencePatch preferencePatch(const PrefsRequest& request)
         patch.audioEditingScheme = *request.notesPrimary ? AudioEditingScheme::Scheme::NotesPrimary
                                                          : AudioEditingScheme::Scheme::CorrectedF0Primary;
     patch.lightPitchCorrectionEnabled = request.hybridMode;
+    patch.araF0AnalysisCacheEnabled = request.araF0AnalysisCacheEnabled;
     patch.experimentalFeaturesEnabled = request.experimentalFeatures;
     if (request.cpuFirst)
         patch.renderingPriority = *request.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst;
@@ -243,6 +247,13 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope,
                             JsonValue::boolean(after.lightPitchCorrectionEnabled), JsonValue());
         names.append(JsonValue::string("hybridMode"));
         revert.appendMember("hybridMode", JsonValue::boolean(before.lightPitchCorrectionEnabled));
+    }
+    if (delta.araF0AnalysisCache) {
+        addPreferenceChange(envelope, "araF0AnalysisCacheEnabled", "ARA original pitch analysis cache",
+                            JsonValue::boolean(before.araF0AnalysisCacheEnabled),
+                            JsonValue::boolean(after.araF0AnalysisCacheEnabled), JsonValue());
+        names.append(JsonValue::string("araF0AnalysisCacheEnabled"));
+        revert.appendMember("araF0AnalysisCacheEnabled", JsonValue::boolean(before.araF0AnalysisCacheEnabled));
     }
     if (delta.experimental) {
         addPreferenceChange(envelope, "experimentalFeatures", "Experimental features",

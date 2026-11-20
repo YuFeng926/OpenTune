@@ -3,7 +3,10 @@
 #include "IF0Extractor.h"
 #include "../Utils/Error.h"
 #include <onnxruntime_cxx_api.h>
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +27,7 @@ public:
     );
 
     static std::string getModelPath(F0ModelType type, const std::string& modelDir);
+    static std::optional<std::array<uint8_t, 32>> getModelWeightDigest(const std::string& modelPath);
 
     static bool isModelAvailable(F0ModelType type, const std::string& modelDir);
 

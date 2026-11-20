@@ -15,6 +15,8 @@ class ResamplingManager;
 
 class FCPEExtractor : public IF0Extractor {
 public:
+    static constexpr int kCacheAlgorithmVersion = 1;
+
     FCPEExtractor(
         std::unique_ptr<Ort::Session> session,
         std::shared_ptr<ResamplingManager> resampler,
@@ -50,6 +52,7 @@ public:
     // True if a DirectML Session::Run() failed this lifetime and the CPU
     // fallback path was engaged (regardless of whether the retry succeeded).
     bool didDmlRunFail() const { return dmlRunFailed_; }
+    bool isGpuActive() const { return dmlActive_; }
 
     // CPU 重试授权：由 F0InferenceService 在每次 lease 执行时注入。
     // 回调必须在 runMutex_ 下确认该 lease 仍是 activeLease_ 且 ownerState

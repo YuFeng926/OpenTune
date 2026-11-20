@@ -15,7 +15,6 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <memory>
-#include <map>
 #include <optional>
 #include <vector>
 
@@ -47,6 +46,7 @@ namespace OpenTune::PluginUI {
 class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
 #if JucePlugin_Enable_ARA
                                      public juce::AudioProcessorEditorARAExtension,
+                                      public juce::ARAAudioModificationListener,
 #endif
                                      public TimelineOverviewComponent::Listener,
                                      public ParameterPanel::Listener,
@@ -97,6 +97,11 @@ public:
     void cursorStyleChanged(CursorStyleId style) override;
     void onboardingRequested() override;
     void languageChanged(Language newLanguage) override;
+#if JucePlugin_Enable_ARA
+    void didUpdateAudioModificationContent(juce::ARAAudioModification* audioModification,
+                                           juce::ARAContentUpdateScopes scopeFlags) override;
+    void willDestroyAudioModification(juce::ARAAudioModification* audioModification) override;
+#endif
 
     void playRequested() override;
     void pauseRequested() override;
@@ -162,6 +167,12 @@ private:
     PianoRollContentSync resolveCurrentContentSync();
     std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
     void readScopeAudio();
+#if JucePlugin_Enable_ARA
+    void subscribePendingNoteGeneration(ContentKey key, juce::ARAAudioModification* modification,
+                                        const NoteGeneratorParams& params);
+    void queuePendingNoteGeneration(ContentKey key, juce::ARAAudioModification* modification);
+    void clearPendingNoteGenerationSubscription();
+#endif
     void syncParameterPanelFromSelection(bool forceClipParameterProjection = false);
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
@@ -228,9 +239,17 @@ private:
     // Tracks last-seen ContentKey for revision baseline only (not session last-active).
     ContentKey lastRevisionObservedContentKey_;
     std::optional<PianoRollPlacementIdentity> presentedPlacementIdentity_;
-    std::map<ContentKey, OriginalF0State> lastObservedOriginalF0States_;
-    // Read 读取音频时捕获的 OpenDyne 一次性音符生成意图（F0 Ready 后消费）
-    std::map<ContentKey, NoteGeneratorParams> pendingNoteGenerationOnReady_;
+#if JucePlugin_Enable_ARA
+    struct PendingNoteGenerationIntent
+    {
+        ContentKey key;
+        NoteGeneratorParams params;
+        uint64_t wrapperGeneration{0};
+        uint64_t birthRevision{0};
+    };
+    std::optional<PendingNoteGenerationIntent> pendingNoteGenerationIntent_;
+    juce::ARAAudioModification* pendingNoteGenerationListenerTarget_{nullptr};
+#endif
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};
