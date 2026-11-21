@@ -6,11 +6,10 @@
 #include "../Utils/NoteAudition.h"
 
 #include "../Inference/ModelFactory.h"
+#include "../Inference/F0InferenceService.h"
 #include "../Runtime/ProcessF0Runtime.h"
 #include "../Runtime/ProcessRenderRuntime.h"
 #include "../Services/F0ExtractionService.h"
-#include "../Services/F0AnalysisCache.h"
-#include "../Services/ImportedClipF0Extraction.h"
 #include "../DSP/F0KeyDetector.h"
 #include "../DSP/ResamplingManager.h"
 #include "../Utils/TimeCoordinate.h"
@@ -28,6 +27,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -63,6 +63,21 @@ ContentState cloneModificationContent(const ContentState& source)
     }
 
     return copy;
+}
+
+AraF0ConfigTag makeCurrentAraF0ConfigTag()
+{
+    AppPreferences preferences;
+    const auto modelType = preferences.getF0ModelType();
+    const auto modelPath = ModelFactory::getModelPath(
+        modelType, ModelPathResolver::getModelsDirectory());
+    const juce::File modelFile(modelPath);
+    AraF0ConfigTag tag;
+    tag.selectionRevision = F0InferenceService::getConfigurationRevision();
+    tag.absoluteModelPath = modelFile.getFullPathName().toStdString();
+    tag.modelBytes = modelFile.getSize();
+    tag.modelWriteTime = modelFile.getLastModificationTime();
+    return tag;
 }
 
 } // namespace
@@ -158,8 +173,6 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     : ARADocumentControllerSpecialisation(entry, instance)
     , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
-    , contentF0ExtractionService_(std::make_unique<F0ExtractionService>(
-        1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); }))
     , transportRelay_(std::make_shared<HostTransportRelayState>())
     , notePitchAudition_(std::make_unique<NotePitchAudition>())
     , renderTerminalRelay_(std::make_shared<RenderTerminalRelay>())
@@ -173,47 +186,51 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
 
 }
 
+void OpenTuneDocumentController::CompletionSink::complete(
+    F0TaskId taskId, SharedAraF0Outcome outcome)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (controller != nullptr)
+        controller->completeAraF0(taskId, std::move(outcome));
+}
+
+void OpenTuneDocumentController::willDestroyDocument(juce::ARADocument* document)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    juce::ignoreUnused(document);
+    revokeDocumentF0();
+}
+
 OpenTuneDocumentController::~OpenTuneDocumentController()
 {
-    if (transportRelay_ != nullptr)
-        transportRelay_->alive.store(false, std::memory_order_release);
-
-    if (renderTerminalRelay_ != nullptr)
-        renderTerminalRelay_->clear();
-    auditionRoute_.keyboardAudition.store(nullptr, std::memory_order_release);
-    auditionRoute_.keyboardMixer.store(nullptr, std::memory_order_release);
-    auditionRoute_.notePitchMixer.store(nullptr, std::memory_order_release);
-
     // DC/ARA model ownership、F0 completion 和 DC destruction 均在消息线程串行执行。
+    // flights 与 sink 是消息线程单线程状态，违反契约即未定义行为，按一期契约显式终止。
     auto* messageManager = juce::MessageManager::getInstance();
     if (messageManager == nullptr || !messageManager->isThisTheMessageThread())
     {
         AppLogger::error("ARA-DIAG: DocumentController destroyed off message thread; ownership contract violated");
         std::terminate();
     }
-    // sink 指针必须在 F0 service reset 之前置空：之后由 service 投递的
-    // completion 仍可能被消息线程执行，看到空 controller 直接退出。
-    completionSink_->controller = nullptr;
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    revokeDocumentF0();
     renderCompletionGate_->closeAndWait();
 
-    // 最前段关闭 F0 owner：丢弃排队任务、清空 active、终止本 owner 的活跃
-    // F0 Run（SetTerminate 加速返回），并 join 所有 worker。
-    contentF0ExtractionService_.reset();
+    if (transportRelay_ != nullptr)
+        transportRelay_->alive.store(false, std::memory_order_release);
+    if (renderTerminalRelay_ != nullptr)
+        renderTerminalRelay_->clear();
+    auditionRoute_.keyboardAudition.store(nullptr, std::memory_order_release);
+    auditionRoute_.keyboardMixer.store(nullptr, std::memory_order_release);
+    auditionRoute_.notePitchMixer.store(nullptr, std::memory_order_release);
 
-    // 停止渲染服务：detach execution lease（清 lease、失败收敛排队 job，
-    // 等待同步回调和异步 completion 全部归还）。
     if (contentRenderService_)
         contentRenderService_->detachExecutionLease(contentRenderService_.get());
     ProcessRenderRuntime::getInstance().detachDeferredJobs(
         contentRenderService_.get(), renderCompletionGate_);
 
-    // Owner-driven detach: before clearing playbackRenderers_, walk the list
-    // and call detachDocumentController(*this) on each renderer.
     for (auto* renderer : playbackRenderers_)
-    {
         if (renderer != nullptr)
             renderer->detachDocumentController(*this);
-    }
     collectPlaybackSnapshots();
     playbackRenderers_.clear();
 
@@ -1258,14 +1275,29 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
         return 0;
     }
 
-    // 同输入正在提取 F0：no-op
+    // 同输入正在提取 F0：只有本 scope 仍有对应接收资格时才 no-op。
     if (sameStamp
         && modification->hasContentState()
         && modification->content->analysis.originalF0State == OriginalF0State::Extracting)
     {
-        AppLogger::log("ReadAudio: same-input extracting no-op, key="
-            + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
-        return 0;
+        const AraF0LocalKey localKey{currentStamp, makeCurrentAraF0ConfigTag()};
+        const auto flight = araF0Flights_.localTasks.find(localKey);
+        if (flight != araF0Flights_.localTasks.end())
+        {
+            const auto receivers = araF0Flights_.receivers.find(flight->second);
+            if (receivers != araF0Flights_.receivers.end()
+                && std::any_of(receivers->second.begin(), receivers->second.end(),
+                    [modification, &currentStamp](const AraF0Receiver& receiver) {
+                        return receiver.target.wrapperGeneration == modification->wrapperGeneration
+                            && receiver.target.birthRevision == modification->birthRevision
+                            && receiver.target.stamp == currentStamp;
+                    }))
+            {
+                AppLogger::log("ReadAudio: same-input extracting no-op, key="
+                    + juce::String(static_cast<juce::int64>(modification->contentKey().objectId)));
+                return 0;
+            }
+        }
     }
 
     // 同输入 + 有效旧 F0 + 未 materialize：调用 birthContentForModification
@@ -1310,6 +1342,9 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
         return -1;
 
     // 取消旧 F0 任务、清除 CRS 派生物、invalidateDerivedContent 清除旧 pitchCurve
+    if (!araF0Flights_.receivers.empty())
+        ProcessF0Runtime::getInstance().araAnalysisQueue().revokeReceiver(
+            araF0Flights_, modification->wrapperGeneration);
     removeCRSArtifactsForModification(*modification);
     modification->invalidateDerivedContent();
     // invalidateDerivedContent 已清除 analysis（含 pitchCurve）和 originalF0InputStamp
@@ -1405,9 +1440,14 @@ void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAA
 
 void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModification* audioModification)
 {
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     auto* mod = findAudioModification(audioModification);
     if (mod == nullptr)
         return;
+
+    if (!araF0Flights_.receivers.empty())
+        ProcessF0Runtime::getInstance().araAnalysisQueue().revokeReceiver(
+            araF0Flights_, mod->wrapperGeneration);
 
     // 清理 CRS derived artifacts
     removeCRSArtifactsForModification(*mod);
@@ -1482,7 +1522,7 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
         // kARAContentUpdateSignalScopeRemainsUnchanged means actual signal is unaffected.
         // When signal is unchanged (e.g. window reopen after archive restore):
         //   - Preserve analysis (pitchCurve, originalF0) — these remain valid
-        //   - Skip removeCRSArtifactsForModification — it cancels F0 tasks, contradicting preservation
+        //   - Skip removeCRSArtifactsForModification — preserve the published read source
         //   - CRS playback cache 重建：新内容由用户 Read 触发；archive 恢复且
         //     已有有效 F0 的内容在 endEditing/access 后自动重建 PCM
         // When signal changed:
@@ -1490,7 +1530,10 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
         const bool signalChanged = scopeFlags.affectSamples();
 
         if (signalChanged)
+        {
+            abortSourceF0(*source, AraF0Abort::SamplesChanged);
             source->incrementSampleContentGeneration();
+        }
 
         for (auto& modification : audioModifications_)
         {
@@ -1514,7 +1557,18 @@ void OpenTuneDocumentController::willEnableAudioSourceSamplesAccess(juce::ARAAud
                                                                     bool enable)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    ensureAudioSource(audioSource).setSampleAccessEnabled(enable);
+    auto& source = ensureAudioSource(audioSource);
+    if (!enable && source.hasSampleAccess())
+    {
+        abortSourceF0(source, AraF0Abort::SamplesDisabled);
+        source.incrementSampleContentGeneration();
+        const auto sourcePersistentId = source.getIdentity().persistentId;
+        for (auto& modification : audioModifications_)
+            if (modification.hasContentState()
+                && modification.content->sourceWindow.sourcePersistentId == sourcePersistentId)
+                modification.analysisContinuationPending = false;
+    }
+    source.setSampleAccessEnabled(enable);
 }
 
 void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudioSource* audioSource,
@@ -1523,7 +1577,7 @@ void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudi
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     auto& source = ensureAudioSource(audioSource);
     source.setSampleAccessEnabled(enable);
-    // ARA Audio Source Management callback 内建立 HostAudioReader lease；
+    // ARA Audio Source Management callback 内为 AudioSource 建立 reader 所有权；
     // 实际 sample read 在用户 Read 或 restore 自动 materialization 的非实时路径进行。
     if (enable)
         source.createReaderLease();
@@ -1534,6 +1588,38 @@ void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudi
         readRestoredAudio(&source);
 
     refreshRegisteredRenderers(publishModelChange());
+}
+
+void OpenTuneDocumentController::willDeactivateAudioSourceForUndoHistory(
+    juce::ARAAudioSource* audioSource, bool deactivate)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (!deactivate)
+        return;
+    auto* source = findAudioSource(audioSource);
+    if (source == nullptr)
+        return;
+
+    abortSourceF0(*source, AraF0Abort::SourceUndo);
+    source->incrementSampleContentGeneration();
+    source->clearReaderLease();
+    const auto sourcePersistentId = source->getIdentity().persistentId;
+    for (auto& modification : audioModifications_)
+        if (modification.hasContentState()
+            && modification.content->sourceWindow.sourcePersistentId == sourcePersistentId)
+            modification.analysisContinuationPending = false;
+}
+
+void OpenTuneDocumentController::willDeactivateAudioModificationForUndoHistory(
+    juce::ARAAudioModification* audioModification, bool deactivate)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    if (!deactivate)
+        return;
+    auto* modification = findAudioModification(audioModification);
+    if (modification != nullptr && !araF0Flights_.receivers.empty())
+        ProcessF0Runtime::getInstance().araAnalysisQueue().revokeReceiver(
+            araF0Flights_, modification->wrapperGeneration);
 }
 
 void OpenTuneDocumentController::willRemovePlaybackRegionFromAudioModification(
@@ -1549,6 +1635,8 @@ void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* au
 {
     AudioSource* source = findAudioSource(audioSource);
     const auto persistentId = source != nullptr ? source->getIdentity().persistentId : juce::String();
+    if (source != nullptr)
+        revokeSourceF0(*source);
     audioSources_.erase(std::remove_if(audioSources_.begin(), audioSources_.end(),
                                        [audioSource](const AudioSource& source)
                                        {
@@ -1673,7 +1761,9 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
     // 全部成功后对 pending 进行原子替换
     for (auto& [targetMod, state] : pending)
     {
-        // 先清理 CRS 派生碎片
+        if (!araF0Flights_.receivers.empty())
+            ProcessF0Runtime::getInstance().araAnalysisQueue().revokeReceiver(
+                araF0Flights_, targetMod->wrapperGeneration);
         removeCRSArtifactsForModification(*targetMod);
 
         // 原子替换 content（新恢复的 ContentState 携带默认运行时 revision 1）
@@ -2134,6 +2224,9 @@ void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSou
             const auto currentStamp = makeF0InputStamp(*source, mod);
             if (mod.originalF0InputStamp.has_value()) {
                 if (mod.originalF0InputStamp.value() != currentStamp) {
+                    if (!araF0Flights_.receivers.empty())
+                        ProcessF0Runtime::getInstance().araAnalysisQueue().revokeReceiver(
+                            araF0Flights_, mod.wrapperGeneration);
                     removeCRSArtifactsForModification(mod);
                     mod.invalidateDerivedContent();
                     mod.originalF0InputStamp = currentStamp;
@@ -2174,8 +2267,9 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     modification.analysisContinuationPending = false;
-    // F0 #B.4: 每次 birth 开始前取消该 content 的旧 F0 request
-    contentF0ExtractionService_->cancel(F0RequestKey{modification.contentKey()});
+    if (!araF0Flights_.receivers.empty())
+        ProcessF0Runtime::getInstance().araAnalysisQueue().revokeReceiver(
+            araF0Flights_, modification.wrapperGeneration);
 
     // 前置条件：必须已拥有 content 和有效 sourceWindow。
     // restore 路径负责建立 content；这里只读取 AudioSource 并构建 CRS 派生 PCM。
@@ -2220,9 +2314,7 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         return false;
     }
 
-    // Reader lease is created by didEnableAudioSourceSamplesAccess.
-    auto readerLease = source->shareReaderLease();
-    if (readerLease == nullptr)
+    if (!source->hasReaderLease())
         return failBirth("ARA host audio reader is unavailable while sample access is enabled");
 
     // 若已有 valid F0（恢复路径），跳过重复提取，避免新旧重叠。
@@ -2273,9 +2365,9 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
             for (int ch = 0; ch < numChannels; ++ch)
                 channelPointers[static_cast<size_t>(ch)] = nativePcm.getWritePointer(ch, chunkOffset);
 
-            if (!readerLease->readAudioSamples(readOffset,
-                                               static_cast<int>(chunkSamples),
-                                               channelPointers.data()))
+            if (!source->readAudioSamples(readOffset,
+                                          static_cast<int>(chunkSamples),
+                                          channelPointers.data()))
             {
                 return failBirth("ARA host audio reader failed (startSample="
                     + std::to_string(readOffset) + ", samples="
@@ -2404,8 +2496,15 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
             + std::to_string(modification.contentKey().objectId));
     }
 
-    // 8. Set modification state and notify ARA host
+    // 8. Register async F0 receiver before the host can reenter the model graph.
     modification.birthState = AudioModificationBirthState::Ready;
+    if (!alreadyHasF0)
+    {
+        scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate,
+                                  numChannels, modification.wrapperGeneration,
+                                  modification.persistentId, currentStamp);
+    }
+
     // 有效 F0 表示 archive/runtime 恢复，不产生新模型变更；无有效 F0 表示用户 Read，保持通知
     if (modification.audioModification != nullptr)
         modification.audioModification->notifyContentChanged(
@@ -2417,14 +2516,6 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     // 用户手动 Read（无有效 F0）不提前 Stage1，F0 提取完成后由既有链继续。
     if (alreadyHasF0)
         requestFullModificationRender(modification.contentKey());
-
-    // 9. Schedule async F0 extraction via CRS (skip if F0 already available)
-    if (!alreadyHasF0)
-    {
-        scheduleAsyncF0Extraction(modification.contentKey(), std::move(channel0Data), sourceSampleRate,
-                                  numChannels, modification.wrapperGeneration,
-                                  modification.persistentId, currentStamp);
-    }
 
     return true;
 }
@@ -2468,8 +2559,6 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::find
 
 void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioModification& modification)
 {
-    contentF0ExtractionService_->cancel(F0RequestKey{modification.contentKey()});
-
     if (contentRenderService_ == nullptr)
         return;
 
@@ -2485,6 +2574,90 @@ void OpenTuneDocumentController::removeCRSArtifactsForModification(const AudioMo
 // not user intent. 新内容仅由用户 Read（requestReadAudioForPlaybackRegion）读取；
 // archive 恢复且已有有效 F0 的内容在 endEditing/access 后自动重建 PCM。
 
+void OpenTuneDocumentController::revokeDocumentF0()
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    completionSink_->controller = nullptr;
+    if (!araF0Flights_.receivers.empty() || !araF0Flights_.localTasks.empty())
+        ProcessF0Runtime::getInstance().araAnalysisQueue().detachDocument(araF0Flights_);
+}
+
+void OpenTuneDocumentController::revokeSourceF0(const AudioSource& source)
+{
+    const auto& persistentId = source.getIdentity().persistentId;
+    std::vector<F0TaskId> tasks;
+    for (auto local = araF0Flights_.localTasks.begin(); local != araF0Flights_.localTasks.end();)
+    {
+        if (local->first.input.sourcePersistentId == persistentId)
+        {
+            tasks.push_back(local->second);
+            local = araF0Flights_.localTasks.erase(local);
+        }
+        else
+        {
+            ++local;
+        }
+    }
+    if (!tasks.empty())
+        ProcessF0Runtime::getInstance().araAnalysisQueue().revokeTaskReceivers(
+            araF0Flights_, tasks);
+}
+
+void OpenTuneDocumentController::abortSourceF0(AudioSource& source, AraF0Abort reason)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const auto& persistentId = source.getIdentity().persistentId;
+    std::vector<F0TaskId> tasks;
+    for (const auto& [localKey, taskId] : araF0Flights_.localTasks)
+        if (localKey.input.sourcePersistentId == persistentId)
+            tasks.push_back(taskId);
+    if (tasks.empty())
+        return;
+
+    const char* reasonName = reason == AraF0Abort::SamplesDisabled ? "SamplesDisabled"
+        : reason == AraF0Abort::SourceUndo ? "SourceUndo" : "SamplesChanged";
+    auto& queue = ProcessF0Runtime::getInstance().araAnalysisQueue();
+    for (const auto taskId : tasks)
+    {
+        queue.abortTask(taskId, reason);
+        araF0Flights_.receivers.erase(taskId);
+        for (auto local = araF0Flights_.localTasks.begin(); local != araF0Flights_.localTasks.end();)
+            local = local->second == taskId ? araF0Flights_.localTasks.erase(local) : std::next(local);
+        AppLogger::logNoThrow("ARA-F0 analysis_aborted taskId="
+            + juce::String(static_cast<juce::int64>(taskId.value))
+            + " reason=" + reasonName
+            + " sourceGeneration="
+            + juce::String(static_cast<juce::int64>(source.getSampleContentGeneration())));
+    }
+}
+
+void OpenTuneDocumentController::completeAraF0(
+    F0TaskId taskId, SharedAraF0Outcome sharedResult)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    for (;;)
+    {
+        auto task = araF0Flights_.receivers.find(taskId);
+        if (task == araF0Flights_.receivers.end() || task->second.empty())
+        {
+            if (task != araF0Flights_.receivers.end())
+                araF0Flights_.receivers.erase(task);
+            for (auto local = araF0Flights_.localTasks.begin(); local != araF0Flights_.localTasks.end();)
+                local = local->second == taskId ? araF0Flights_.localTasks.erase(local) : std::next(local);
+            return;
+        }
+
+        auto receiver = std::move(task->second.front());
+        task->second.erase(task->second.begin());
+        const auto sink = receiver.sink.lock();
+        if (sink == nullptr || sink.get() != completionSink_.get()
+            || completionSink_->controller != this)
+            continue;
+
+        commitF0Completion(F0CompletionRecord{sharedResult, taskId, std::move(receiver.target)});
+    }
+}
+
 bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     ContentKey key,
     std::vector<float> channel0Data,
@@ -2494,286 +2667,128 @@ bool OpenTuneDocumentController::scheduleAsyncF0Extraction(
     juce::String persistentId,
     OriginalF0InputStamp stamp)
 {
-    // ARA model access and F0 completion admission belong to the DC message-thread owner.
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
 
-    // Pre-check failures: mark matching content Failed so Extracting is not permanent
-    auto markFailedIfCurrentBirth = [&](uint64_t birth, const std::string& reason) {
-        if (auto* m = findAudioModificationByContentKey(key))
+    auto* modification = findAudioModificationByContentKey(key);
+    if (modification == nullptr)
+        return false;
+    const auto birthRevision = modification->birthRevision;
+    auto markFailedIfCurrentBirth = [this, key, wrapperGeneration, persistentId, birthRevision](
+        const std::string& reason) {
+        if (auto* current = findAudioModificationByContentKey(key))
         {
-            if (m->birthRevision == birth
-                && m->wrapperGeneration == wrapperGeneration
-                && m->persistentId == persistentId)
+            if (current->birthRevision == birthRevision
+                && current->wrapperGeneration == wrapperGeneration
+                && current->persistentId == persistentId)
             {
-                m->applyOriginalF0State(OriginalF0State::Failed);
+                current->applyOriginalF0State(OriginalF0State::Failed);
                 applyOriginalF0FailureReasonToModification(key, reason);
             }
         }
     };
 
-    // Capture current birthRevision before any early return
-    uint64_t birthRevision = 0;
-    if (auto* mod = findAudioModificationByContentKey(key))
-        birthRevision = mod->birthRevision;
-
-    if (!contentF0ExtractionService_)
-    {
-        markFailedIfCurrentBirth(birthRevision, "ARA F0 extraction service is unavailable");
-        return false;
-    }
-
     if (contentRenderService_ == nullptr)
     {
-        markFailedIfCurrentBirth(birthRevision, "ARA content render service is unavailable for F0 extraction");
+        markFailedIfCurrentBirth("ARA content render service is unavailable for F0 extraction");
         return false;
     }
 
-    auto submitResult = contentF0ExtractionService_->submit(
-        F0RequestKey{key},
-        [data = std::move(channel0Data), sourceSampleRate, sourceChannelCount, birthRevision]
-        (const std::shared_ptr<F0RunOwnerState>& runOwnerState) mutable
-        {
-            if (data.empty())
-            {
-                F0ExtractionService::Result failed;
-                failed.errorMessage = "F0 extraction input audio is empty";
-                return failed;
-            }
-
-            auto& f0Runtime = ProcessF0Runtime::getInstance();
-            std::string initializationError;
-            if (!f0Runtime.isReady())
-                f0Runtime.initialize(ModelPathResolver::getModelsDirectory(), &initializationError);
-            auto f0Svc = f0Runtime.getF0Service();
-            if (!f0Svc)
-            {
-                AppLogger::error("ARA-F0: worker lazy-init model Failed - F0 service unavailable (birthRev="
-                    + juce::String(static_cast<juce::int64>(birthRevision)) + ")");
-                F0ExtractionService::Result failed;
-                failed.errorMessage = initializationError.empty()
-                    ? "F0 runtime has no inference service after initialization"
-                    : initializationError;
-                return failed;
-            }
-
-            const bool cacheEnabled = AppPreferences::readAraF0AnalysisCacheEnabledFromDisk();
-            auto config = f0Svc->snapshotExtractionConfig(cacheEnabled);
-            F0AnalysisCache::Digest compositeKey{};
-            F0AnalysisCache::Digest pcmDigest{};
-            std::optional<F0AnalysisCache::KeyConfig> keyConfig;
-            bool hasCompositeKey = false;
-            std::string configurationSummary = "config_unavailable";
-
-            if (config.has_value())
-            {
-                configurationSummary = "model=" + std::to_string(static_cast<int>(config->modelType))
-                    + " backend=" + config->backend
-                    + " confidence=" + std::to_string(config->confidence)
-                    + " f0Min=" + std::to_string(config->f0Min)
-                    + " f0Max=" + std::to_string(config->f0Max);
-            }
-
-            if (cacheEnabled && config.has_value() && config->modelWeightDigestAvailable)
-            {
-                keyConfig.emplace();
-                auto& cacheKeyConfig = *keyConfig;
-                cacheKeyConfig.schemaVersion = F0AnalysisCache::kSchemaVersion;
-                cacheKeyConfig.algorithmVersion = config->algorithmVersion;
-                cacheKeyConfig.resamplingAlgorithmVersion = config->resamplingAlgorithmVersion;
-                cacheKeyConfig.f0AlgorithmVersion = config->algorithmVersion;
-                cacheKeyConfig.energyAlgorithmVersion = kFrameEnergyAlgorithmVersion;
-                cacheKeyConfig.modelType = static_cast<int>(config->modelType);
-                cacheKeyConfig.modelWeightDigest = config->modelWeightDigest;
-                cacheKeyConfig.confidence = config->confidence;
-                cacheKeyConfig.f0Min = config->f0Min;
-                cacheKeyConfig.f0Max = config->f0Max;
-                cacheKeyConfig.backend = config->backend;
-                cacheKeyConfig.sourceSampleRate = sourceSampleRate;
-                cacheKeyConfig.sourceChannelCount = sourceChannelCount;
-                cacheKeyConfig.channelPolicyVersion = F0AnalysisCache::kChannelZeroPolicyVersion;
-                cacheKeyConfig.windowSampleCount = data.size();
-                pcmDigest = F0AnalysisCache::digestPcm(data.data(), data.size());
-                compositeKey = F0AnalysisCache::buildKey(cacheKeyConfig, pcmDigest);
-                hasCompositeKey = true;
-                const auto keyHex = F0AnalysisCache::keyToHex(compositeKey);
-
-                if (auto cached = F0AnalysisCache::tryLoad(F0AnalysisCache::cacheDirectory(), compositeKey))
-                {
-                    F0AnalysisCache::touch(F0AnalysisCache::cacheDirectory(), compositeKey);
-                    F0ExtractionService::Result result;
-                    result.success = true;
-                    result.hopSize = cached->hopSize;
-                    result.f0SampleRate = static_cast<int>(cached->f0SampleRate);
-                    result.f0 = std::move(cached->originalF0);
-                    result.energy = std::move(cached->energy);
-                    AppLogger::log("ARA-F0 cache_hit key=" + juce::String(keyHex.substr(0, 16)));
-                    return result;
-                }
-            }
-
-            const auto keyLabel = hasCompositeKey
-                ? F0AnalysisCache::keyToHex(compositeKey).substr(0, 16)
-                : cacheEnabled ? std::string("unavailable") : std::string("disabled");
-            AppLogger::log("ARA-F0 inference_start key=" + juce::String(keyLabel)
-                + " " + juce::String(configurationSummary));
-
-            int hopSize = 0;
-            int f0SampleRate = 0;
-            std::string actualBackend;
-            auto extraction = f0Svc->extractF0ForAnalysis(
-                data.data(), data.size(), static_cast<int>(sourceSampleRate), runOwnerState,
-                config.has_value() ? &*config : nullptr, hopSize, f0SampleRate, actualBackend);
-
-            if (!extraction.ok())
-            {
-                F0ExtractionService::Result failed;
-                failed.errorMessage = extraction.error().fullMessage();
-                return failed;
-            }
-            if (extraction.value().empty())
-            {
-                F0ExtractionService::Result failed;
-                failed.errorMessage = "F0 inference returned an empty result";
-                return failed;
-            }
-
-            if (hasCompositeKey && keyConfig.has_value() && keyConfig->backend != actualBackend) {
-                keyConfig->backend = actualBackend;
-                compositeKey = F0AnalysisCache::buildKey(*keyConfig, pcmDigest);
-            }
-            const auto& f0Data = extraction.value();
-            const auto energy = computeFrameEnergy(
-                data.data(), static_cast<int>(data.size()),
-                static_cast<int>(sourceSampleRate),
-                f0Data, f0SampleRate, hopSize);
-
-            F0ExtractionService::Result result;
-            result.success = true;
-            result.f0 = f0Data;
-            result.hopSize = hopSize;
-            result.f0SampleRate = f0SampleRate;
-            result.energy = energy;
-
-            if (hasCompositeKey && config.has_value() && config->modelWeightDigestAvailable
-                && AppPreferences::readAraF0AnalysisCacheEnabledFromDisk()) {
-                const auto currentModelDigest = ModelFactory::getModelWeightDigest(config->modelPath);
-                if (currentModelDigest.has_value() && *currentModelDigest == config->modelWeightDigest) {
-                    F0AnalysisCache::Record cacheRecord;
-                    cacheRecord.hopSize = result.hopSize;
-                    cacheRecord.f0SampleRate = static_cast<double>(result.f0SampleRate);
-                    cacheRecord.originalF0 = result.f0;
-                    cacheRecord.energy = result.energy;
-                    F0AnalysisCache::publish(F0AnalysisCache::cacheDirectory(), compositeKey, cacheRecord);
-                } else {
-                    AppLogger::log("ARA-F0 cache_publish_skipped key="
-                        + juce::String(F0AnalysisCache::keyToHex(compositeKey).substr(0, 16))
-                        + " reason=model_digest_changed");
-                }
-            }
-            return result;
-        },
-        [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
-        (F0ExtractionService::Result&& result)
-        {
-            jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-            if (sink->controller == nullptr)
-                return;
-            sink->controller->commitF0Completion(
-                F0CompletionRecord{std::move(result), key, wrapperGeneration,
-                                    persistentId, birthRevision, stamp});
-        },
-
-        [sink = completionSink_, key, wrapperGeneration, persistentId, birthRevision, stamp]
-         (F0ExtractionService::Result&& result)
-         {
-             // Dispatcher failure 路径：service 的 DispatcherFailureMailbox 在消息线程调用本回调，
-             // 与成功路径一致，可直接提交 completion。
-             jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-             if (sink->controller == nullptr)
-                 return;
-             sink->controller->commitF0Completion(
-                 F0CompletionRecord{std::move(result), key, wrapperGeneration,
-                                     persistentId, birthRevision, stamp});
-         });
-
-    // Only queue-full and invalid-task submissions fail the current birth.
-    if (submitResult == F0ExtractionService::SubmitResult::Accepted
-        || submitResult == F0ExtractionService::SubmitResult::AlreadyInProgress
-        || submitResult == F0ExtractionService::SubmitResult::ShuttingDown)
+    const AraF0LocalKey localKey{stamp, makeCurrentAraF0ConfigTag()};
+    AraF0Target target;
+    target.key = key;
+    target.wrapperGeneration = wrapperGeneration;
+    target.birthRevision = birthRevision;
+    target.modificationPersistentId = persistentId;
+    target.stamp = stamp;
+    AraF0Receiver receiver{std::move(target), {}, completionSink_};
+    AraF0Pcm pcm{std::move(channel0Data), sourceSampleRate, sourceChannelCount};
+    auto& queue = ProcessF0Runtime::getInstance().araAnalysisQueue();
+    const auto submission = queue.submit(araF0Flights_, localKey, std::move(pcm), std::move(receiver));
+    if (submission.admission == AraF0Admission::Accepted
+        || submission.admission == AraF0Admission::Attached)
         return true;
 
-    const char* reason = submitResult == F0ExtractionService::SubmitResult::QueueFull
+    // Closing 在触碰 flights 之前返回，无可撤销项；QueueFull/InvalidInput/Closing
+    // 都使当前合法 birth 进入既有 Failed 语义。
+    const auto reason = submission.admission == AraF0Admission::QueueFull
         ? "F0 extraction queue is full"
-        : "F0 extraction submission was rejected: invalid task";
-    markFailedIfCurrentBirth(birthRevision, reason);
+        : submission.admission == AraF0Admission::Closing
+            ? "F0 extraction service is closing"
+            : "F0 extraction input audio is invalid";
+    markFailedIfCurrentBirth(reason);
     return false;
 }
 
 void OpenTuneDocumentController::commitF0Completion(F0CompletionRecord record)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    collectPlaybackSnapshots();
-    auto* mod = findAudioModificationByContentKey(record.key);
-    if (mod == nullptr
-        || mod->wrapperGeneration != record.wrapperGeneration
-        || mod->birthRevision != record.birthRevision
-        || !mod->hasContentState()
-        || mod->persistentId != record.persistentId
-        || !mod->originalF0InputStamp.has_value()
-        || mod->originalF0InputStamp.value() != record.stamp)
+
+    if (completionSink_->controller != this
+        || !ProcessF0Runtime::getInstance().araAnalysisQueue().isActive(record.task))
+        return;
+    auto* modification = findAudioModificationByContentKey(record.target.key);
+    if (modification == nullptr
+        || modification->wrapperGeneration != record.target.wrapperGeneration
+        || modification->birthRevision != record.target.birthRevision
+        || !modification->hasContentState()
+        || modification->persistentId != record.target.modificationPersistentId
+        || !modification->originalF0InputStamp.has_value()
+        || modification->originalF0InputStamp.value() != record.target.stamp)
         return;
 
-    auto* currentSource = findAudioSource(mod->content->sourceWindow.sourcePersistentId);
+    auto* currentSource = findAudioSource(modification->content->sourceWindow.sourcePersistentId);
     if (currentSource == nullptr
-        || makeF0InputStamp(*currentSource, *mod) != record.stamp)
+        || makeF0InputStamp(*currentSource, *modification) != record.target.stamp)
         return;
 
-    auto* hostModificationToNotify = mod->audioModification;
-    if (!record.result.success || record.result.f0.empty())
+    collectPlaybackSnapshots();
+    const auto& result = *record.result;
+    auto* hostModificationToNotify = modification->audioModification;
+    if (!result.success || result.f0.empty())
     {
-        const std::string reason = !record.result.errorMessage.empty()
-            ? record.result.errorMessage
-            : record.result.f0.empty()
+        const std::string reason = !result.errorMessage.empty()
+            ? result.errorMessage
+            : result.f0.empty()
                 ? "F0 extraction completed without any frames"
                 : "F0 extraction failed without an error detail";
-        mod->applyOriginalF0State(OriginalF0State::Failed);
-        applyOriginalF0FailureReasonToModification(record.key, reason);
-        AppLogger::error("ARA-F0: extraction failed reason="
-            + juce::String(reason));
+        modification->applyOriginalF0State(OriginalF0State::Failed);
+        applyOriginalF0FailureReasonToModification(record.target.key, reason);
+        AppLogger::error("ARA-F0: extraction failed reason=" + juce::String(reason));
         return;
     }
 
-    const auto previousPitchCurve = mod->content->analysis.pitchCurve;
+    const auto previousPitchCurve = modification->content->analysis.pitchCurve;
     auto pitchCurve = std::make_shared<PitchCurve>();
-    pitchCurve->setOriginalF0(record.result.f0);
-    pitchCurve->setSampleRate(static_cast<double>(record.result.f0SampleRate));
-    pitchCurve->setHopSize(record.result.hopSize);
-    if (!record.result.energy.empty())
-        pitchCurve->setOriginalEnergy(record.result.energy);
+    pitchCurve->setOriginalF0(result.f0);
+    pitchCurve->setSampleRate(static_cast<double>(result.f0SampleRate));
+    pitchCurve->setHopSize(result.hopSize);
+    if (!result.energy.empty())
+        pitchCurve->setOriginalEnergy(result.energy);
     if (previousPitchCurve != nullptr
-        && !previousPitchCurve->getSnapshot()->getErasedRanges().empty()) {
+        && !previousPitchCurve->getSnapshot()->getErasedRanges().empty())
+    {
         pitchCurve->replaceErasedRangesInRange(
-            0, static_cast<int>(record.result.f0.size()),
+            0, static_cast<int>(result.f0.size()),
             previousPitchCurve->getSnapshot()->getErasedRanges());
     }
 
-    if (mod->content->analysis.detectedKey.origin != Origin::Manual)
+    if (modification->content->analysis.detectedKey.origin != Origin::Manual)
     {
         F0KeyDetector detector;
-        const auto detectedKey = detector.detect(record.result.f0, record.result.energy);
+        const auto detectedKey = detector.detect(result.f0, result.energy);
         if (detectedKey.origin != Origin::Unset)
-            mod->applyDetectedKey(detectedKey);
+            modification->applyDetectedKey(detectedKey);
     }
 
-    mod->applyOriginalF0(std::move(pitchCurve));
-    mod->originalF0InputStamp = record.stamp;
-
-    requestFullModificationRender(record.key);
+    modification->applyOriginalF0(std::move(pitchCurve));
+    modification->originalF0InputStamp = record.target.stamp;
+    requestFullModificationRender(record.target.key);
 
     if (hostModificationToNotify != nullptr)
         hostModificationToNotify->notifyContentChanged(
             juce::ARAContentUpdateScopes::tuningIsAffected(), true);
 }
+
 
 // Per architecture: DC owns CRS and installs render execution lease.
 // The lease is detached in destructor to prevent dangling callback.

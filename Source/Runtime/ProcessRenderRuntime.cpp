@@ -18,6 +18,7 @@
 #include "../Utils/F0GapFill.h"
 #include "../Utils/TimeCoordinate.h"
 #include "ProcessF0Runtime.h"
+#include "../Inference/F0InferenceService.h"
 
 #include <juce_events/juce_events.h>
 
@@ -1046,6 +1047,7 @@ ProcessRenderRuntime::ControlResult ProcessRenderRuntime::reconfigureVocoder(
     if (command.type == ControlCommand::Type::ResetInferenceBackend) {
         auto& detector = AccelerationDetector::getInstance();
         detector.resetAndDetect(command.forceCpu);
+        F0InferenceService::advanceConfigurationRevision();
     }
 
     // 严格先销毁旧 Session，再创建新 Session；新旧显存不并存。

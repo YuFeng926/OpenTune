@@ -1,19 +1,16 @@
 #pragma once
 
-#include <condition_variable>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include <juce_audio_basics/juce_audio_basics.h>
-#include <juce_events/juce_events.h>
 
+#include "../ARA/AraF0Types.h"
 #include "../Utils/SilentGapDetector.h"
 #include "../Content/ContentKey.h"
 
@@ -22,33 +19,19 @@ namespace OpenTune {
 class F0InferenceService;
 struct F0RunOwnerState;
 
-// F0 提取任务去重键：ContentKey 唯一标识一次提取
-struct F0RequestKey {
+struct F0RequestKey
+{
     ContentKey contentKey;
 
-    bool operator==(const F0RequestKey& o) const noexcept {
-        return contentKey == o.contentKey;
-    }
+    bool operator==(const F0RequestKey& o) const noexcept { return contentKey == o.contentKey; }
     bool operator!=(const F0RequestKey& o) const noexcept { return !(*this == o); }
 };
 
-} // namespace OpenTune
-
-template <>
-struct std::hash<OpenTune::F0RequestKey> {
-    size_t operator()(const OpenTune::F0RequestKey& k) const noexcept {
-        size_t h = static_cast<size_t>(k.contentKey.domainKind);
-        h ^= static_cast<size_t>(k.contentKey.objectId * 1099511628211ULL);
-        h ^= static_cast<size_t>(k.contentKey.sourceWindowDiscriminator * 1099511628211ULL);
-        return h;
-    }
-};
-
-namespace OpenTune {
-
-class F0ExtractionService {
+class F0ExtractionService
+{
 public:
-    struct Result {
+    struct Result
+    {
         bool success{false};
         int trackId{0};
         int placementIndexHint{-1};
@@ -73,7 +56,8 @@ public:
     using ExecuteFn = std::function<Result(const std::shared_ptr<F0RunOwnerState>&)>;
     using CommitFn = std::function<void(Result&&)>;
 
-    enum class SubmitResult : uint8_t {
+    enum class SubmitResult : uint8_t
+    {
         Accepted,
         AlreadyInProgress,
         QueueFull,
@@ -81,84 +65,55 @@ public:
         ShuttingDown
     };
 
+    enum class WorkerTopology : uint8_t
+    {
+        General,
+        AraPreparationExecution
+    };
+
     F0ExtractionService(int workerCount, size_t maxQueueSize,
-                        std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver);
-    // worker 由 service 持有并在 shutdown() 中收敛、唤醒、join；worker 捕获
-    // shared state 而非 service this，绝不访问已析构的 service。
+                        std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver,
+                        WorkerTopology topology = WorkerTopology::General);
     ~F0ExtractionService();
 
-    /// 显式幂等关闭：停止接受新提交、丢弃排队 job、清空 active 表（shutdown 后
-    /// isActive() 恒为 false）、关闭 ownerState 并终止本 owner 的活跃 F0 Run
-    /// （SetTerminate 使已 dequeue 的 execute 快速返回），唤醒并 join 所有 worker。
-    /// 关闭开始后完成的任务不再投递 commit。
     void shutdown();
 
     SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit,
                         CommitFn dispatcherFailure = {},
                         uint64_t* acceptedRequestToken = nullptr);
 
+    AraF0Submission submit(AraF0DocumentFlights& flights, const AraF0LocalKey& localKey,
+                          AraF0Pcm pcm, AraF0Receiver receiver);
+    bool isActive(F0TaskId taskId) const;
+    void abortTask(F0TaskId taskId, AraF0Abort reason);
+    void revokeReceiver(AraF0DocumentFlights& flights, uint64_t wrapperGeneration);
+    void revokeTaskReceivers(AraF0DocumentFlights& flights,
+                             const std::vector<F0TaskId>& taskIds);
+    void detachDocument(AraF0DocumentFlights& flights);
+
     bool isActive(F0RequestKey requestKey) const;
     void cancel(F0RequestKey requestKey);
 
 private:
-    struct Task {
-        F0RequestKey requestKey;
-        uint64_t token{0};
-        ExecuteFn execute;
-        CommitFn commit;
-        CommitFn dispatcherFailure;
-    };
-
-    struct ActiveEntry {
-        uint64_t token{0};
-    };
-
-    // worker 线程执行状态全部放入 shared state：worker 捕获 state（shared_ptr）
-    // 而非 service this；owner 销毁后 state 由 worker 自身持有直到其退出，因此
-    // worker 永不触碰已析构的 service。
-    struct SharedState {
-        using Commit = F0ExtractionService::CommitFn;
-        using ResultType = F0ExtractionService::Result;
-
-        struct DispatcherFailure {
-            Commit callback;
-            std::shared_ptr<ResultType> result;
-        };
-
-        class DispatcherFailureMailbox final : public juce::AsyncUpdater {
-        public:
-            void enqueue(Commit callback, std::shared_ptr<ResultType> result);
-            void cancelAndClear();
-            void handleAsyncUpdate() override;
-
-        private:
-            std::mutex mutex_;
-            std::deque<DispatcherFailure> queue_;
-        };
-
-        std::deque<Task> queue_;                        // entriesMutex_ 下访问；容量合同 maxQueueSize_
-        size_t maxQueueSize_{0};                        // 真实容量合同，entriesMutex_ 下校验
-        std::condition_variable queueCv_;               // 队列非空/shutdown 唤醒，与 entriesMutex_ 配合 wait
-        std::unordered_map<F0RequestKey, std::unique_ptr<ActiveEntry>> activeEntries_;
-        mutable std::mutex entriesMutex_;   // 线性化 submit/shutdown/commit/worker 状态访问
-        uint64_t tokenCounter_{1};          // entriesMutex_ 下分配
-        bool shutdownStarted_{false};       // entriesMutex_ 下访问，worker 唯一退出状态
-
-        // 本服务唯一创建并持有的 owner state：worker 以 execute(runOwnerState) 调用，
-        // shutdown 以同一 state 调 terminateActiveRun。shared_ptr 保证 state 在最后一次
-        // 使用结束后才释放。
-        std::shared_ptr<F0RunOwnerState> runOwnerState_;
-        std::shared_ptr<DispatcherFailureMailbox> dispatcherFailureMailbox_;
-    };
-
+    struct SharedState;
     std::shared_ptr<SharedState> state_;
     std::mutex shutdownMutex_;
     std::vector<std::thread> workers_;
-    // 运行时惰性解析 F0InferenceService（进程级单例），消除冷启动空快照：
-    // 首个 owner 构造时 F0 服务可能尚未初始化，直接缓存 shared_ptr 会得到空值。
     std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver_;
 
     static void workerLoop(std::shared_ptr<SharedState> state);
+    static void araPreparationLoop(std::shared_ptr<SharedState> state);
+    static void araExecutionLoop(std::shared_ptr<SharedState> state);
+    static void deliverAraGroup(std::shared_ptr<SharedState> state, F0TaskId groupId);
+    static void releaseAraGroup(std::shared_ptr<SharedState> state, F0TaskId groupId);
+};
+
+using SharedAraF0Outcome = std::shared_ptr<const F0ExtractionService::Result>;
+
+struct AraF0CompletionSink
+{
+    virtual ~AraF0CompletionSink() = default;
+    virtual void complete(F0TaskId taskId, SharedAraF0Outcome outcome) = 0;
 };
 
 } // namespace OpenTune

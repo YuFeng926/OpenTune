@@ -18,14 +18,16 @@ namespace Ort { struct Env; }
 namespace OpenTune {
 
 /**
- * F0 run owner identity for termination. One F0ExtractionService owns exactly one
- * state for its whole lifetime; shared_ptr ownership removes raw-pointer identity
- * (address reuse can never alias a live owner). closed is set under the service's
- * runMutex_ by terminateActiveRun and checked at lease admission under the same
- * lock, so a closed owner can never start a new Run.
+ * F0 run owner identity for termination. Each extraction origin owns a distinct
+ * state; shared_ptr ownership removes raw-pointer identity. Queue origin terminalization
+ * closes admission first; terminateActiveRun synchronizes pending and active leases
+ * through runMutex_.
  */
+class F0InferenceService;
+
 struct F0RunOwnerState {
     std::atomic<bool> closed{false};
+    std::function<bool(const std::shared_ptr<F0InferenceService>&)> registerInferenceService;
 };
 
 struct F0ExtractionConfigSnapshot
@@ -161,8 +163,17 @@ public:
     int getF0SampleRate() const;
 
     bool isInitialized() const;
+    static uint64_t getConfigurationRevision() noexcept
+    {
+        return configurationRevision_.load(std::memory_order_acquire);
+    }
+    static void advanceConfigurationRevision() noexcept
+    {
+        configurationRevision_.fetch_add(1, std::memory_order_acq_rel);
+    }
 
 private:
+    static std::atomic<uint64_t> configurationRevision_;
     class Impl;
     std::unique_ptr<Impl> pImpl_;
 

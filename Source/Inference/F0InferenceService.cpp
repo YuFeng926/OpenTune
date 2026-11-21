@@ -10,6 +10,8 @@
 
 namespace OpenTune {
 
+std::atomic<uint64_t> F0InferenceService::configurationRevision_{1};
+
 class F0InferenceService::Impl {
 public:
     Impl(std::shared_ptr<Ort::Env> env) : env_(std::move(env)) {
@@ -284,8 +286,12 @@ public:
                 // 本轮提取结束时检查：若 extractor 经历了 DML Run 失败（无论
                 // CPU 重试是否成功），sticky 置位，后续提取直接走 CPU。
                 if (auto* fcpe = dynamic_cast<FCPEExtractor*>(extractor.get())) {
-                    if (fcpe->didDmlRunFail())
-                        cpuFallbackSticky_.store(true, std::memory_order_release);
+                    if (fcpe->didDmlRunFail()) {
+                        bool expected = false;
+                        if (cpuFallbackSticky_.compare_exchange_strong(
+                                expected, true, std::memory_order_acq_rel))
+                            F0InferenceService::configurationRevision_.fetch_add(1, std::memory_order_acq_rel);
+                    }
                 }
             }
         }
@@ -325,6 +331,7 @@ public:
         }
 
         currentModelType_ = type;
+        F0InferenceService::configurationRevision_.fetch_add(1, std::memory_order_acq_rel);
         AppLogger::info("[F0InferenceService] Selected model: FCPE (session will be created on next extraction)");
         return true;
     }
@@ -346,16 +353,19 @@ public:
     void setConfidenceThreshold(float threshold) {
         std::unique_lock<std::mutex> lock(extractorMutex_);
         confidenceThreshold_ = threshold;
+        F0InferenceService::configurationRevision_.fetch_add(1, std::memory_order_acq_rel);
     }
 
     void setF0Min(float minFreq) {
         std::unique_lock<std::mutex> lock(extractorMutex_);
         f0Min_ = minFreq;
+        F0InferenceService::configurationRevision_.fetch_add(1, std::memory_order_acq_rel);
     }
 
     void setF0Max(float maxFreq) {
         std::unique_lock<std::mutex> lock(extractorMutex_);
         f0Max_ = maxFreq;
+        F0InferenceService::configurationRevision_.fetch_add(1, std::memory_order_acq_rel);
     }
 
     float getConfidenceThreshold() const {

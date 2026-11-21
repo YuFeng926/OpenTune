@@ -1047,6 +1047,7 @@ endif()
 set(OPENTUNE_ARA_SOURCES
     Source/ARA/AudioSource.cpp
     Source/ARA/AudioSource.h
+    Source/ARA/AraF0Types.h
     Source/ARA/AudioModification.cpp
     Source/ARA/AudioModification.h
     Source/ARA/PlaybackRegion.cpp
@@ -1060,9 +1061,11 @@ set(OPENTUNE_ARA_SOURCES
 )
 if(NOT OPENTUNE_IOS)
     target_sources(OpenTune PRIVATE ${OPENTUNE_ARA_SOURCES})
+    target_compile_definitions(OpenTune PRIVATE OPENTUNE_HAS_ARA_F0_QUEUE=1)
 endif()
 if(OPENTUNE_MACOS)
     target_sources(OpenTuneAU PRIVATE ${OPENTUNE_ARA_SOURCES})
+    target_compile_definitions(OpenTuneAU PRIVATE OPENTUNE_HAS_ARA_F0_QUEUE=1)
 endif()
 
 # Runtime fallback for AU/VST3 hosts that do not bind the ARA2 extension.
