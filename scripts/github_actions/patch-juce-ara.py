@@ -84,7 +84,9 @@ def build_targets(entries, patch):
             destination.parent.mkdir(parents=True, exist_ok=True)
 
             if not is_new:
-                destination.write_bytes(normalized(git("show", f"HEAD:{relative}")))
+                # The patch hunks are authored against the pinned JUCE commit;
+                # staging must use that blob even when HEAD has local commits.
+                destination.write_bytes(normalized(git("show", f"{JUCE_COMMIT}:{relative}")))
 
         result = subprocess.run(
             ["git", "apply", "--whitespace=nowarn", "-"],
@@ -104,27 +106,6 @@ def build_targets(entries, patch):
 
 def normalized(data):
     return data.replace(b"\r\n", b"\n")
-
-
-def merged_file(current, base, target):
-    with tempfile.TemporaryDirectory(prefix="opentune-juce-merge-") as directory:
-        temporary = pathlib.Path(directory)
-        current_path = temporary / "current"
-        base_path = temporary / "base"
-        target_path = temporary / "target"
-        current_path.write_bytes(current)
-        base_path.write_bytes(base)
-        target_path.write_bytes(target)
-
-        result = subprocess.run(
-            ["git", "merge-file", "-p", str(current_path), str(base_path), str(target_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        if result.returncode:
-            return None
-
-        return normalized(result.stdout)
 
 
 def has_staged_changes(relative):
@@ -165,9 +146,14 @@ def prepare_changes(targets, entries):
             if current is None:
                 fail(f"JUCE patch target is missing: {relative}")
 
-            base = normalized(git("show", f"HEAD:{relative}"))
-            if current != base and merged_file(current, base, target) != target:
-                fail(f"JUCE {relative} contains changes outside the complete repository patch")
+            # Content-level invariant, valid for both a fresh checkout of the
+            # pinned commit and a local fork: a patched file is either already
+            # at the patch target or exactly at the pinned base. Anything else
+            # drifted outside the repository patch and must not be clobbered.
+            base = normalized(git("show", f"{JUCE_COMMIT}:{relative}"))
+            if current != base:
+                fail(f"JUCE {relative} contains changes outside the complete repository patch; "
+                     f"refresh the file from the pinned JUCE {JUCE_COMMIT}")
 
         if has_staged_changes(relative):
             fail(f"JUCE {relative} has staged changes; unstaged target files are left untouched")
@@ -179,10 +165,6 @@ def prepare_changes(targets, entries):
 
 
 def main():
-    head = git("rev-parse", "HEAD").decode("ascii").strip()
-    if head != JUCE_COMMIT:
-        fail(f"Expected JUCE {JUCE_COMMIT}, found {head}")
-
     if not PATCH_FILE.is_file():
         fail(f"JUCE patch file not found: {PATCH_FILE}")
 
