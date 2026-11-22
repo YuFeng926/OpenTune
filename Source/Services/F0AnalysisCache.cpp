@@ -3,15 +3,12 @@
 #include "../Utils/AppPreferences.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
-#include <functional>
 #include <iterator>
 #include <limits>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <juce_cryptography/juce_cryptography.h>
@@ -41,21 +38,6 @@ constexpr char kExtension[] = ".otf0";
 constexpr char kTemporaryExtension[] = ".otf0.tmp";
 constexpr char kLockFileName[] = ".cache.lock";
 constexpr char kHexDigits[] = "0123456789abcdef";
-
-std::string temporaryFileName(const F0AnalysisCache::Digest& key)
-{
-    static std::atomic<uint64_t> sequence{0};
-#if JUCE_WINDOWS
-    const auto processId = static_cast<uint64_t>(GetCurrentProcessId());
-#else
-    const auto processId = static_cast<uint64_t>(::getpid());
-#endif
-    const auto threadId = std::hash<std::thread::id>{}(std::this_thread::get_id());
-    const auto uniqueId = sequence.fetch_add(1, std::memory_order_relaxed);
-    return F0AnalysisCache::keyToHex(key) + kTemporaryExtension + "."
-        + std::to_string(processId) + "." + std::to_string(threadId)
-        + "." + std::to_string(uniqueId);
-}
 
 bool isTemporaryCacheFile(const juce::File& file)
 {
@@ -187,6 +169,17 @@ std::vector<uint8_t> serialize(const F0AnalysisCache::Digest& key,
     return bytes;
 }
 
+void removeAbandonedTemporariesLocked(const juce::File& directory,
+                                      const juce::File& publicationTemporary = {})
+{
+    // The directory lock covers every writer from temp creation through rename.
+    const auto children = directory.findChildFiles(juce::File::findFiles, false,
+        juce::String("*") + kTemporaryExtension + "*");
+    for (const auto& file : children)
+        if (file != publicationTemporary && isTemporaryCacheFile(file))
+            file.deleteFile();
+}
+
 void enforceCapacityLocked(const juce::File& directory, uint64_t maxBytes)
 {
     struct Entry
@@ -196,28 +189,22 @@ void enforceCapacityLocked(const juce::File& directory, uint64_t maxBytes)
         juce::Time modified;
     };
 
-    const auto children = directory.findChildFiles(juce::File::findFiles, false);
-    const auto staleTemporaryBefore = juce::Time::getCurrentTime()
-        - juce::RelativeTime::seconds(60.0);
+    const auto children = directory.findChildFiles(juce::File::findFiles, false,
+        juce::String("*") + kExtension);
+    const auto isRecord = [](const juce::File& file) {
+        return file.getFileName().endsWith(kExtension) && !isTemporaryCacheFile(file);
+    };
     uint64_t totalBytes = 0;
     for (const auto& file : children)
-    {
-        if (isTemporaryCacheFile(file))
-        {
-            if (file.getLastModificationTime() < staleTemporaryBefore)
-                file.deleteFile();
-            continue;
-        }
-        if (file.getFileName().endsWith(kExtension))
+        if (isRecord(file))
             totalBytes += static_cast<uint64_t>(file.getSize());
-    }
 
     if (totalBytes <= maxBytes)
         return;
 
     std::vector<Entry> records;
     for (const auto& file : children)
-        if (file.getFileName().endsWith(kExtension))
+        if (isRecord(file))
             records.push_back({file, static_cast<uint64_t>(file.getSize()), file.getLastModificationTime()});
 
     std::sort(records.begin(), records.end(), [](const Entry& left, const Entry& right) {
@@ -471,13 +458,14 @@ bool F0AnalysisCache::publish(const juce::File& directory,
     if (tryLoad(directory, key).has_value())
     {
         AppLogger::log("ARA-F0 cache_publish key=" + keyPrefix(key) + " preserved=1");
+        removeAbandonedTemporariesLocked(directory);
         enforceCapacityLocked(directory, kDefaultCapacityBytes);
         return true;
     }
 
     const auto bytes = serialize(key, record);
     const auto destination = fileForKey(directory, key);
-    const auto temporary = directory.getChildFile(temporaryFileName(key));
+    const auto temporary = directory.getNonexistentChildFile(keyToHex(key), kTemporaryExtension, false);
     bool written = false;
     {
         juce::FileOutputStream stream(temporary);
@@ -494,6 +482,8 @@ bool F0AnalysisCache::publish(const juce::File& directory,
         AppLogger::log("ARA-F0 cache_publish_failed key=" + keyPrefix(key) + " reason=write");
         return false;
     }
+
+    removeAbandonedTemporariesLocked(directory, temporary);
 
     bool moved = false;
 #if JUCE_WINDOWS
@@ -546,6 +536,7 @@ void F0AnalysisCache::enforceCapacity(const juce::File& directory, uint64_t maxB
     ScopedDirectoryLock scopedLock(directory);
     if (!scopedLock.isLocked())
         return;
+    removeAbandonedTemporariesLocked(directory);
     enforceCapacityLocked(directory, maxBytes);
 }
 

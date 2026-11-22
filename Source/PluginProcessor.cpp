@@ -3787,19 +3787,25 @@ void OpenTuneAudioProcessor::settleStandaloneHistory()
     auto* repository = standaloneContentRepository_.get();
     jassert(arrangement != nullptr && repository != nullptr);
 
-    const int maxRounds = undoManager_.size();
-    for (int round = 0; round < maxRounds; ++round) {
-        const int historySize = undoManager_.size();
-        const int structurallyRemoved = undoManager_.settleStructure(captureStandaloneReplayState());
+    if (undoManager_.size() > 0) {
+        const auto replayState = captureStandaloneReplayState();
+        undoManager_.settleStructure(replayState);
+
+        // Split, merge and delete retain every content they depend on. Control
+        // entries wrap one such action or only in-place placement edits. The
+        // content prune therefore removes only edits that neither retain
+        // content nor change the replay state of either history direction.
         std::vector<ContentKey> releasableContents;
-        // Split, merge and delete actions retain the content of every retired placement they retain.
         for (const auto key : repository->getRetiredClips())
             if (!arrangement->referencesContentActive(key) && !undoManager_.retainsRetiredContent(key))
                 releasableContents.push_back(key);
-        const int contentDependentsRemoved = undoManager_.pruneActionsDependingOnContents(releasableContents);
-        if (structurallyRemoved == 0 && contentDependentsRemoved == 0)
-            break;
-        jassertquiet(undoManager_.size() < historySize);
+        [[maybe_unused]] const int removed = undoManager_.pruneActionsDependingOnContents(releasableContents);
+#if JUCE_DEBUG
+        if (removed > 0) {
+            const int invalid = undoManager_.settleStructure(replayState);
+            jassertquiet(invalid == 0);
+        }
+#endif
     }
     synchronizeStandaloneHistory();
 }
