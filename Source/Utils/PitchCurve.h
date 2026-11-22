@@ -355,15 +355,6 @@ public:
 
     std::shared_ptr<const PitchCurveSnapshot> clearCorrectionRange(int startFrame, int endFrame);
 
-    void clearUserPitchEdits() {
-        const auto previous = getSnapshot();
-        auto next = std::make_shared<const PitchCurveSnapshot>(
-            previous->getOriginalF0(), previous->getOriginalEnergy(),
-            std::vector<PitchCorrectionSegment>(), previous->getHopSize(),
-            previous->getSampleRate(), incrementGeneration());
-        std::atomic_store(&snapshot_, std::move(next));
-    }
-
     // 用当前原始音高把修音段切回有声帧。原始音高尚未就绪时不做任何事。
     void retainVoicedCorrectionSegments();
 

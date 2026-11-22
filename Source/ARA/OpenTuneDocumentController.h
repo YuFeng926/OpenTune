@@ -147,6 +147,8 @@ public:
     void willDestroyDocument(juce::ARADocument* document) override;
 
     void didUpdateAudioModificationProperties(juce::ARAAudioModification* audioModification) override;
+    void willDeactivateAudioModificationForUndoHistory(juce::ARAAudioModification* audioModification,
+                                                       bool deactivate) override;
     void willDestroyAudioModification(juce::ARAAudioModification* audioModification) override;
 
     void didUpdatePlaybackRegionProperties(juce::ARAPlaybackRegion* playbackRegion) override;
@@ -162,6 +164,10 @@ public:
                                             bool enable) override;
     void didEnableAudioSourceSamplesAccess(juce::ARAAudioSource* audioSource,
                                            bool enable) override;
+    void willDeactivateAudioSourceForUndoHistory(juce::ARAAudioSource* audioSource,
+                                                 bool deactivate) override;
+    void didDeactivateAudioSourceForUndoHistory(juce::ARAAudioSource* audioSource,
+                                                bool deactivate) override;
     void willRemovePlaybackRegionFromAudioModification(juce::ARAAudioModification* audioModification,
                                                        juce::ARAPlaybackRegion* playbackRegion) override;
 
@@ -297,7 +303,8 @@ private:
         std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
         int64_t firstCanonicalSample);
     void readRestoredAudio(const AudioSource* enabledSource);
-    bool birthContentForModification(AudioModification& modification, const AudioSource& source);
+    bool birthContentForModification(AudioModification& modification, const AudioSource& source,
+                                      const OriginalF0InputStamp& currentStamp);
     // Reuses a full native PCM already published for the same source identity and
     // sample content generation. Returns null when a fresh read is required.
     std::shared_ptr<const juce::AudioBuffer<float>> findReusableNativePcm(

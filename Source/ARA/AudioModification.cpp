@@ -49,17 +49,13 @@ bool AudioModification::attachSource(const AudioSource& source)
     return true;
 }
 
-void AudioModification::resetContent() noexcept
-{
-    content.reset();
-    originalF0InputStamp.reset();
-    analysisContinuationPending = false;
-    birthState = AudioModificationBirthState::Empty;
-}
-
 void AudioModification::revokeAnalysisReception() noexcept
 {
     ++birthRevision;
+    analysisContinuationPending = false;
+    // Extracting is stored as a continuation in the archive.
+    if (content && content->analysis.originalF0State == OriginalF0State::Extracting)
+        content->analysis.setOriginalF0State(OriginalF0State::NotRequested);
 }
 
 void AudioModification::clearOriginalAnalysis()
@@ -78,16 +74,6 @@ void AudioModification::clearOriginalAnalysis()
     originalF0InputStamp.reset();
     analysisContinuationPending = false;
     birthState = AudioModificationBirthState::WaitingForSource;
-}
-
-void AudioModification::clearUserPitchEdits()
-{
-    if (const auto& curve = content->analysis.pitchCurve)
-    {
-        curve->clearUserPitchEdits();
-        ++content->pitchRevision;
-        ++content->contentRevision;
-    }
 }
 
 bool AudioModification::hasReadyOriginalF0() const

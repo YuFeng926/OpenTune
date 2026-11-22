@@ -1241,6 +1241,10 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
         applyOriginalF0FailureReasonToModification(modification->contentKey(), reason);
         return -1;
     }
+    if (source->getAraAudioSource()->isDeactivatedForUndoHistory()
+        || modification->audioModification->isDeactivatedForUndoHistory())
+        return -1;
+
     const auto currentStamp = makeF0InputStamp(*source, *modification);
 
     const bool hasValidF0 = modification->hasReadyOriginalF0();
@@ -1255,11 +1259,7 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
         return 0;
     }
 
-    if (source->getAraAudioSource()->isDeactivatedForUndoHistory()
-        || modification->audioModification->isDeactivatedForUndoHistory())
-        return -1;
-
-    const bool materialized = birthContentForModification(*modification, *source);
+    const bool materialized = birthContentForModification(*modification, *source, currentStamp);
     refreshRegisteredRenderers(publishModelChange());
     return materialized ? 1 : -1;
 }
@@ -1344,30 +1344,28 @@ void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAA
     refreshRegisteredRenderers(publishModelChange());
 }
 
+void OpenTuneDocumentController::willDeactivateAudioModificationForUndoHistory(
+    juce::ARAAudioModification* audioModification, bool deactivate)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    auto& modification = *findAudioModification(audioModification);
+    AppLogger::log(f0Diagnostic(this, modification.persistentId, modification.birthRevision)
+        + "deactivateAudioModificationForUndoHistory edge="
+        + (deactivate ? "active->inactive reason=ModificationUndo" : "inactive->active"));
+    if (deactivate)
+        revokeF0Reception(modification);
+}
+
 void OpenTuneDocumentController::willDestroyAudioModification(juce::ARAAudioModification* audioModification)
 {
+    auto& modification = *findAudioModification(audioModification);
     AppLogger::log(araDiagnostic(this) + "destroyAudioModification persistentID="
-        + juce::String(audioModification->getPersistentID()).quoted());
-    auto* mod = findAudioModification(audioModification);
-    if (mod == nullptr)
-        return;
+        + modification.persistentId.quoted() + " reason=Orphaned");
+    revokeF0Reception(modification);
+    removeCRSArtifactsForModification(modification);
 
-    revokeF0Reception(*mod);
-    removeCRSArtifactsForModification(*mod);
-
-    // 删除关联的 PlaybackRegions。Per ARA2 spec, host 必须先销毁 region 再销毁
-    // modification，此处可直接通过 host pointer 判断归属。
-    playbackRegions_.erase(std::remove_if(playbackRegions_.begin(), playbackRegions_.end(),
-                                          [audioModification](const PlaybackRegion& region)
-                                          {
-                                              return region.playbackRegion != nullptr
-                                                  && region.playbackRegion->getAudioModification() == audioModification;
-                                          }),
-                           playbackRegions_.end());
-
-    // 直接按 Host 指针 erase，不先把匹配字段置空
-    // persistent-id→ContentKey 映射保持稳定（araPersistentIdsByObjectId_ 不动）
-    // 新 Host modification 仍创建新 wrapper
+    // The host has already destroyed the associated playback regions.
+    // Keep the persistent ID to ContentKey mapping for a future wrapper.
     audioModifications_.remove_if([audioModification](const AudioModification& m)
                                   {
                                       return m.audioModification == audioModification;
@@ -1424,18 +1422,16 @@ void OpenTuneDocumentController::doUpdateAudioSourceContent(juce::ARAAudioSource
     if (scopeFlags.affectSamples())
     {
         auto& source = *findAudioSource(audioSource);
-        source.incrementSampleContentGeneration();
         AppLogger::log(araDiagnostic(this) + "audio_source_samples_changed source="
-            + source.getIdentity().persistentId.quoted());
+            + source.getIdentity().persistentId.quoted() + " reason=SamplesChanged");
+        abortSourceF0(source, AraF0Abort::SamplesChanged);
+        source.incrementSampleContentGeneration();
         for (auto& modification : audioModifications_)
         {
             if (modification.hasContentState()
                 && modification.audioModification->getAudioSource() == audioSource)
             {
-                revokeF0Reception(modification);
                 removeCRSArtifactsForModification(modification);
-                if (scopeFlags.affectEverything())
-                    modification.clearUserPitchEdits();
                 modification.clearOriginalAnalysis();
             }
         }
@@ -1448,32 +1444,58 @@ void OpenTuneDocumentController::willEnableAudioSourceSamplesAccess(juce::ARAAud
                                                                     bool enable)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    auto& source = ensureAudioSource(audioSource);
-    // The SDK only calls this hook on an actual transition.
+    auto& source = *findAudioSource(audioSource);
+    // ARA dispatches this hook only when the requested value differs from the current one.
     AppLogger::log(araDiagnostic(this) + "enableAudioSourceSamplesAccess source="
-        + source.getIdentity().persistentId.quoted() + " edge=" + (enable ? "false->true" : "true->false"));
-    if (!enable)
-        abortSourceF0(source, AraF0Abort::SamplesDisabled);
-    source.setSampleAccessEnabled(enable);
+        + source.getIdentity().persistentId.quoted()
+        + (enable ? " edge=false->true" : " edge=true->false reason=SamplesDisabled"));
+    if (enable)
+        return;
+
+    abortSourceF0(source, AraF0Abort::SamplesDisabled);
+    source.incrementSampleContentGeneration();
+    source.clearReaderLease();
 }
 
 void OpenTuneDocumentController::didEnableAudioSourceSamplesAccess(juce::ARAAudioSource* audioSource,
                                                                      bool enable)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    auto& source = ensureAudioSource(audioSource);
-    source.setSampleAccessEnabled(enable);
-    // ARA Audio Source Management callback 内建立 HostAudioReader lease；
-    // 实际 sample read 在用户 Read 或 restore 自动 materialization 的非实时路径进行。
-    if (enable)
+    if (enable && !audioSource->isDeactivatedForUndoHistory())
+    {
+        auto& source = *findAudioSource(audioSource);
         source.createReaderLease();
-
-    // If access arrives inside editing, the completed graph is read at didEndEditing.
-    // Otherwise the grant can immediately materialize or resume restored content.
-    if (enable && !getDocumentController()->isHostEditingDocument())
-        readRestoredAudio(&source);
+        // Inside an edit, didEndEditing reads the completed graph.
+        if (!getDocumentController()->isHostEditingDocument())
+            readRestoredAudio(&source);
+    }
 
     refreshRegisteredRenderers(publishModelChange());
+}
+
+void OpenTuneDocumentController::willDeactivateAudioSourceForUndoHistory(juce::ARAAudioSource* audioSource,
+                                                                        bool deactivate)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    auto& source = *findAudioSource(audioSource);
+    AppLogger::log(araDiagnostic(this) + "deactivateAudioSourceForUndoHistory source="
+        + source.getIdentity().persistentId.quoted()
+        + (deactivate ? " edge=active->inactive reason=SourceUndo" : " edge=inactive->active"));
+    if (!deactivate)
+        return;
+
+    abortSourceF0(source, AraF0Abort::SourceUndo);
+    source.incrementSampleContentGeneration();
+    source.clearReaderLease();
+}
+
+void OpenTuneDocumentController::didDeactivateAudioSourceForUndoHistory(juce::ARAAudioSource* audioSource,
+                                                                       bool deactivate)
+{
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    // The host can retain its sample grant across undo/redo. Restore only the reader here.
+    if (!deactivate && audioSource->isSampleAccessEnabled())
+        findAudioSource(audioSource)->createReaderLease();
 }
 
 void OpenTuneDocumentController::willRemovePlaybackRegionFromAudioModification(
@@ -1487,33 +1509,18 @@ void OpenTuneDocumentController::willRemovePlaybackRegionFromAudioModification(
 
 void OpenTuneDocumentController::willDestroyAudioSource(juce::ARAAudioSource* audioSource)
 {
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    const auto& destroyedSource = *findAudioSource(audioSource);
     AppLogger::log(araDiagnostic(this) + "destroyAudioSource persistentID="
-        + juce::String(audioSource->getPersistentID()).quoted());
-    juce::String persistentId;
-    if (const auto* source = findAudioSource(audioSource))
-    {
-        persistentId = source->getIdentity().persistentId;
-        abortSourceF0(*source, AraF0Abort::Orphaned);
-    }
+        + destroyedSource.getIdentity().persistentId.quoted() + " reason=Orphaned");
+    abortSourceF0(destroyedSource, AraF0Abort::Orphaned);
+    // All modifications have already been destroyed. Erasing the source destroys its reader.
     audioSources_.erase(std::remove_if(audioSources_.begin(), audioSources_.end(),
                                        [audioSource](const AudioSource& source)
                                        {
                                            return source.matches(audioSource);
                                        }),
                         audioSources_.end());
-    if (persistentId.isNotEmpty())
-    {
-        for (auto& modification : audioModifications_)
-        {
-            if (modification.hasContentState()
-                && modification.content->sourceWindow.sourcePersistentId == persistentId)
-            {
-                revokeF0Reception(modification);
-                removeCRSArtifactsForModification(modification);
-                modification.resetContent();
-            }
-        }
-    }
 
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -1652,6 +1659,8 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
     for (auto& entry : pending)
     {
         auto& target = entry.target;
+        AppLogger::log(f0Diagnostic(this, target.persistentId, target.birthRevision)
+            + "revoke_reception reason=RestoreReplacement");
         revokeF0Reception(target);
         removeCRSArtifactsForModification(target);
         target.content = std::move(entry.content);
@@ -2041,16 +2050,17 @@ void OpenTuneDocumentController::readRestoredAudio(const AudioSource* enabledSou
             || mod.audioModification->isDeactivatedForUndoHistory())
             continue;
 
-        // Restored Ready content only needs PCM when there is a playback consumer.
-        // A requested analysis belongs to the modification itself.
+        const auto currentStamp = makeF0InputStamp(*source, mod);
+        // Without analysis intent, only matching Ready content can materialize its PCM.
         if (!mod.analysisContinuationPending
-            && std::none_of(playbackRegions_.begin(), playbackRegions_.end(), [&](const PlaybackRegion& region) {
-                return region.hasValidPlacement()
-                    && region.playbackRegion->getAudioModification() == mod.audioModification;
-            }))
+            && (mod.originalF0InputStamp != currentStamp
+                || std::none_of(playbackRegions_.begin(), playbackRegions_.end(), [&](const PlaybackRegion& region) {
+                    return region.hasValidPlacement()
+                        && region.playbackRegion->getAudioModification() == mod.audioModification;
+                })))
             continue;
 
-        birthContentForModification(mod, *source);
+        birthContentForModification(mod, *source, currentStamp);
     }
 }
 
@@ -2072,14 +2082,16 @@ OriginalF0InputStamp OpenTuneDocumentController::makeF0InputStamp(const AudioSou
 }
 
 bool OpenTuneDocumentController::birthContentForModification(AudioModification& modification,
-                                                            const AudioSource& source)
+                                                            const AudioSource& source,
+                                                             const OriginalF0InputStamp& currentStamp)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     auto& content = *modification.content;
-    const auto currentStamp = makeF0InputStamp(source, modification);
     const bool alreadyHasF0 = modification.originalF0InputStamp == currentStamp
         && modification.hasReadyOriginalF0();
     const bool wasPending = modification.analysisContinuationPending;
+    AppLogger::log(f0Diagnostic(this, modification.persistentId, modification.birthRevision)
+        + "revoke_reception reason=Birth");
     revokeF0Reception(modification);
     if (!alreadyHasF0)
     {
@@ -2090,7 +2102,6 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         modification.clearOriginalAnalysis();
     }
 
-    modification.analysisContinuationPending = false;
     const auto failBirth = [this, &modification](std::string reason) {
         modification.birthState = AudioModificationBirthState::Failed;
         modification.applyOriginalF0State(OriginalF0State::Failed);
@@ -2112,7 +2123,7 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
             + std::to_string(sourceShape.numSamples) + ", sampleRate="
             + std::to_string(sourceShape.sourceSampleRate) + ")");
 
-    if (!source.hasSampleAccess())
+    if (!source.canReadSamples())
     {
         modification.birthState = AudioModificationBirthState::WaitingForSource;
         modification.analysisContinuationPending = !alreadyHasF0;
@@ -2121,9 +2132,6 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
         return false;
     }
 
-    // Reader lease is created by didEnableAudioSourceSamplesAccess.
-    if (!source.hasReaderLease())
-        return failBirth("ARA host audio reader is unavailable while sample access is enabled");
     modification.originalF0InputStamp = currentStamp;
 
     // 1. Authoritative source window. Seconds stay untouched; sample addresses
@@ -2350,6 +2358,11 @@ std::shared_ptr<const juce::AudioBuffer<float>> OpenTuneDocumentController::find
 void OpenTuneDocumentController::abortSourceF0(const AudioSource& source, AraF0Abort reason)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    for (auto& modification : audioModifications_)
+        if (modification.audioModification->getAudioSource() == source.getAraAudioSource())
+            modification.revokeAnalysisReception();
+
+    // Look up tasks by source even when an orphaned owner has no local receiver.
     std::set<F0TaskId> tasks;
     for (const auto& [key, id] : f0Flights_.byLocalKey)
         if (key.input.sourcePersistentId == source.getIdentity().persistentId)

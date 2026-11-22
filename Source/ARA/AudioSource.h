@@ -28,14 +28,13 @@ class AudioSource
 {
 public:
     void updateFrom(juce::ARAAudioSource* audioSource);
-    void setSampleAccessEnabled(bool enabled) noexcept;
-    void clearReaderLease() noexcept;
 
     bool matches(juce::ARAAudioSource* audioSource) const noexcept;
-    bool hasSampleAccess() const noexcept;
-    bool hasReaderLease() const noexcept;
     bool canReadSamples() const noexcept;
-    bool createReaderLease();
+
+    // Message-thread only. The DC creates and clears the lease in ARA source management callbacks.
+    void createReaderLease();
+    void clearReaderLease() noexcept;
     bool readAudioSamples(int64_t sourceSamplePosition,
                           int samplesPerChannel,
                           void* const buffers[]) const noexcept;
@@ -50,7 +49,6 @@ public:
 private:
     AraSourceIdentity identity_;
     AraSourceShape shape_;
-    bool sampleAccessEnabled_{false};
     std::unique_ptr<ARA::PlugIn::HostAudioReader> readerLease_;
     uint64_t sampleContentGeneration_{0};
 };
