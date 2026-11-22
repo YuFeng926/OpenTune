@@ -78,17 +78,15 @@ public:
     // Per ARA2 spec: ARA object persistence uses doStoreObjectsToStream/doRestoreObjectsFromStream,
     // NOT VST3 processor state. Legacy getContentSnapshot/restoreContentPayloadInto removed.
 
-    // Content archive version. Version 9 stores the source window's exclusive
-    // end directly; earlier versions stored duration and are decoded only
-    // through those earlier version numbers.
-    static constexpr int kContentArchiveVersion = 9;
+    static constexpr int kContentArchiveVersion = 10;
     static constexpr int kContentArchiveVersionExplicitSourceEnd = 9;
+    static constexpr int kContentArchiveVersionF0Continuation = 10;
 
-    // Source-window archive codec shared by store/restore and contract tests.
     static void writeSourceWindowToArchive(const SourceWindow& window, juce::XmlElement& element);
     static std::optional<SourceWindow> readSourceWindowFromArchive(
         const juce::XmlElement& element,
-        const juce::ARARestoreObjectsFilter* filter,
+        const juce::ARAAudioSource& parentSource,
+        const ARA::ARARestoreObjectsFilter* hostFilter,
         int archiveVersion);
 
     const ContentRenderService* getContentRenderService() const noexcept;
@@ -146,6 +144,7 @@ public:
     void didUpdateRegionSequenceProperties(juce::ARARegionSequence* regionSequence) override;
     void willBeginEditing(juce::ARADocument* document) override;
     void didEndEditing(juce::ARADocument* document) override;
+    void willDestroyDocument(juce::ARADocument* document) override;
 
     void didUpdateAudioModificationProperties(juce::ARAAudioModification* audioModification) override;
     void willDestroyAudioModification(juce::ARAAudioModification* audioModification) override;
@@ -248,7 +247,6 @@ private:
     AudioModification* findAudioModification(const juce::String& persistentId);
     const AudioModification* findAudioModification(const juce::String& persistentId) const;
     AudioModification* findAudioModification(juce::ARAAudioModification* audioModification);
-    AudioModification& ensureAudioModification(juce::ARAAudioModification* audioModification);
     ContentKey bindAudioModificationIdentity(AudioModification& modification);
     ContentKey makeAudioModificationContentKey(const juce::String& persistentId);
     const juce::String* findPersistentIdForAudioModificationKey(ContentKey key) const;
@@ -315,7 +313,9 @@ private:
         std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
         int64_t firstCanonicalSample);
     void readRestoredAudio(const AudioSource* enabledSource);
-    bool birthContentForModification(AudioModification& modification);
+    bool birthContentForModification(AudioModification& modification,
+                                     const AudioSource& source,
+                                     bool allowCachedAnalysis);
     // Reuses a full native PCM already published for the same source identity and
     // sample content generation. Returns null when a fresh read is required.
     std::shared_ptr<const juce::AudioBuffer<float>> findReusableNativePcm(
@@ -325,6 +325,7 @@ private:
         int sourceChannelCount,
         uint64_t sampleGeneration,
         int64_t sourceSampleCount) const;
+    void revokeF0Reception(AudioModification& modification);
     void removeCRSArtifactsForModification(const AudioModification& modification);
     bool scheduleAsyncF0Extraction(ContentKey contentKey,
                                    std::vector<float> channel0Data,
@@ -332,7 +333,8 @@ private:
                                     int sourceChannelCount,
                                     uint64_t wrapperGeneration,
                                    juce::String persistentId,
-                                   OriginalF0InputStamp stamp);
+                                   OriginalF0InputStamp stamp,
+                                   bool allowCachedAnalysis);
     void commitF0Completion(F0CompletionRecord record);
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;

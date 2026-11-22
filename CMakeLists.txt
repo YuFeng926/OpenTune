@@ -106,6 +106,21 @@ if(NOT OPENTUNE_IOS)
             "Clone it with: git clone --recursive --branch releases/${OPENTUNE_ARA_SDK_VERSION} https://github.com/Celemony/ARA_SDK")
     endif()
     juce_set_ara_sdk_path("${ARA_SDK_PATH}")
+    # The SDK lookup drops entries whose current ID is missing. Expose the host
+    # filter itself for complete diagnostics and explicit parent-map validation.
+    set(ara_plug_dir "${ARA_SDK_PATH}/ARA_Library/PlugIn")
+    set(ara_sdk_overlay "${CMAKE_CURRENT_BINARY_DIR}/Generated/OpenTune/ARA")
+    set(ara_plugin_source "${ara_sdk_overlay}/ARA_Library/PlugIn/ARAPlug.cpp")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${ara_plug_dir}/ARAPlug.h")
+    file(READ "${ara_plug_dir}/ARAPlug.h" ara_plug_header)
+    string(REPLACE "    bool shouldRestoreDocumentData () const noexcept;"
+        "    bool shouldRestoreDocumentData () const noexcept;\n    const ARARestoreObjectsFilter* getHostFilter () const noexcept { return _filter; }"
+        ara_plug_header "${ara_plug_header}")
+    file(CONFIGURE OUTPUT "${ara_sdk_overlay}/ARA_Library/PlugIn/ARAPlug.h"
+        CONTENT "${ara_plug_header}" @ONLY)
+    file(CONFIGURE OUTPUT "${ara_plugin_source}"
+        CONTENT "#include \"ARAPlug.h\"\n#include \"${ara_plug_dir}/ARAPlug.cpp\"\n" @ONLY)
+    target_include_directories(juce_ara_sdk BEFORE INTERFACE "${ara_sdk_overlay}")
     message(STATUS "ARA SDK found at: ${ARA_SDK_PATH} (ARA2 plugin support enabled)")
 endif()
 
@@ -2049,12 +2064,13 @@ if(OPENTUNE_BUILD_TESTS)
     target_include_directories(OpenTuneMelSpectrogramTests
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${ara_sdk_overlay}
             ${ARA_SDK_PATH})
     target_link_libraries(OpenTuneMelSpectrogramTests PRIVATE
         OpenTune)
     target_sources(OpenTuneMelSpectrogramTests PRIVATE
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
-        "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
+        "${ara_plugin_source}"
         "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
         "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelFormat.cpp")
     if(MSVC)
@@ -2260,6 +2276,7 @@ if(OPENTUNE_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/Source
             ${ONNXRUNTIME_INCLUDE_DIR}
             ${ONNXRUNTIME_DML_GENERATED_INCLUDE_DIR}
+            ${ara_sdk_overlay}
             ${ARA_SDK_PATH})
         target_link_libraries(${render_contract} PRIVATE
             OpenTune
@@ -2298,7 +2315,7 @@ if(OPENTUNE_BUILD_TESTS)
             RenderRuntimeDeferredRetryTests)
         target_sources(${_runtime_contract} PRIVATE
             "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
-            "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
+            "${ara_plugin_source}"
             "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
             "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelFormat.cpp")
     endforeach()
@@ -2310,7 +2327,7 @@ if(OPENTUNE_BUILD_TESTS)
         Tests/HeadlessEditorFactory.cpp
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAHostDispatch.cpp"
         "${ARA_SDK_PATH}/ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
-        "${ARA_SDK_PATH}/ARA_Library/PlugIn/ARAPlug.cpp"
+        "${ara_plugin_source}"
         "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAPitchInterpretation.cpp"
         "${ARA_SDK_PATH}/ARA_Library/Utilities/ARAChannelFormat.cpp"
     )

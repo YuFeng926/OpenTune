@@ -7,6 +7,16 @@
 
 namespace OpenTune {
 
+void PitchCurve::replaceOriginalAnalysis(std::vector<float> f0, std::vector<float> energy,
+                                         int hopSize, double sampleRate)
+{
+    const auto previous = getSnapshot();
+    auto next = std::make_shared<const PitchCurveSnapshot>(
+        std::move(f0), std::move(energy), previous->getCorrectionSegments(),
+        hopSize, sampleRate, incrementGeneration(), previous->getErasedRanges());
+    std::atomic_store(&snapshot_, std::move(next));
+}
+
 namespace {
 
 void insertSegmentSorted(std::vector<PitchCorrectionSegment>& segments, PitchCorrectionSegment&& seg)

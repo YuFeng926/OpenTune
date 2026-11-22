@@ -399,10 +399,24 @@ std::vector<float> FCPEExtractor::extractF0(
 
     if (progressCallback) progressCallback(0.6f);
 
+    const auto runWithDiagnostics = [&](const char* attempt) {
+        const auto tag = " worker="
+            + juce::String::toHexString(reinterpret_cast<uintptr_t>(juce::Thread::getCurrentThreadId()))
+            + " attempt=" + attempt + " frames=" + juce::String(numFrames);
+        AppLogger::log("FCPE Session::Run start" + tag);
+        bool completed = false;
+        const juce::ScopeGuard endRun{[&] {
+            AppLogger::logNoThrow("FCPE Session::Run end" + tag
+                + (completed ? " result=returned" : " result=exception"));
+        }};
+        auto result = session_->Run(runOptions, inputNames, inputTensors.data(), 1, outputNames, 1);
+        completed = true;
+        return result;
+    };
+
     std::vector<Ort::Value> outputTensors;
     try {
-        outputTensors = session_->Run(
-            runOptions, inputNames, inputTensors.data(), 1, outputNames, 1);
+        outputTensors = runWithDiagnostics("primary");
     } catch (const Ort::Exception& e) {
         // Windows DirectML one-shot CPU retry:
         // - only ORT_EP_FAIL (EP internal failure), not other error codes
@@ -434,8 +448,7 @@ std::vector<float> FCPEExtractor::extractF0(
                 dmlActive_ = false;
                 session_ = std::move(cpuSession);
                 AppLogger::info("[FCPEExtractor] CPU session created; retrying Run on CPU");
-                outputTensors = session_->Run(
-                    runOptions, inputNames, inputTensors.data(), 1, outputNames, 1);
+                outputTensors = runWithDiagnostics("cpu_retry");
             } else {
                 AppLogger::error("[FCPEExtractor] CPU session creation failed after DML Run failure");
                 throw;

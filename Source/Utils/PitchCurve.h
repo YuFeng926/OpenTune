@@ -201,6 +201,9 @@ public:
             && snapshot->getSampleRate() > 0.0;
     }
 
+    void replaceOriginalAnalysis(std::vector<float> f0, std::vector<float> energy,
+                                 int hopSize, double sampleRate);
+
     void setOriginalF0(const std::vector<float>& f0) {
         auto oldSnapshot = getSnapshot();
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
@@ -352,18 +355,13 @@ public:
 
     std::shared_ptr<const PitchCurveSnapshot> clearCorrectionRange(int startFrame, int endFrame);
 
-    void clearAllCorrections() {
-        auto oldSnapshot = getSnapshot();
-        uint64_t newGen = incrementGeneration();
-        auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
-            oldSnapshot->getOriginalF0(),
-            oldSnapshot->getOriginalEnergy(),
-            std::vector<PitchCorrectionSegment>(),
-            oldSnapshot->getHopSize(),
-            oldSnapshot->getSampleRate(),
-            newGen, oldSnapshot->getErasedRanges()
-        );
-        std::atomic_store(&snapshot_, newSnapshot);
+    void clearUserPitchEdits() {
+        const auto previous = getSnapshot();
+        auto next = std::make_shared<const PitchCurveSnapshot>(
+            previous->getOriginalF0(), previous->getOriginalEnergy(),
+            std::vector<PitchCorrectionSegment>(), previous->getHopSize(),
+            previous->getSampleRate(), incrementGeneration());
+        std::atomic_store(&snapshot_, std::move(next));
     }
 
     // 用当前原始音高把修音段切回有声帧。原始音高尚未就绪时不做任何事。
@@ -471,18 +469,10 @@ public:
             return nullptr;
 
         auto copiedCurve = std::make_shared<PitchCurve>();
-        copiedCurve->setHopSize(snapshot->getHopSize());
-        copiedCurve->setSampleRate(snapshot->getSampleRate());
-        copiedCurve->setOriginalF0(snapshot->getOriginalF0());
-        copiedCurve->setOriginalEnergy(snapshot->getOriginalEnergy());
-        copiedCurve->replaceErasedRangesInRange(0, static_cast<int>(snapshot->size()), snapshot->getErasedRanges());
-
-        std::vector<PitchCorrectionSegment> segments;
-        segments.reserve(snapshot->getCorrectionSegments().size());
-        for (const auto& segment : snapshot->getCorrectionSegments()) {
-            segments.push_back(segment);
-        }
-        copiedCurve->replaceCorrectionSegments(segments);
+        copiedCurve->snapshot_ = std::make_shared<const PitchCurveSnapshot>(
+            snapshot->getOriginalF0(), snapshot->getOriginalEnergy(), snapshot->getCorrectionSegments(),
+            snapshot->getHopSize(), snapshot->getSampleRate(), copiedCurve->incrementGeneration(),
+            snapshot->getErasedRanges());
         return copiedCurve;
     }
 

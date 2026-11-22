@@ -51,23 +51,51 @@ bool AudioModification::attachSource(const AudioSource& source)
 
 void AudioModification::resetContent() noexcept
 {
-    ++birthRevision;
     content.reset();
     originalF0InputStamp.reset();
     analysisContinuationPending = false;
     birthState = AudioModificationBirthState::Empty;
 }
 
-void AudioModification::invalidateDerivedContent() noexcept
+void AudioModification::revokeAnalysisReception() noexcept
 {
-    if (!content.has_value())
-        return;
-
     ++birthRevision;
-    content->analysis = AnalysisState{};
+}
+
+void AudioModification::clearOriginalAnalysis()
+{
+    auto& analysis = content->analysis;
+    if (auto& curve = analysis.pitchCurve)
+        curve->replaceOriginalAnalysis({}, {}, curve->getHopSize(), curve->getSampleRate());
+    analysis.setOriginalF0State(OriginalF0State::NotRequested);
+    if (analysis.detectedKey.origin != Origin::Manual)
+        analysis.detectedKey = {};
+    analysis.silentGaps.clear();
+    analysis.referenceFeatures = {};
+    ++analysis.analysisRevision;
+    ++content->pitchRevision;
+    ++content->contentRevision;
     originalF0InputStamp.reset();
     analysisContinuationPending = false;
     birthState = AudioModificationBirthState::WaitingForSource;
+}
+
+void AudioModification::clearUserPitchEdits()
+{
+    if (const auto& curve = content->analysis.pitchCurve)
+    {
+        curve->clearUserPitchEdits();
+        ++content->pitchRevision;
+        ++content->contentRevision;
+    }
+}
+
+bool AudioModification::hasReadyOriginalF0() const
+{
+    return content.has_value()
+        && content->analysis.originalF0State == OriginalF0State::Ready
+        && content->analysis.pitchCurve != nullptr
+        && content->analysis.pitchCurve->hasUsableOriginalF0();
 }
 
 bool AudioModification::isRenderable() const noexcept
