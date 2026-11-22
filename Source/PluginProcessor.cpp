@@ -594,7 +594,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 #if !JucePlugin_Build_Standalone
                 const auto gate = completionGate_;
                 const auto failedKey = job.contentKey;
-                const bool posted = juce::MessageManager::callAsync(
+                const bool posted = ProcessRenderRuntime::postAsyncCallback(
                     [this, gate, failedKey]()
                     {
                         ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
@@ -607,7 +607,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 #else
                 const auto gate = completionGate_;
                 const auto failedKey = job.contentKey;
-                juce::MessageManager::callAsync([this, gate, failedKey] {
+                ProcessRenderRuntime::postAsyncCallback([this, gate, failedKey] {
                     ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
                     if (callbackLease)
                         notifyRenderTerminal(failedKey, false);
@@ -627,7 +627,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 #if !JucePlugin_Build_Standalone
                     auto gate = completionGate_;
                     const auto failedKey = job.contentKey;
-                    const bool posted = juce::MessageManager::callAsync(
+                    const bool posted = ProcessRenderRuntime::postAsyncCallback(
                         [this, gate, failedKey]()
                         {
                             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
@@ -644,7 +644,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 #else
                     const auto gate = completionGate_;
                     const auto failedKey = job.contentKey;
-                    juce::MessageManager::callAsync([this, gate, failedKey] {
+                    ProcessRenderRuntime::postAsyncCallback([this, gate, failedKey] {
                         ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
                         if (callbackLease)
                             notifyRenderTerminal(failedKey, false);
@@ -697,7 +697,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                 job.contentKey, job.contentRevision, job.targetRevision,
                 reason, job.renderCache, renderFailureGate);
 #if !JucePlugin_Build_Standalone
-            const bool posted = juce::MessageManager::callAsync(
+            const bool posted = ProcessRenderRuntime::postAsyncCallback(
                 [this, renderFailureGate, key = job.contentKey, reason]() {
                     ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderFailureGate);
                     if (!callbackLease)
@@ -709,7 +709,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             if (!posted)
                 AppLogger::error("RenderWorker callback failure could not be dispatched to CaptureSession");
 #else
-            juce::MessageManager::callAsync(
+            ProcessRenderRuntime::postAsyncCallback(
                 [this, renderFailureGate, key = job.contentKey]() {
                     ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderFailureGate);
                     if (callbackLease)
@@ -1423,8 +1423,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                         ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
                         if (!callbackLease)
                             return;
-                        if (result.requestKey != F0RequestKey{segContentKey})
-                            return;
                         if (auto* session = getCaptureSession()) {
                             if (!result.success) {
                                 const auto reason = result.errorMessage.empty()
@@ -1451,22 +1449,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                             }
                             if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
                                 ensureTimeToolAnchorSeed(segContentKey);
-                        }
-                    },
-                    [this, gate, segContentKey](F0ExtractionService::Result&& result) {
-                        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
-                        if (!callbackLease
-                            || result.requestKey != F0RequestKey{segContentKey})
-                            return;
-                        if (auto* session = getCaptureSession())
-                        {
-                            const auto reason = result.errorMessage.empty()
-                                ? std::string("F0 completion dispatcher rejected the result without an error detail")
-                                : result.errorMessage;
-                            session->commitSegmentF0Result(
-                                segContentKey, nullptr, OriginalF0State::Failed,
-                                reason);
-                            recordOriginalF0FailureEvent(segContentKey, juce::String(reason));
                         }
                     });
                 if (submitResult != F0ExtractionService::SubmitResult::Accepted
@@ -4714,17 +4696,13 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
         return false;
     }
 
-    if (f0ExtractionService_->isActive(F0RequestKey{request.contentKey})) {
-        f0ExtractionService_->cancel(F0RequestKey{request.contentKey});
-        f0RequestTokens_.erase(request.contentKey);
-    }
+    f0ExtractionService_->cancel(F0RequestKey{request.contentKey});
 
     auto gate = completionGate_;
     OpenTuneAudioProcessor* const processor = this;
     const auto capturedRequest = request;
     const uint64_t capturedContentRevision = snap->contentRevision;
     const auto capturedAudioBuffer = snap->audioBuffer;
-    auto requestToken = std::make_shared<uint64_t>(0);
     // 提交时捕获不可变内容快照：worker 只执行纯数据 F0 计算，owner 销毁后
     // 绝不访问裸 processor（快照 shared_ptr 与进程级 F0 服务随 worker 存活）。
     const auto capturedSnap = snap;
@@ -4768,21 +4746,10 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             return result;
         },
         [processor, gate, capturedRequest, capturedContentRevision,
-         capturedAudioBuffer, requestToken]
+         capturedAudioBuffer]
         (F0ExtractionService::Result&& result) {
-            // Both the normal commit and the dispatcher-failure mailbox invoke
-            // this callback on the message thread.  Do not add a second
-            // dispatcher hop after the mailbox has already recovered the
-            // failed post.
             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
             if (!callbackLease)
-                return;
-
-            const auto tokenIt = processor->f0RequestTokens_.find(capturedRequest.contentKey);
-            if (result.requestKey != F0RequestKey{capturedRequest.contentKey}
-                || result.requestToken != *requestToken
-                || tokenIt == processor->f0RequestTokens_.end()
-                || tokenIt->second != result.requestToken)
                 return;
 
             auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
@@ -4792,14 +4759,12 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 || currentSnap->audioBuffer != capturedAudioBuffer
                 || (result.sourceAudioBuffer != nullptr
                     && result.sourceAudioBuffer != capturedAudioBuffer)) {
-                processor->f0RequestTokens_.erase(tokenIt);
                 AppLogger::log("ContentRefresh: stale result dropped contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
                 return;
             }
 
             if (!result.success) {
-                processor->f0RequestTokens_.erase(capturedRequest.contentKey);
                 AppLogger::log("ContentRefresh: extraction failed contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId))
                     + " reason=" + juce::String(result.errorMessage));
@@ -4875,7 +4840,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             }
 
             if (!processor->writeOriginalF0ToOwner(capturedRequest.contentKey, pitchCurve)) {
-                processor->f0RequestTokens_.erase(capturedRequest.contentKey);
                 AppLogger::log("ContentRefresh: OriginalF0 commit failed contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
                 processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Failed);
@@ -4899,7 +4863,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             processor->updateContentKeyFromOriginalF0(capturedRequest.contentKey);
 
-            processor->f0RequestTokens_.erase(capturedRequest.contentKey);
             if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
                 processor->ensureTimeToolAnchorSeed(capturedRequest.contentKey);
 
@@ -4916,32 +4879,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             // With no notes commit, the Ready F0 still makes blank chunks renderable.
             processor->requestFullContentRender(capturedRequest.contentKey);
-        },
-        [processor, gate, capturedRequest, capturedContentRevision, requestToken]
-        (F0ExtractionService::Result&& result) {
-            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
-            if (!callbackLease)
-                return;
-            const auto tokenIt = processor->f0RequestTokens_.find(capturedRequest.contentKey);
-            if (result.requestKey != F0RequestKey{capturedRequest.contentKey}
-                || result.requestToken != *requestToken
-                || tokenIt == processor->f0RequestTokens_.end()
-                || tokenIt->second != result.requestToken)
-                return;
-            const auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
-            if (!currentSnap || currentSnap->contentRevision != capturedContentRevision) {
-                processor->f0RequestTokens_.erase(tokenIt);
-                return;
-            }
-            processor->f0RequestTokens_.erase(tokenIt);
-            processor->setContentOriginalF0State(
-                capturedRequest.contentKey, OriginalF0State::Failed);
-            processor->setContentOriginalF0FailureReason(
-                capturedRequest.contentKey,
-                result.errorMessage.empty()
-                    ? "F0 completion dispatcher rejected the result without an error detail"
-                    : result.errorMessage);
-        }, requestToken.get());
+        });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {
         AppLogger::log("ContentRefresh: submit rejected contentKey objectId="
@@ -4950,7 +4888,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             return true;
         if (submitResult == F0ExtractionService::SubmitResult::ShuttingDown)
             return false;
-        f0RequestTokens_.erase(request.contentKey);
         setContentOriginalF0State(request.contentKey, OriginalF0State::Failed);
         setContentOriginalF0FailureReason(request.contentKey,
             submitResult == F0ExtractionService::SubmitResult::QueueFull
@@ -4958,8 +4895,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 : "F0 extraction submission was rejected: invalid task");
         return false;
     }
-
-    f0RequestTokens_[request.contentKey] = *requestToken;
 
     return true;
 }

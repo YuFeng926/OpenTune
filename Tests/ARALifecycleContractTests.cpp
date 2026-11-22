@@ -4,6 +4,8 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/ARA/OpenTuneDocumentController.h"
 #include "../Source/ARA/OpenTunePlaybackRenderer.h"
+#include "../Source/Runtime/ProcessF0Runtime.h"
+#include "../Source/Runtime/ProcessRenderRuntime.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -477,6 +479,24 @@ bool runPlaybackRendererLifecycleRegression(ARA::ARADocumentControllerRef docume
     return passed;
 }
 
+bool runUndispatchedCompletionRegression()
+{
+    int dispatched = 0;
+    int discarded = 0;
+    {
+        juce::ScopedJuceInitialiser_GUI juceInitialiser;
+        if (!check(OpenTune::ProcessRenderRuntime::postAsyncCallback([&](bool ran) {
+                if (ran)
+                    ++dispatched;
+                else
+                    ++discarded;
+            }), "undispatched_completion_post_failed"))
+            return false;
+    }
+    return check(dispatched == 0 && discarded == 1,
+                 "undispatched_completion_not_released_once");
+}
+
 bool runNoteTopologyRegression(OpenTune::OpenTuneDocumentController& controller,
                                ARA::Host::DocumentController& host,
                                HostArchiving& archive,
@@ -558,6 +578,9 @@ int runChild(int argc, char** argv)
     OpenTuneTest::trace("ARALifecycleContractTests", "process_begin", {
         {"watchdogMs", OpenTuneTest::jsonNumber(OpenTuneTest::lifecycleWatchdogApprovalTimeoutMs)}
     });
+    if (!runUndispatchedCompletionRegression())
+        return 1;
+
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
     const auto* factory = createARAFactory();
     if (! check (factory != nullptr, "sdk_link_contract_unavailable"))
@@ -713,8 +736,21 @@ int runChild(int argc, char** argv)
     documentController.destroyDocumentController();
     factory->uninitializeARA();
 
+    auto& f0Runtime = OpenTune::ProcessF0Runtime::getInstance();
+    auto& renderRuntime = OpenTune::ProcessRenderRuntime::getInstance();
+    f0Runtime.shutdownAraAnalysisAndJoin();
+    renderRuntime.shutdownAndJoin();
+    int rejected = 0;
+    const bool postedAfterShutdown = OpenTune::ProcessRenderRuntime::postAsyncCallback([&](bool dispatched) {
+        if (!dispatched)
+            ++rejected;
+    });
+    const bool shutdownPassed = check(!renderRuntime.isControlWorkerJoinable()
+                                         && !postedAfterShutdown && rejected == 1,
+                                      "final_delivery_fence_not_closed");
+
     juce::Timer::callPendingTimersSynchronously();
-    const bool passed = rendererLifecyclePassed && noteTopologyPassed;
+    const bool passed = rendererLifecyclePassed && noteTopologyPassed && shutdownPassed;
     if (passed)
         std::fprintf (stdout, "{\"event\":\"ara_lifecycle_contract\",\"result\":\"success\",\"completionGate\":\"pumped\",\"wrapperGeneration\":\"recreated\",\"noteTopology\":\"initialized_once\"}\n");
     OpenTuneTest::trace("ARALifecycleContractTests", "process_end");

@@ -472,49 +472,62 @@ ProcessRenderRuntime& ProcessRenderRuntime::getInstance()
 
 bool ProcessRenderRuntime::postAsyncCallback(std::function<void()> callback)
 {
-    return getInstance().postAsyncDelivery(std::move(callback));
+    return postAsyncCallback([callback = std::move(callback)](bool dispatched) {
+        if (dispatched)
+            callback();
+    });
 }
 
-bool ProcessRenderRuntime::postAsyncDelivery(std::function<void()> callback)
+bool ProcessRenderRuntime::postAsyncCallback(std::function<void(bool)> settle)
 {
+    return getInstance().postAsyncDelivery(std::move(settle));
+}
+
+bool ProcessRenderRuntime::postAsyncDelivery(std::function<void(bool)> settle)
+{
+    struct Delivery final : juce::CallbackMessage
     {
-        std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+        Delivery(ProcessRenderRuntime& owner, std::function<void(bool)> completion)
+            : runtime(owner), settle(std::move(completion)) {}
+
+        ~Delivery() override
+        {
+            if (settle)
+                std::exchange(settle, {})(false);
+            std::lock_guard<std::mutex> lock(runtime.asyncDeliveryMutex_);
+            --runtime.asyncOutstandingCount_;
+            runtime.asyncDeliveryCv_.notify_all();
+        }
+
+        void messageCallback() override
+        {
+            ++t_activeAsyncDeliveries;
+            const juce::ScopeGuard finish{[] { --t_activeAsyncDeliveries; }};
+            std::exchange(settle, {})(true);
+        }
+
+        ProcessRenderRuntime& runtime;
+        std::function<void(bool)> settle;
+    };
+
+    {
+        std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
         if (asyncDeliveryClosed_)
+        {
+            lock.unlock();
+            settle(false);
             return false;
-        // The post is counted before enqueue so drainAsyncDeliveries observes
-        // it even when the posting thread is preempted after callAsync returns.
+        }
         ++asyncPostingCount_;
         ++asyncOutstandingCount_;
     }
 
-    const bool posted = juce::MessageManager::callAsync(
-        [this, callback = std::move(callback)]() mutable {
-            struct DeliveryCompletion
-            {
-                explicit DeliveryCompletion(ProcessRenderRuntime& runtimeToNotify) noexcept
-                    : runtime(runtimeToNotify)
-                {
-                    ++t_activeAsyncDeliveries;
-                }
-
-                ~DeliveryCompletion()
-                {
-                    --t_activeAsyncDeliveries;
-                    std::lock_guard<std::mutex> lock(runtime.asyncDeliveryMutex_);
-                    --runtime.asyncOutstandingCount_;
-                    runtime.asyncDeliveryCv_.notify_all();
-                }
-
-                ProcessRenderRuntime& runtime;
-            } completion(*this);
-            callback();
-        });
-
+    // The JUCE queue destroys the message after dispatch or when it discards
+    // it. A failed post also destroys it synchronously.
+    const bool posted = (new Delivery(*this, std::move(settle)))->post();
     {
         std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
         --asyncPostingCount_;
-        if (!posted)
-            --asyncOutstandingCount_;
         asyncDeliveryCv_.notify_all();
     }
     return posted;
@@ -522,107 +535,47 @@ bool ProcessRenderRuntime::postAsyncDelivery(std::function<void()> callback)
 
 void ProcessRenderRuntime::drainAsyncDeliveries()
 {
-    {
-        std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
-        asyncDeliveryClosed_ = true;
-        asyncDeliveryCv_.wait(lock, [this] { return asyncPostingCount_ == 0; });
-        if (asyncOutstandingCount_ == 0)
-            return;
-    }
-
-    auto* manager = juce::MessageManager::getInstanceWithoutCreating();
-    if (manager == nullptr)
-    {
-        // The queue is owned by the message manager; without it no accepted
-        // delivery can be dispatched later.
-        std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
-        asyncOutstandingCount_ = 0;
+    std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
+    asyncDeliveryClosed_ = true;
+    asyncDeliveryCv_.wait(lock, [this] { return asyncPostingCount_ == 0; });
+    if (asyncOutstandingCount_ == 0)
         return;
-    }
 
-    if (manager->isThisTheMessageThread())
+    const auto* manager = juce::MessageManager::getInstanceWithoutCreating();
+    if (manager == nullptr || !manager->isThisTheMessageThread())
     {
-        if (t_activeAsyncDeliveries != 0)
-        {
-            AppLogger::emergencyError(
-                "[ProcessRenderRuntime] final shutdown started inside an async delivery; hard lifecycle failure");
-            std::terminate();
-        }
-
-        const auto failUndrainable = [] {
-            AppLogger::emergencyError(
-                "[ProcessRenderRuntime] queued async deliveries cannot be dispatched before module unload; hard lifecycle failure");
-            std::terminate();
-        };
-
-        // The JUCE message queue is dispatched only by this thread, so drain it
-        // directly: the internal dispatcher runs the plugin's own message queue
-        // on Windows/Linux, and the nested run loop delivers the plugin's
-        // CoreFoundation source on Apple platforms.
-        while (true)
-        {
-            {
-                std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
-                if (asyncOutstandingCount_ == 0)
-                    return;
-            }
-            if (juce::MessageManager::getInstanceWithoutCreating() == nullptr)
-            {
-                std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
-                asyncOutstandingCount_ = 0;
-                return;
-            }
-
-           #if JUCE_MAC || JUCE_IOS
-            const auto runResult = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
-            if (runResult == kCFRunLoopRunTimedOut || runResult == kCFRunLoopRunFinished)
-                failUndrainable();
-           #elif JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
-            if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
-                failUndrainable();
-           #else
-            failUndrainable();
-           #endif
-        }
-    }
-
-    // Off the message thread: the barrier is queued after every accepted
-    // delivery and admission is already closed, so reaching it proves the
-    // runtime's delivery queue is empty when shutdownAndJoin returns.
-    struct DrainBarrier
-    {
-        std::mutex mutex;
-        std::condition_variable cv;
-        bool reached{false};
-    };
-    auto barrier = std::make_shared<DrainBarrier>();
-    const bool posted = juce::MessageManager::callAsync([barrier]() {
-        {
-            std::lock_guard<std::mutex> lock(barrier->mutex);
-            barrier->reached = true;
-        }
-        barrier->cv.notify_all();
-    });
-
-    if (!posted)
-    {
-        manager = juce::MessageManager::getInstanceWithoutCreating();
-        if (manager == nullptr)
-        {
-            std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
-            asyncOutstandingCount_ = 0;
-            return;
-        }
-
-        // A live manager rejects messages only after stopDispatchLoop. The
-        // host event loop still dispatches the accepted deliveries.
-        std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
+        // The message thread or queue teardown owns the remaining deliveries.
         asyncDeliveryCv_.wait(lock, [this] { return asyncOutstandingCount_ == 0; });
         return;
     }
 
-    std::unique_lock<std::mutex> barrierLock(barrier->mutex);
-    barrier->cv.wait(barrierLock, [&barrier] { return barrier->reached; });
+    if (t_activeAsyncDeliveries != 0)
+    {
+        AppLogger::emergencyError(
+            "[ProcessRenderRuntime] final shutdown started inside an async delivery; hard lifecycle failure");
+        std::terminate();
+    }
+
+    // On the message thread, drain JUCE's queue directly while the module is loaded.
+    while (asyncOutstandingCount_ != 0)
+    {
+        lock.unlock();
+       #if JUCE_MAC || JUCE_IOS
+        const auto runResult = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
+        const bool dispatched = runResult != kCFRunLoopRunTimedOut && runResult != kCFRunLoopRunFinished;
+       #elif JUCE_WINDOWS || JUCE_LINUX || JUCE_BSD
+        const bool dispatched = juce::detail::dispatchNextMessageOnSystemQueue(true);
+       #else
+        const bool dispatched = false;
+       #endif
+        lock.lock();
+        if (!dispatched && asyncOutstandingCount_ != 0)
+        {
+            AppLogger::emergencyError(
+                "[ProcessRenderRuntime] queued async deliveries cannot be dispatched before module unload; hard lifecycle failure");
+            std::terminate();
+        }
+    }
 }
 
 void ProcessRenderRuntime::retainOwner()
@@ -1224,8 +1177,7 @@ void ProcessRenderRuntime::controlWorkerLoop()
             if (command.shutdownPostCompletion)
             {
                 const auto generation = command.shutdownGeneration;
-                posted = postAsyncDelivery(
-                    [this, generation]() { completeAsyncShutdown(generation); });
+                posted = postAsyncCallback([this, generation]() { completeAsyncShutdown(generation); });
             }
             {
                 std::lock_guard<std::mutex> lock(shutdownMutex_);

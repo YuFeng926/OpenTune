@@ -6,6 +6,7 @@
 #include "../Utils/ModelPathResolver.h"
 #include "ImportedClipF0Extraction.h"
 #include <juce_cryptography/juce_cryptography.h>
+#include <juce_events/juce_events.h>
 #include <algorithm>
 #include <exception>
 #include <limits>
@@ -20,7 +21,6 @@ F0ExtractionService::F0ExtractionService(int workerCount, size_t maxQueueSize,
 {
     state_->maxQueueSize_ = maxQueueSize;
     state_->processorRunOwner_ = std::make_shared<F0RunOwnerState>();
-    state_->dispatcherFailureMailbox_ = std::make_shared<SharedState::DispatcherFailureMailbox>();
     const int count = std::max(1, workerCount);
     workers_.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i)
@@ -45,9 +45,6 @@ void F0ExtractionService::shutdown()
 {
     std::call_once(shutdownOnce_, [this] {
         auto& state = *state_;
-        const auto& mailbox = state.dispatcherFailureMailbox_;
-        if (mailbox)
-            mailbox->cancelAndClear();
         for (const auto& worker : workers_) {
             if (worker.get_id() == std::this_thread::get_id()) {
                 AppLogger::error("[F0ExtractionService] shutdown called from worker thread");
@@ -57,17 +54,21 @@ void F0ExtractionService::shutdown()
         }
 
         std::deque<Job> discardedTasks;
-        decltype(state.activeEntries_) discardedProcessorEntries;
+        ProcessorEntries discardedProcessorEntries;
         std::set<F0TaskId> araTasks;
         {
             std::lock_guard<std::mutex> lock(state.entriesMutex_);
             state.shutdownStarted_ = true;
+            // Revoke delivery before detaching queued work. Any undispatched
+            // result is released as a value without calling its owner.
+            discardedProcessorEntries.swap(state.processorEntries_);
+            for (auto& [id, entry] : state.araEntries_) {
+                entry.sink.reset();
+                araTasks.insert(id);
+            }
             discardedTasks.swap(state.queue_);
-            discardedProcessorEntries.swap(state.activeEntries_);
-            if (mailbox)
+            if (state.processorRunOwner_)
                 state.processorRunOwner_->closed.store(true, std::memory_order_release);
-            for (const auto& entry : state.araEntries_)
-                araTasks.insert(entry.first);
         }
 
         abortTasks(araTasks, AraF0Abort::Orphaned);
@@ -80,57 +81,11 @@ void F0ExtractionService::shutdown()
         for (auto& worker : workers_)
             worker.join();
         workers_.clear();
-        if (mailbox)
-            mailbox->cancelAndClear();
     });
 }
 
-void F0ExtractionService::SharedState::DispatcherFailureMailbox::enqueue(
-    F0ExtractionService::CommitFn callback,
-    std::shared_ptr<F0ExtractionService::Result> result)
+F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit)
 {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        queue_.push_back(DispatcherFailure{std::move(callback), std::move(result)});
-    }
-    triggerAsyncUpdate();
-}
-
-void F0ExtractionService::SharedState::DispatcherFailureMailbox::cancelAndClear()
-{
-    cancelPendingUpdate();
-    std::lock_guard<std::mutex> lock(mutex_);
-    queue_.clear();
-}
-
-void F0ExtractionService::SharedState::DispatcherFailureMailbox::handleAsyncUpdate()
-{
-    std::deque<DispatcherFailure> failures;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        failures.swap(queue_);
-    }
-
-    for (auto& failure : failures) {
-        try {
-            failure.callback(std::move(*failure.result));
-        }
-        catch (const std::exception& e) {
-            AppLogger::error("[F0ExtractionService] dispatcher-failure completion threw: "
-                + juce::String(e.what()));
-        }
-        catch (...) {
-            AppLogger::error("[F0ExtractionService] dispatcher-failure completion threw: unknown exception");
-        }
-    }
-}
-
-F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit,
-                                                              CommitFn dispatcherFailure,
-                                                              uint64_t* acceptedRequestToken)
-{
-    if (acceptedRequestToken != nullptr)
-        *acceptedRequestToken = 0;
     if (!requestKey.contentKey.isValid() || !execute || !commit) {
         return SubmitResult::InvalidTask;
     }
@@ -142,7 +97,7 @@ F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey reque
         if (state_->shutdownStarted_)
             return SubmitResult::ShuttingDown;
 
-        if (state_->activeEntries_.find(requestKey.contentKey) != state_->activeEntries_.end()) {
+        if (state_->processorEntries_.find(requestKey.contentKey) != state_->processorEntries_.end()) {
             return SubmitResult::AlreadyInProgress;
         }
 
@@ -151,11 +106,8 @@ F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey reque
         }
 
         const uint64_t token = state_->tokenCounter_++;
-        if (acceptedRequestToken != nullptr)
-            *acceptedRequestToken = token;
-        state_->activeEntries_.emplace(requestKey.contentKey, token);
-        state_->queue_.emplace_back(Task{requestKey, token, std::move(execute), std::move(commit),
-                                        std::move(dispatcherFailure)});
+        state_->processorEntries_.emplace(requestKey.contentKey, ProcessorEntry{token, std::move(commit), {}});
+        state_->queue_.emplace_back(Task{{requestKey, token}, std::move(execute)});
     }
 
     // 解锁后唤醒单个 worker。
@@ -163,16 +115,13 @@ F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey reque
     return SubmitResult::Accepted;
 }
 
-bool F0ExtractionService::isActive(F0RequestKey requestKey) const
-{
-    std::lock_guard<std::mutex> lock(state_->entriesMutex_);
-    return state_->activeEntries_.find(requestKey.contentKey) != state_->activeEntries_.end();
-}
-
 void F0ExtractionService::cancel(F0RequestKey requestKey)
 {
-    std::lock_guard<std::mutex> lock(state_->entriesMutex_);
-    state_->activeEntries_.erase(requestKey.contentKey);
+    ProcessorEntries::node_type discarded;
+    {
+        std::lock_guard<std::mutex> lock(state_->entriesMutex_);
+        discarded = state_->processorEntries_.extract(requestKey.contentKey);
+    }
 }
 
 bool AraF0ConfigTag::operator==(const AraF0ConfigTag& rhs) const noexcept
@@ -388,6 +337,30 @@ void F0ExtractionService::revokeReceiver(AraF0DocumentFlights& flights, uint64_t
     }
 }
 
+template <typename Id>
+void F0ExtractionService::postCompletion(const std::shared_ptr<SharedState>& state, Id id)
+{
+    ProcessRenderRuntime::postAsyncCallback([weak = std::weak_ptr<SharedState>(state), id](bool dispatched) {
+        const auto retained = weak.lock();
+        if (!retained)
+            return;
+        if (dispatched) {
+            auto* manager = juce::MessageManager::getInstanceWithoutCreating();
+            jassert(manager->isThisTheMessageThread());
+            dispatched = !manager->hasStopMessageBeenSent();
+        }
+        settleCompletion(*retained, id, dispatched);
+    });
+}
+
+F0ExtractionService::ProcessorEntries::iterator F0ExtractionService::findProcessorEntry(
+    SharedState& state, ProcessorTaskId id)
+{
+    const auto it = state.processorEntries_.find(id.requestKey.contentKey);
+    return it != state.processorEntries_.end() && it->second.token == id.token
+        ? it : state.processorEntries_.end();
+}
+
 void F0ExtractionService::processorWorkerLoop(const std::shared_ptr<SharedState>& state)
 {
     for (;;) {
@@ -399,19 +372,18 @@ void F0ExtractionService::processorWorkerLoop(const std::shared_ptr<SharedState>
                 return;
             task = std::move(std::get<Task>(state->queue_.front()));
             state->queue_.pop_front();
-            const auto it = state->activeEntries_.find(task.requestKey.contentKey);
-            if (it == state->activeEntries_.end() || it->second != task.token)
+            if (findProcessorEntry(*state, task.id) == state->processorEntries_.end())
                 continue;
         }
-        runProcessorTask(*state, std::move(task));
+        runProcessorTask(state, std::move(task));
     }
 }
 
-void F0ExtractionService::runProcessorTask(SharedState& state, Task task)
+void F0ExtractionService::runProcessorTask(const std::shared_ptr<SharedState>& state, Task task)
 {
     Result result;
     try {
-        result = task.execute(state.processorRunOwner_);
+        result = task.execute(state->processorRunOwner_);
     } catch (const std::exception& e) {
         AppLogger::error("[F0ExtractionService] Task execution threw std::exception: " + juce::String(e.what()));
         result.errorMessage = "F0 extraction task threw std::exception: " + std::string(e.what());
@@ -419,30 +391,39 @@ void F0ExtractionService::runProcessorTask(SharedState& state, Task task)
         AppLogger::error("[F0ExtractionService] Task execution threw unknown exception");
         result.errorMessage = "F0 extraction task threw an unknown exception";
     }
-    result.requestKey = task.requestKey;
-    result.requestToken = task.token;
+    {
+        std::lock_guard<std::mutex> lock(state->entriesMutex_);
+        const auto it = findProcessorEntry(*state, task.id);
+        if (it == state->processorEntries_.end())
+            return;
+        it->second.result.emplace(std::move(result));
+    }
+    postCompletion(state, task.id);
+}
+
+void F0ExtractionService::settleCompletion(SharedState& state, ProcessorTaskId id, bool dispatcherAvailable)
+{
+    ProcessorEntries::node_type batch;
     {
         std::lock_guard<std::mutex> lock(state.entriesMutex_);
-        auto it = state.activeEntries_.find(task.requestKey.contentKey);
-        if (state.shutdownStarted_ || it == state.activeEntries_.end() || it->second != task.token)
+        const auto it = findProcessorEntry(state, id);
+        if (it == state.processorEntries_.end())
             return;
-        state.activeEntries_.erase(it);
+        batch = state.processorEntries_.extract(it);
     }
-    auto resultForDispatch = std::make_shared<Result>(std::move(result));
-    const bool posted = juce::MessageManager::callAsync([commit = std::move(task.commit), resultForDispatch]() mutable {
-        try {
-            commit(std::move(*resultForDispatch));
-        } catch (const std::exception& e) {
-            AppLogger::error("[F0ExtractionService] completion threw: " + juce::String(e.what()));
-        } catch (...) {
-            AppLogger::error("[F0ExtractionService] completion threw: unknown exception");
-        }
-    });
-    if (!posted) {
-        if (task.dispatcherFailure)
-            state.dispatcherFailureMailbox_->enqueue(std::move(task.dispatcherFailure), std::move(resultForDispatch));
-        else
-            AppLogger::error("[F0ExtractionService] completion dispatcher rejected; hard lifecycle failure");
+    if (!dispatcherAvailable) {
+        AppLogger::logNoThrow("[F0ExtractionService] completion released: dispatcher unavailable task="
+            + juce::String(static_cast<juce::uint64>(id.token)));
+        return;
+    }
+
+    auto& entry = batch.mapped();
+    try {
+        entry.commit(std::move(*entry.result));
+    } catch (const std::exception& e) {
+        AppLogger::error("[F0ExtractionService] completion threw: " + juce::String(e.what()));
+    } catch (...) {
+        AppLogger::error("[F0ExtractionService] completion threw: unknown exception");
     }
 }
 
@@ -577,20 +558,7 @@ void F0ExtractionService::runAraTask(const std::shared_ptr<SharedState>& state, 
         batch.phase = AraGroupPhase::ReadyToDeliver;
     }
 
-    if (!ProcessRenderRuntime::postAsyncCallback([weak = std::weak_ptr<SharedState>(state), id = task.id] {
-            deliverAraResult(weak, id);
-        })) {
-        std::vector<AraEntry> released;
-        AraGroups::node_type releasedGroup;
-        {
-            std::lock_guard<std::mutex> lock(state->entriesMutex_);
-            const auto group = findAraBatch(*state, task.id);
-            if (group != state->araGroups_.end())
-                releasedGroup = releaseAraBatch(*state, group, released);
-        }
-        AppLogger::logNoThrow("ARA-F0: completion dispatcher rejected task="
-            + juce::String(static_cast<juce::uint64>(task.id.value)));
-    }
+    postCompletion(state, task.id);
 }
 
 F0ExtractionService::AraGroups::iterator F0ExtractionService::findAraBatch(SharedState& state, F0TaskId owner)
@@ -613,35 +581,40 @@ F0ExtractionService::AraGroups::node_type F0ExtractionService::releaseAraBatch(
     return state.araGroups_.extract(group);
 }
 
-void F0ExtractionService::deliverAraResult(const std::weak_ptr<SharedState>& weak, F0TaskId owner)
+void F0ExtractionService::settleCompletion(SharedState& state, F0TaskId owner, bool dispatcherAvailable)
 {
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    const auto state = weak.lock();
-    if (!state)
-        return;
-
     using Sink = std::weak_ptr<AraF0DocumentFlights::CompletionSink>;
     std::map<Sink, std::vector<F0TaskId>, std::owner_less<Sink>> byDocument;
     AraGroups::iterator group;
     std::unique_ptr<const AraF0Result> result;
+    std::vector<AraEntry> released;
+    AraGroups::node_type releasedGroup;
     {
-        std::lock_guard<std::mutex> lock(state->entriesMutex_);
-        group = findAraBatch(*state, owner);
-        if (group == state->araGroups_.end())
+        std::lock_guard<std::mutex> lock(state.entriesMutex_);
+        group = findAraBatch(state, owner);
+        if (group == state.araGroups_.end())
             return;
-        auto& batch = group->second;
-        for (auto id : batch.origins)
-            byDocument[state->araEntries_.at(id).sink].push_back(id);
-        // Close Digest admission at handoff. Local flights remain active until their sink takes them.
-        batch.phase = AraGroupPhase::Delivering;
-        result = std::move(batch.result);
+        if (dispatcherAvailable) {
+            auto& batch = group->second;
+            for (auto id : batch.origins)
+                byDocument[state.araEntries_.at(id).sink].push_back(id);
+            // Close Digest admission at handoff. Local flights remain active until their sink takes them.
+            batch.phase = AraGroupPhase::Delivering;
+            result = std::move(batch.result);
+        } else {
+            releasedGroup = releaseAraBatch(state, group, released);
+        }
+    }
+
+    if (!dispatcherAvailable) {
+        AppLogger::logNoThrow("ARA-F0: completion released: dispatcher unavailable task="
+            + juce::String(static_cast<juce::uint64>(owner.value)));
+        return;
     }
 
     const juce::ScopeGuard finish{[&] {
-        std::vector<AraEntry> released;
-        AraGroups::node_type releasedGroup;
-        std::lock_guard<std::mutex> lock(state->entriesMutex_);
-        releasedGroup = releaseAraBatch(*state, group, released);
+        std::lock_guard<std::mutex> lock(state.entriesMutex_);
+        releasedGroup = releaseAraBatch(state, group, released);
     }};
     for (const auto& [receiver, ids] : byDocument)
         if (const auto sink = receiver.lock())

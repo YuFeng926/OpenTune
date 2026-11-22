@@ -547,7 +547,6 @@ private:
     std::shared_ptr<ResamplingManager> resamplingManager_;
 
     std::unordered_set<ContentKey> pendingTimeToolSeedKeys_; // message-thread only
-    std::unordered_map<ContentKey, uint64_t> f0RequestTokens_; // message-thread only
     std::deque<OriginalF0FailureEvent> pendingF0FailureEvents_; // message-thread only
 
     // 运行时惰性解析进程级 F0 服务，消除冷启动空快照

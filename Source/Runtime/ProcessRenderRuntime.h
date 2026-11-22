@@ -148,18 +148,17 @@ public:
      * shutdownAndJoin uses the same Stop path without a message completion;
      * it waits on the mutex-paired worker-exit predicate, unlocks, joins, then
      * drains every accepted async delivery while the module is still loaded.
-     * Callers may invoke it from the message thread or from any other thread:
-     * all runtime deliveries queued before the final shutdown are executed
-     * before it returns, and later deliveries are rejected, so no runtime
-     * message-thread callback remains queued after module unload.
+     * It returns after those messages have run or the message queue has
+     * destroyed them, and rejects later posts.
      */
     void shutdownAsync(std::function<void()> completion);
     void shutdownAndJoin();
 
-    // Single entry for process-runtime message-thread deliveries. Normal
-    // operation preserves juce::MessageManager::callAsync ordering; the final
-    // shutdown observes every accepted delivery through this fence.
+    // Both overloads return whether the message was accepted. The settling
+    // overload receives true on message-thread dispatch and false on rejection
+    // or queue destruction. False is value-side cleanup and may run off-thread.
     static bool postAsyncCallback(std::function<void()> callback);
+    static bool postAsyncCallback(std::function<void(bool dispatched)> settle);
 
     // Registered by ContentRenderService along its execution lease attach and
     // detach. A successful shared backend change notifies every registered
@@ -285,7 +284,7 @@ private:
     // behind every accepted command and starts the worker when needed.
     void beginShutdownLocked(bool postCompletion);
     void completeAsyncShutdown(uint64_t generation);
-    bool postAsyncDelivery(std::function<void()> callback);
+    bool postAsyncDelivery(std::function<void(bool)> settle);
     void drainAsyncDeliveries();
     void finishShutdown(uint64_t generation);
     void shutdownLocked(std::unique_lock<std::mutex>& shutdownLock);

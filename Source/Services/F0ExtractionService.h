@@ -16,7 +16,6 @@
 #include <vector>
 
 #include <juce_audio_basics/juce_audio_basics.h>
-#include <juce_events/juce_events.h>
 
 #include "../Content/ContentKey.h"
 #include "../Content/OriginalF0InputStamp.h"
@@ -115,8 +114,6 @@ public:
         int trackId{0};
         int placementIndexHint{-1};
         ContentKey contentKey;
-        F0RequestKey requestKey;
-        uint64_t requestToken{0};
         std::shared_ptr<const juce::AudioBuffer<float>> sourceAudioBuffer;
         int hopSize{0};
         int f0SampleRate{0};
@@ -147,10 +144,7 @@ public:
                         std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver);
     ~F0ExtractionService();
 
-    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit,
-                        CommitFn dispatcherFailure = {},
-                        uint64_t* acceptedRequestToken = nullptr);
-    bool isActive(F0RequestKey requestKey) const;
+    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit);
     void cancel(F0RequestKey requestKey);
 
     static AraF0ConfigTag snapshotAraConfig(double sourceSampleRate);
@@ -168,13 +162,22 @@ private:
     friend class ProcessF0Runtime;
     explicit F0ExtractionService(size_t maxQueueSize);
 
-    struct Task {
+    struct ProcessorTaskId {
         F0RequestKey requestKey;
         uint64_t token{0};
-        ExecuteFn execute;
-        CommitFn commit;
-        CommitFn dispatcherFailure;
     };
+
+    struct Task {
+        ProcessorTaskId id;
+        ExecuteFn execute;
+    };
+
+    struct ProcessorEntry {
+        uint64_t token;
+        CommitFn commit;
+        std::optional<Result> result;
+    };
+    using ProcessorEntries = std::unordered_map<ContentKey, ProcessorEntry>;
 
     // Worker input is exclusively value PCM, frozen configuration and run identity.
     // It contains no DC, model, source, reader or receiver pointer/callback.
@@ -210,25 +213,6 @@ private:
     };
 
     struct SharedState {
-        using Commit = F0ExtractionService::CommitFn;
-        using ResultType = F0ExtractionService::Result;
-
-        struct DispatcherFailure {
-            Commit callback;
-            std::shared_ptr<ResultType> result;
-        };
-
-        class DispatcherFailureMailbox final : public juce::AsyncUpdater {
-        public:
-            void enqueue(Commit callback, std::shared_ptr<ResultType> result);
-            void cancelAndClear();
-            void handleAsyncUpdate() override;
-
-        private:
-            std::mutex mutex_;
-            std::deque<DispatcherFailure> queue_;
-        };
-
         std::deque<Job> queue_;
         size_t maxQueueSize_{0};
         std::condition_variable queueCv_;
@@ -236,10 +220,9 @@ private:
         uint64_t tokenCounter_{1};
         bool shutdownStarted_{false};
 
-        // Allocated only for processor services.
-        std::unordered_map<ContentKey, uint64_t> activeEntries_;
+        // Processor entries stay active until the completion is claimed or revoked.
+        ProcessorEntries processorEntries_;
         std::shared_ptr<F0RunOwnerState> processorRunOwner_;
-        std::shared_ptr<DispatcherFailureMailbox> dispatcherFailureMailbox_;
         AraGroups araGroups_;
         std::map<F0TaskId, AraEntry> araEntries_;
     };
@@ -249,8 +232,13 @@ private:
     std::vector<std::thread> workers_;
     std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver_;
 
+    template <typename Id>
+    static void postCompletion(const std::shared_ptr<SharedState>& state, Id id);
+
     static void processorWorkerLoop(const std::shared_ptr<SharedState>& state);
-    static void runProcessorTask(SharedState& state, Task task);
+    static void runProcessorTask(const std::shared_ptr<SharedState>& state, Task task);
+    static ProcessorEntries::iterator findProcessorEntry(SharedState& state, ProcessorTaskId id);
+    static void settleCompletion(SharedState& state, ProcessorTaskId id, bool dispatcherAvailable);
     static void prepareAraTasks(const std::shared_ptr<SharedState>& state);
     static void executeAraTasks(const std::shared_ptr<SharedState>& state);
     static void runAraTask(const std::shared_ptr<SharedState>& state, const AraTask& task,
@@ -261,7 +249,7 @@ private:
     static AraGroups::iterator findAraBatch(SharedState& state, F0TaskId owner);
     static AraGroups::node_type releaseAraBatch(SharedState& state, AraGroups::iterator group,
                                                std::vector<AraEntry>& released);
-    static void deliverAraResult(const std::weak_ptr<SharedState>& state, F0TaskId owner);
+    static void settleCompletion(SharedState& state, F0TaskId owner, bool dispatcherAvailable);
 };
 
 } // namespace OpenTune

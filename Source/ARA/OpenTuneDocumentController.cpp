@@ -76,10 +76,16 @@ ContentState cloneModificationContent(const ContentState& source)
 
 struct OpenTuneDocumentController::HostTransportRelayState
 {
+    explicit HostTransportRelayState(OpenTuneDocumentController& document) : owner(document) {}
+
+    OpenTuneDocumentController& owner;
     std::atomic<bool> alive { true };
     std::mutex mutex;
     HostTransportCoalescer coalescer;
     bool flushScheduled = false;
+#if JUCE_MAC
+    CFRunLoopTimerRef pendingFlush = nullptr;
+#endif
 };
 
 namespace {
@@ -87,21 +93,19 @@ namespace {
 #if JUCE_MAC
 void transportFlushTimerFired(CFRunLoopTimerRef, void* info)
 {
-    std::unique_ptr<std::function<void()>> owned(static_cast<std::function<void()>*>(info));
-    if (owned != nullptr && static_cast<bool>(*owned))
-        (*owned)();
+    auto flush = std::move(*static_cast<std::function<void()>*>(info));
+    flush();
 }
-#endif
 
-void deferTransportFlush(std::function<void()> fn)
+void deferTransportFlush(CFRunLoopTimerRef& pendingFlush, std::function<void()> fn)
 {
-   #if JUCE_MAC
     // Mouse tracking runs in kCFRunLoopCommonModes. Logic drops playback-controller
     // calls made from that mode, so the flush waits for the default mode.
     auto* holder = new std::function<void()>(std::move(fn));
     CFRunLoopTimerContext context {};
     context.info = holder;
-    CFRunLoopTimerRef timer = CFRunLoopTimerCreate(
+    context.release = [](const void* info) { delete static_cast<const std::function<void()>*>(info); };
+    pendingFlush = CFRunLoopTimerCreate(
         kCFAllocatorDefault,
         CFAbsoluteTimeGetCurrent(),
         0,
@@ -109,23 +113,16 @@ void deferTransportFlush(std::function<void()> fn)
         0,
         transportFlushTimerFired,
         &context);
-    if (timer == nullptr)
+    if (pendingFlush == nullptr)
     {
-        if (holder != nullptr && static_cast<bool>(*holder))
-            (*holder)();
-        delete holder;
+        std::unique_ptr<std::function<void()>> owned(holder);
+        (*owned)();
         return;
     }
 
-    CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopDefaultMode);
-    CFRelease(timer);
-   #else
-    if (auto* messageManager = juce::MessageManager::getInstanceWithoutCreating())
-        messageManager->callAsync(std::move(fn));
-    else if (fn)
-        fn();
-   #endif
+    CFRunLoopAddTimer(CFRunLoopGetMain(), pendingFlush, kCFRunLoopDefaultMode);
 }
+#endif
 
 template <typename Member>
 bool playbackMemberCallable(const ARA::ARAPlaybackControllerInterface* iface,
@@ -166,7 +163,7 @@ OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugIn
     , appPreferences_({}, [this](auto scheme) { audioEditingSchemeChanged(scheme); })
     , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
-    , transportRelay_(std::make_shared<HostTransportRelayState>())
+    , transportRelay_(std::make_shared<HostTransportRelayState>(*this))
     , notePitchAudition_(std::make_unique<NotePitchAudition>())
     , renderTerminalRelay_(std::make_shared<RenderTerminalRelay>())
 {
@@ -196,8 +193,14 @@ OpenTuneDocumentController::~OpenTuneDocumentController()
     AppLogger::logNoThrow(araDiagnostic(this) + "DocumentController destructor begin");
     revokeDocumentF0();
 
-    if (transportRelay_ != nullptr)
-        transportRelay_->alive.store(false, std::memory_order_release);
+    transportRelay_->alive.store(false, std::memory_order_release);
+#if JUCE_MAC
+    if (auto timer = std::exchange(transportRelay_->pendingFlush, nullptr))
+    {
+        CFRunLoopTimerInvalidate(timer);
+        CFRelease(timer);
+    }
+#endif
 
     if (renderTerminalRelay_ != nullptr)
         renderTerminalRelay_->clear();
@@ -2583,7 +2586,7 @@ void OpenTuneDocumentController::installDocumentRenderExecution()
         if (renderTerminalRelay != nullptr)
         {
             const auto key = job.contentKey;
-            juce::MessageManager::callAsync([renderGate, renderTerminalRelay, key] {
+            ProcessRenderRuntime::postAsyncCallback([renderGate, renderTerminalRelay, key] {
                 const ProcessRenderRuntime::CompletionCallbackLease callbackLease(*renderGate);
                 if (callbackLease)
                     renderTerminalRelay->invoke(key, false);
@@ -2614,7 +2617,7 @@ void OpenTuneDocumentController::processDocumentRenderJob(
         if (renderTerminalRelay != nullptr)
         {
             const auto key = job.contentKey;
-            juce::MessageManager::callAsync([completionGate, renderTerminalRelay, key] {
+            ProcessRenderRuntime::postAsyncCallback([completionGate, renderTerminalRelay, key] {
                 const ProcessRenderRuntime::CompletionCallbackLease callbackLease(*completionGate);
                 if (callbackLease)
                     renderTerminalRelay->invoke(key, false);
@@ -2634,7 +2637,7 @@ void OpenTuneDocumentController::processDocumentRenderJob(
         if (renderTerminalRelay != nullptr)
         {
             const auto key = job.contentKey;
-            juce::MessageManager::callAsync([completionGate, renderTerminalRelay, key] {
+            ProcessRenderRuntime::postAsyncCallback([completionGate, renderTerminalRelay, key] {
                 const ProcessRenderRuntime::CompletionCallbackLease callbackLease(*completionGate);
                 if (callbackLease)
                     renderTerminalRelay->invoke(key, false);
@@ -2873,12 +2876,16 @@ void OpenTuneDocumentController::enqueueHostTransport(const std::function<void(H
 
 void OpenTuneDocumentController::scheduleHostTransportFlush()
 {
-    auto relay = transportRelay_;
-    if (relay == nullptr)
-        return;
-
-    deferTransportFlush([this, relay]()
+    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
+    auto flush = [weak = std::weak_ptr<HostTransportRelayState>(transportRelay_)]()
     {
+        const auto relay = weak.lock();
+        if (!relay)
+            return;
+       #if JUCE_MAC
+        if (auto timer = std::exchange(relay->pendingFlush, nullptr))
+            CFRelease(timer);
+       #endif
         if (!relay->alive.load(std::memory_order_acquire))
             return;
 
@@ -2892,8 +2899,13 @@ void OpenTuneDocumentController::scheduleHostTransportFlush()
         if (!relay->alive.load(std::memory_order_acquire))
             return;
 
-        performHostTransportBatch(batch);
-    });
+        relay->owner.performHostTransportBatch(batch);
+    };
+   #if JUCE_MAC
+    deferTransportFlush(transportRelay_->pendingFlush, std::move(flush));
+   #else
+    ProcessRenderRuntime::postAsyncCallback(std::move(flush));
+   #endif
 }
 
 void OpenTuneDocumentController::performHostTransportBatch(const HostTransportBatch& batch)
