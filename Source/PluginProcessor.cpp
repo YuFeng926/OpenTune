@@ -1374,7 +1374,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                     F0RequestKey{segContentKey},
                     [audio, sr, segContentKey](const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
                         F0ExtractionService::Result result;
-                        result.contentKey = segContentKey;
                         if (!audio || audio->getNumSamples() == 0
                             || audio->getNumChannels() <= 0) {
                             result.errorMessage = !audio
@@ -1450,6 +1449,21 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
                             if (pendingTimeToolSeedKeys_.count(segContentKey) != 0)
                                 ensureTimeToolAnchorSeed(segContentKey);
                         }
+                    },
+                    [this, gate, segContentKey](F0ExtractionService::Result&& result) {
+                        // Dispatcher rejection path: the mailbox re-delivers the
+                        // failed result on the message thread so the waiting
+                        // segment settles as Failed with its reason.
+                        ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+                        if (!callbackLease)
+                            return;
+                        const auto reason = result.errorMessage.empty()
+                            ? std::string("F0 completion dispatcher rejected the result without an error detail")
+                            : result.errorMessage;
+                        if (auto* session = getCaptureSession())
+                            session->commitSegmentF0Result(
+                                segContentKey, nullptr, OriginalF0State::Failed, reason);
+                        recordOriginalF0FailureEvent(segContentKey, juce::String(reason));
                     });
                 if (submitResult != F0ExtractionService::SubmitResult::Accepted
                     && submitResult != F0ExtractionService::SubmitResult::AlreadyInProgress
@@ -4702,7 +4716,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
     OpenTuneAudioProcessor* const processor = this;
     const auto capturedRequest = request;
     const uint64_t capturedContentRevision = snap->contentRevision;
-    const auto capturedAudioBuffer = snap->audioBuffer;
     // 提交时捕获不可变内容快照：worker 只执行纯数据 F0 计算，owner 销毁后
     // 绝不访问裸 processor（快照 shared_ptr 与进程级 F0 服务随 worker 存活）。
     const auto capturedSnap = snap;
@@ -4712,7 +4725,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
         [capturedSnap, capturedRequest](
             const std::shared_ptr<F0RunOwnerState>& runOwnerState) -> F0ExtractionService::Result {
             F0ExtractionService::Result result;
-            result.contentKey = capturedRequest.contentKey;
 
             if (!capturedSnap || capturedSnap->audioBuffer == nullptr) {
                 result.errorMessage = !capturedSnap
@@ -4720,8 +4732,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                     : "F0 extraction content snapshot has no audio buffer";
                 return result;
             }
-
-            result.sourceAudioBuffer = capturedSnap->audioBuffer;
 
             // 进程级 F0 服务（进程寿命，owner 销毁后仍安全）；惰性初始化保留原语义。
             auto& f0Runtime = ProcessF0Runtime::getInstance();
@@ -4745,8 +4755,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
             result.success = true;
             return result;
         },
-        [processor, gate, capturedRequest, capturedContentRevision,
-         capturedAudioBuffer]
+        [processor, gate, capturedRequest, capturedContentRevision]
         (F0ExtractionService::Result&& result) {
             ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
             if (!callbackLease)
@@ -4754,11 +4763,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
             if (!currentSnap
-                || currentSnap->contentRevision != capturedContentRevision
-                || currentSnap->audioBuffer == nullptr
-                || currentSnap->audioBuffer != capturedAudioBuffer
-                || (result.sourceAudioBuffer != nullptr
-                    && result.sourceAudioBuffer != capturedAudioBuffer)) {
+                || currentSnap->contentRevision != capturedContentRevision) {
                 AppLogger::log("ContentRefresh: stale result dropped contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
                 return;
@@ -4879,6 +4884,24 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             // With no notes commit, the Ready F0 still makes blank chunks renderable.
             processor->requestFullContentRender(capturedRequest.contentKey);
+        },
+        [processor, gate, capturedRequest, capturedContentRevision]
+        (F0ExtractionService::Result&& result) {
+            // Dispatcher rejection path: the processor mailbox re-delivers the
+            // failed result on the message thread so waiting content settles
+            // as Failed with its reason.
+            ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
+            if (!callbackLease)
+                return;
+            const auto currentSnap = processor->getContentSnapshot(capturedRequest.contentKey);
+            if (!currentSnap || currentSnap->contentRevision != capturedContentRevision)
+                return;
+            processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Failed);
+            processor->setContentOriginalF0FailureReason(
+                capturedRequest.contentKey,
+                result.errorMessage.empty()
+                    ? "F0 completion dispatcher rejected the result without an error detail"
+                    : result.errorMessage);
         });
 
     if (submitResult != F0ExtractionService::SubmitResult::Accepted) {

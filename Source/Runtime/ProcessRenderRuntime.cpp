@@ -483,54 +483,98 @@ bool ProcessRenderRuntime::postAsyncCallback(std::function<void(bool)> settle)
     return getInstance().postAsyncDelivery(std::move(settle));
 }
 
+struct ProcessRenderRuntime::AsyncDelivery final : juce::CallbackMessage
+{
+    AsyncDelivery(ProcessRenderRuntime& owner, std::function<void(bool)> completion)
+        : runtime(owner), settle(std::move(completion)) {}
+
+    ~AsyncDelivery() override
+    {
+        // std::exchange guarantees exactly one settlement across messageCallback,
+        // destructor and a pump-shutdown release. Only registered deliveries
+        // hold an outstanding count, so the destructor releases the count
+        // together with its registry entry.
+        if (settle)
+            std::exchange(settle, {})(false);
+        std::lock_guard<std::mutex> lock(runtime.asyncDeliveryMutex_);
+        auto& deliveries = runtime.asyncDeliveries_;
+        const auto entry = std::find(deliveries.begin(), deliveries.end(), this);
+        if (entry != deliveries.end())
+        {
+            deliveries.erase(entry);
+            --runtime.asyncOutstandingCount_;
+        }
+        runtime.asyncDeliveryCv_.notify_all();
+    }
+
+    void messageCallback() override
+    {
+        ++t_activeAsyncDeliveries;
+        const juce::ScopeGuard finish{[] { --t_activeAsyncDeliveries; }};
+        // A value-side release leaves the message queued; dispatching it after
+        // such a release is a no-op, keeping the settlement exactly once.
+        if (auto settleFn = std::exchange(settle, {}))
+            settleFn(true);
+    }
+
+    // Value-side release for pump shutdown. Never destroys the message; the
+    // JUCE queue keeps owning it and the destructor stays single-settled.
+    void releaseValueSide() noexcept
+    {
+        if (settle)
+            std::exchange(settle, {})(false);
+    }
+
+    ProcessRenderRuntime& runtime;
+    std::function<void(bool)> settle;
+};
+
 bool ProcessRenderRuntime::postAsyncDelivery(std::function<void(bool)> settle)
 {
-    struct Delivery final : juce::CallbackMessage
+    auto* delivery = new AsyncDelivery(*this, std::move(settle));
+    bool accepted = false;
     {
-        Delivery(ProcessRenderRuntime& owner, std::function<void(bool)> completion)
-            : runtime(owner), settle(std::move(completion)) {}
-
-        ~Delivery() override
+        std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
+        if (!asyncDeliveryClosed_)
         {
-            if (settle)
-                std::exchange(settle, {})(false);
-            std::lock_guard<std::mutex> lock(runtime.asyncDeliveryMutex_);
-            --runtime.asyncOutstandingCount_;
-            runtime.asyncDeliveryCv_.notify_all();
+            ++asyncPostingCount_;
+            ++asyncOutstandingCount_;
+            asyncDeliveries_.push_back(delivery);
+            accepted = true;
         }
-
-        void messageCallback() override
-        {
-            ++t_activeAsyncDeliveries;
-            const juce::ScopeGuard finish{[] { --t_activeAsyncDeliveries; }};
-            std::exchange(settle, {})(true);
-        }
-
-        ProcessRenderRuntime& runtime;
-        std::function<void(bool)> settle;
-    };
-
+    }
+    if (!accepted)
     {
-        std::unique_lock<std::mutex> lock(asyncDeliveryMutex_);
-        if (asyncDeliveryClosed_)
-        {
-            lock.unlock();
-            settle(false);
-            return false;
-        }
-        ++asyncPostingCount_;
-        ++asyncOutstandingCount_;
+        delivery->releaseValueSide();
+        delete delivery;
+        return false;
     }
 
     // The JUCE queue destroys the message after dispatch or when it discards
-    // it. A failed post also destroys it synchronously.
-    const bool posted = (new Delivery(*this, std::move(settle)))->post();
+    // it. A failed post also destroys it synchronously, which erases the
+    // registry entry and the outstanding count in the destructor.
+    const bool posted = delivery->post();
     {
         std::lock_guard<std::mutex> lock(asyncDeliveryMutex_);
         --asyncPostingCount_;
         asyncDeliveryCv_.notify_all();
     }
     return posted;
+}
+
+void ProcessRenderRuntime::releaseRegisteredDeliveriesLocked() noexcept
+{
+    // 停泵归第三类终态：值侧释放。settle 回调在此锁下执行；与 entriesMutex_
+    // 不构成反向锁序（无任何路径在持有 entriesMutex_ 时进入本锁）。
+    // 先弹栈再释放：outstanding 计数随登记条目移除，之后到达的析构函数在
+    // 登记表中找不到自身，不再递减，恰好单次结算。
+    while (!asyncDeliveries_.empty())
+    {
+        auto* delivery = asyncDeliveries_.back();
+        asyncDeliveries_.pop_back();
+        --asyncOutstandingCount_;
+        delivery->releaseValueSide();
+    }
 }
 
 void ProcessRenderRuntime::drainAsyncDeliveries()
@@ -544,8 +588,9 @@ void ProcessRenderRuntime::drainAsyncDeliveries()
     const auto* manager = juce::MessageManager::getInstanceWithoutCreating();
     if (manager == nullptr || !manager->isThisTheMessageThread())
     {
-        // The message thread or queue teardown owns the remaining deliveries.
-        asyncDeliveryCv_.wait(lock, [this] { return asyncOutstandingCount_ == 0; });
+        // No pump is available on this thread: release every undelivered value
+        // instead of waiting for a message thread that may never dispatch.
+        releaseRegisteredDeliveriesLocked();
         return;
     }
 
@@ -571,9 +616,13 @@ void ProcessRenderRuntime::drainAsyncDeliveries()
         lock.lock();
         if (!dispatched && asyncOutstandingCount_ != 0)
         {
+            // The queue can no longer dispatch before module unload: the
+            // undelivered deliveries settle on the value side (third final
+            // state) instead of failing the process.
             AppLogger::emergencyError(
-                "[ProcessRenderRuntime] queued async deliveries cannot be dispatched before module unload; hard lifecycle failure");
-            std::terminate();
+                "[ProcessRenderRuntime] queued async deliveries cannot be dispatched before module unload; released on the value side");
+            releaseRegisteredDeliveriesLocked();
+            return;
         }
     }
 }

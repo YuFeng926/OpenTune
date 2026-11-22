@@ -15,7 +15,6 @@ struct AraSourceIdentity
 
 struct AraSourceShape
 {
-    juce::String sourceName;
     double sourceSampleRate{0.0};
     int numChannels{0};
     int64_t numSamples{0};

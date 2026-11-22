@@ -21,6 +21,7 @@ F0ExtractionService::F0ExtractionService(int workerCount, size_t maxQueueSize,
 {
     state_->maxQueueSize_ = maxQueueSize;
     state_->processorRunOwner_ = std::make_shared<F0RunOwnerState>();
+    state_->dispatcherFailureMailbox_ = std::make_shared<SharedState::DispatcherFailureMailbox>();
     const int count = std::max(1, workerCount);
     workers_.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i)
@@ -45,6 +46,8 @@ void F0ExtractionService::shutdown()
 {
     std::call_once(shutdownOnce_, [this] {
         auto& state = *state_;
+        if (state.dispatcherFailureMailbox_)
+            state.dispatcherFailureMailbox_->cancelAndClear();
         for (const auto& worker : workers_) {
             if (worker.get_id() == std::this_thread::get_id()) {
                 AppLogger::error("[F0ExtractionService] shutdown called from worker thread");
@@ -81,10 +84,50 @@ void F0ExtractionService::shutdown()
         for (auto& worker : workers_)
             worker.join();
         workers_.clear();
+        if (state.dispatcherFailureMailbox_)
+            state.dispatcherFailureMailbox_->cancelAndClear();
     });
 }
 
-F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit)
+void F0ExtractionService::SharedState::DispatcherFailureMailbox::enqueue(
+    CommitFn callback, std::shared_ptr<Result> result)
+{
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.emplace_back(std::move(callback), std::move(result));
+    }
+    triggerAsyncUpdate();
+}
+
+void F0ExtractionService::SharedState::DispatcherFailureMailbox::cancelAndClear()
+{
+    cancelPendingUpdate();
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.clear();
+}
+
+void F0ExtractionService::SharedState::DispatcherFailureMailbox::handleAsyncUpdate()
+{
+    std::deque<std::pair<CommitFn, std::shared_ptr<Result>>> failures;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        failures.swap(queue_);
+    }
+
+    for (auto& [callback, result] : failures) {
+        try {
+            callback(std::move(*result));
+        } catch (const std::exception& e) {
+            AppLogger::error("[F0ExtractionService] dispatcher-failure completion threw: "
+                + juce::String(e.what()));
+        } catch (...) {
+            AppLogger::error("[F0ExtractionService] dispatcher-failure completion threw: unknown exception");
+        }
+    }
+}
+
+F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey requestKey, ExecuteFn execute,
+                                                              CommitFn commit, CommitFn dispatcherFailure)
 {
     if (!requestKey.contentKey.isValid() || !execute || !commit) {
         return SubmitResult::InvalidTask;
@@ -106,7 +149,8 @@ F0ExtractionService::SubmitResult F0ExtractionService::submit(F0RequestKey reque
         }
 
         const uint64_t token = state_->tokenCounter_++;
-        state_->processorEntries_.emplace(requestKey.contentKey, ProcessorEntry{token, std::move(commit), {}});
+        state_->processorEntries_.emplace(requestKey.contentKey,
+            ProcessorEntry{token, std::move(commit), std::move(dispatcherFailure), {}});
         state_->queue_.emplace_back(Task{{requestKey, token}, std::move(execute)});
     }
 
@@ -152,6 +196,15 @@ AraF0DocumentFlights::Receivers AraF0DocumentFlights::take(F0TaskId taskId)
         [taskId](const auto& item) { return item.second == taskId; });
     jassert(key != byLocalKey.end());
     byLocalKey.erase(key);
+    for (auto it = bySource.begin(); it != bySource.end(); ++it)
+    {
+        if (it->second.erase(taskId) > 0)
+        {
+            if (it->second.empty())
+                bySource.erase(it);
+            break;
+        }
+    }
     return std::move(entry.mapped());
 }
 
@@ -412,6 +465,13 @@ void F0ExtractionService::settleCompletion(SharedState& state, ProcessorTaskId i
         batch = state.processorEntries_.extract(it);
     }
     if (!dispatcherAvailable) {
+        // The processor mailbox re-delivers the failed result on the message
+        // thread so waiting content settles as Failed with its reason.
+        if (state.dispatcherFailureMailbox_ && batch.mapped().dispatcherFailure) {
+            state.dispatcherFailureMailbox_->enqueue(std::move(batch.mapped().dispatcherFailure),
+                std::make_shared<Result>(std::move(*batch.mapped().result)));
+            return;
+        }
         AppLogger::logNoThrow("[F0ExtractionService] completion released: dispatcher unavailable task="
             + juce::String(static_cast<juce::uint64>(id.token)));
         return;

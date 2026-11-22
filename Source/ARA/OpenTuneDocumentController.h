@@ -233,8 +233,6 @@ private:
     PlayHeadState sharedPlayHeadState_;
 
     AudioSource* findAudioSource(juce::ARAAudioSource* audioSource);
-    AudioSource* findAudioSource(const juce::String& persistentId);
-    const AudioSource* findAudioSource(const juce::String& persistentId) const;
     AudioSource& ensureAudioSource(juce::ARAAudioSource* audioSource);
     AudioModification* findAudioModification(const juce::String& persistentId);
     const AudioModification* findAudioModification(const juce::String& persistentId) const;

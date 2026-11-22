@@ -32,11 +32,6 @@ struct EditableContentSnapshot
     NativePcmSource nativeSource;
     int64_t firstCanonicalSample{0};
 
-    // ARA2: AudioSource 只读元数据（从 AudioModification.cachedSourceShape_ 委托）
-    double sourceSampleRate{0.0};
-    int sourceChannelCount{0};
-    int64_t sourceSampleCount{0};
-
     std::vector<Note> notes;
     std::shared_ptr<const PitchCurveSnapshot> pitchCurve;
     // Snapshot identity follows ContentState: an empty/new snapshot still has

@@ -51,7 +51,7 @@ struct F0ExtractionConfigSnapshot
  * Responsibilities:
  * - Configure F0 extraction: store model directory, selected model type, and
  *   extraction parameters (confidence, f0Min, f0Max) without loading an ONNX
- *   session. isInitialized() reflects "service configured", not "session loaded".
+ *   session.
  * - On-demand session lifecycle: each extractF0() call creates a local
  *   Ort::Session via ModelFactory, runs inference, and destroys the session
  *   before returning. No session persists across calls.
@@ -136,33 +136,10 @@ public:
     bool setF0Model(F0ModelType type, std::string* errorMessage = nullptr);
 
     /**
-     * Get current F0 model type
-     */
-    F0ModelType getCurrentF0Model() const;
-
-    /**
-     * Get available F0 models in model directory
-     */
-    std::vector<F0ModelInfo> getAvailableF0Models() const;
-
-    /**
-     * Configure F0 extraction parameters
-     */
-    void setConfidenceThreshold(float threshold);
-    void setF0Min(float minFreq);
-    void setF0Max(float maxFreq);
-
-    float getConfidenceThreshold() const;
-    float getF0Min() const;
-    float getF0Max() const;
-
-    /**
      * Get F0 extraction parameters
      */
     int getF0HopSize() const;
     int getF0SampleRate() const;
-
-    bool isInitialized() const;
 
 private:
     class Impl;

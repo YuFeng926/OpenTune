@@ -32,6 +32,18 @@ struct AnalysisState
         originalF0State = state;
         return true;
     }
+
+    // The correction layer and a manually chosen key are user edits.
+    void clearOriginalAnalysis()
+    {
+        if (pitchCurve)
+            pitchCurve->replaceOriginalAnalysis({}, {}, pitchCurve->getHopSize(), pitchCurve->getSampleRate());
+        setOriginalF0State(OriginalF0State::NotRequested);
+        if (detectedKey.origin != Origin::Manual)
+            detectedKey = {};
+        silentGaps.clear();
+        referenceFeatures = {};
+    }
 };
 
 } // namespace OpenTune

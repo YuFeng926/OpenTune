@@ -14,6 +14,37 @@
 #include <memory>
 #include <vector>
 
+namespace OpenTune
+{
+struct ProcessRenderRuntimeTestAccess
+{
+    static std::size_t deferredRetryCount(ProcessRenderRuntime& runtime)
+    {
+        return runtime.deferredRetryCount();
+    }
+
+    static int domainSubmitInFlight(ProcessRenderRuntime& runtime)
+    {
+        return runtime.domainSubmitInFlight();
+    }
+
+    static uint64_t vocoderGeneration(ProcessRenderRuntime& runtime)
+    {
+        return runtime.vocoderGeneration();
+    }
+
+    static int ownerCount(ProcessRenderRuntime& runtime)
+    {
+        return runtime.ownerCount();
+    }
+
+    static bool isControlWorkerJoinable(ProcessRenderRuntime& runtime)
+    {
+        return runtime.isControlWorkerJoinable();
+    }
+};
+}
+
 namespace
 {
 class DefaultVocoderCapability final : public OpenTune::VocoderInterface
@@ -639,34 +670,34 @@ int runChild(int argc, char** argv)
     });
     runtime.releaseOwner();
     const bool zeroOwnerWorkerAlive =
-        runtime.ownerCount() == 0 && runtime.isControlWorkerJoinable();
+        OpenTune::ProcessRenderRuntimeTestAccess::ownerCount(runtime) == 0 && OpenTune::ProcessRenderRuntimeTestAccess::isControlWorkerJoinable(runtime);
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "zero_owner_runtime_persisted", {
-        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
+        {"ownerCount", OpenTuneTest::jsonNumber(OpenTune::ProcessRenderRuntimeTestAccess::ownerCount(runtime))},
         {"controlQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.controlQueueDepth()))},
-        {"deferredRetryCount", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.deferredRetryCount()))},
+        {"deferredRetryCount", OpenTuneTest::jsonNumber(static_cast<long long>(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime)))},
         {"activeTransaction", runtime.hasActiveTransaction() ? "true" : "false"},
-        {"domainSubmitInFlight", OpenTuneTest::jsonNumber(runtime.domainSubmitInFlight())},
-        {"domainGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(runtime.vocoderGeneration()))},
+        {"domainSubmitInFlight", OpenTuneTest::jsonNumber(OpenTune::ProcessRenderRuntimeTestAccess::domainSubmitInFlight(runtime))},
+        {"domainGeneration", OpenTuneTest::jsonNumber(static_cast<long long>(OpenTune::ProcessRenderRuntimeTestAccess::vocoderGeneration(runtime)))},
         {"renderQueueDepth", OpenTuneTest::jsonNumber(static_cast<long long>(service->renderQueueDepth()))},
         {"renderInFlight", OpenTuneTest::jsonNumber(service->renderInFlight())},
         {"renderAsyncInFlight", OpenTuneTest::jsonNumber(service->renderAsyncInFlight())},
-        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+        {"controlWorkerJoinable", OpenTune::ProcessRenderRuntimeTestAccess::isControlWorkerJoinable(runtime) ? "true" : "false"}
     });
 
     runtime.retainOwner();
     runtime.releaseOwner();
     const bool ownerCycleStayedOpen =
-        runtime.ownerCount() == 0 && runtime.isControlWorkerJoinable();
+        OpenTune::ProcessRenderRuntimeTestAccess::ownerCount(runtime) == 0 && OpenTune::ProcessRenderRuntimeTestAccess::isControlWorkerJoinable(runtime);
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "runtime_owner_cycle_complete", {
-        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
-        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+        {"ownerCount", OpenTuneTest::jsonNumber(OpenTune::ProcessRenderRuntimeTestAccess::ownerCount(runtime))},
+        {"controlWorkerJoinable", OpenTune::ProcessRenderRuntimeTestAccess::isControlWorkerJoinable(runtime) ? "true" : "false"}
     });
 
     runtime.shutdownAndJoin();
     OpenTuneTest::trace("RenderRuntimeLifecycleTests", "runtime_shutdown_and_join_complete", {
         {"resetCallbackCalls", OpenTuneTest::jsonNumber(resetCallbackCalls)},
-        {"ownerCount", OpenTuneTest::jsonNumber(runtime.ownerCount())},
-        {"controlWorkerJoinable", runtime.isControlWorkerJoinable() ? "true" : "false"}
+        {"ownerCount", OpenTuneTest::jsonNumber(OpenTune::ProcessRenderRuntimeTestAccess::ownerCount(runtime))},
+        {"controlWorkerJoinable", OpenTune::ProcessRenderRuntimeTestAccess::isControlWorkerJoinable(runtime) ? "true" : "false"}
     });
 
     service.reset();
@@ -677,8 +708,8 @@ int runChild(int argc, char** argv)
         || !zeroOwnerWorkerAlive
         || !ownerCycleStayedOpen
         || resetCallbackCalls != 1
-        || runtime.ownerCount() != 0
-        || runtime.isControlWorkerJoinable()
+        || OpenTune::ProcessRenderRuntimeTestAccess::ownerCount(runtime) != 0
+        || OpenTune::ProcessRenderRuntimeTestAccess::isControlWorkerJoinable(runtime)
         || finalStats.pending != 0
         || finalStats.running != 0
         || (!cache->isCanonicalSettled() && failed.load(std::memory_order_relaxed) == 0)

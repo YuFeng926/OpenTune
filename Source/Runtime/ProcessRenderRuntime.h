@@ -210,16 +210,20 @@ public:
     bool isVocoderReconfiguring() const noexcept;
 
     std::size_t controlQueueDepth() const noexcept;
+    bool hasActiveTransaction() const noexcept;
+
+private:
+    friend struct ProcessRenderRuntimeTestAccess;
+
+    // Production code reads only controlQueueDepth/hasActiveTransaction
+    // (Control PrefsModels). The remaining probes exist for the runtime
+    // contract tests and stay reachable through ProcessRenderRuntimeTestAccess.
     std::size_t deferredRetryCount() const noexcept;
     std::size_t deferredRetrySnapshotBytes() const;
-    bool hasActiveTransaction() const noexcept;
     int domainSubmitInFlight() const noexcept;
     uint64_t vocoderGeneration() const noexcept;
     int ownerCount() const noexcept;
     bool isControlWorkerJoinable() const noexcept;
-
-private:
-    friend struct ProcessRenderRuntimeTestAccess;
 
     ProcessRenderRuntime();
     ~ProcessRenderRuntime() = default;
@@ -284,8 +288,10 @@ private:
     // behind every accepted command and starts the worker when needed.
     void beginShutdownLocked(bool postCompletion);
     void completeAsyncShutdown(uint64_t generation);
+    struct AsyncDelivery;
     bool postAsyncDelivery(std::function<void(bool)> settle);
     void drainAsyncDeliveries();
+    void releaseRegisteredDeliveriesLocked() noexcept;
     void finishShutdown(uint64_t generation);
     void shutdownLocked(std::unique_lock<std::mutex>& shutdownLock);
     void postBackendChangeNotification();
@@ -319,6 +325,8 @@ private:
     bool asyncDeliveryClosed_{false}; // asyncDeliveryMutex_ protected
     int asyncPostingCount_{0}; // asyncDeliveryMutex_ protected
     int asyncOutstandingCount_{0}; // asyncDeliveryMutex_ protected
+    // Accepted deliveries awaiting dispatch or value-side release.
+    std::vector<AsyncDelivery*> asyncDeliveries_; // asyncDeliveryMutex_ protected
     int ownerCount_{0}; // shutdownMutex_ protected
     std::shared_ptr<ControlTransaction> activeTransaction_; // controlMutex_ protected
     std::mutex backendListenersMutex_;

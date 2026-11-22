@@ -64,10 +64,7 @@ ContentState cloneModificationContent(const ContentState& source)
         && source.analysis.pitchCurve->hasOriginalF0Data();
 
     if (!hasCompletedOriginalF0)
-    {
-        // 不复制没有对应异步任务的中间分析状态；可编辑内容仍完整保留。
-        copy.analysis = {};
-    }
+        copy.analysis.clearOriginalAnalysis();
 
     return copy;
 }
@@ -284,8 +281,6 @@ bool decodeArchiveFloats(const juce::String& encoded, std::vector<float>& values
 
 void serializeAudioModificationContent(const AudioModification& mod, juce::XmlElement& el)
 {
-    el.setAttribute("birthRevision", juce::String(static_cast<juce::int64>(mod.birthRevision)));
-
     OpenTuneDocumentController::writeSourceWindowToArchive(mod.content->sourceWindow, el);
 
     auto* editable = new juce::XmlElement("EditableContent");
@@ -391,6 +386,15 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     analysis->setAttribute("originalF0State", static_cast<int>(pending
         ? OriginalF0State::NotRequested : originalF0State));
     analysis->setAttribute("analysisContinuationPending", pending ? 1 : 0);
+    if (const auto& stamp = mod.originalF0InputStamp;
+        originalF0State == OriginalF0State::Ready && !pending && stamp)
+    {
+        analysis->setAttribute("sourcePersistentId", stamp->sourcePersistentId);
+        analysis->setAttribute("sourceSampleGeneration", juce::String(static_cast<juce::int64>(stamp->sourceSampleGeneration)));
+        analysis->setAttribute("sourceSampleRate", archiveSeconds(stamp->sourceSampleRate));
+        analysis->setAttribute("numSamples", juce::String(static_cast<juce::int64>(stamp->numSamples)));
+        analysis->setAttribute("numChannels", stamp->numChannels);
+    }
     
     // DetectedKey
     auto* dk = new juce::XmlElement("DetectedKey");
@@ -479,13 +483,19 @@ void serializeAudioModificationContent(const AudioModification& mod, juce::XmlEl
     el.addChildElement(analysis);
 }
 
-// Parse XML to new ContentState with complete replacement semantics.
-std::optional<ContentState> restoreAudioModificationContent(const juce::XmlElement& el,
-                                                           SourceWindow sourceWindow,
-                                                           int archiveVersion,
-                                                           bool& analysisContinuationPending)
+struct RestoredModificationContent
 {
     ContentState content;
+    bool analysisContinuationPending{false};
+    std::optional<OriginalF0InputStamp> originalF0InputStamp;
+};
+
+std::optional<RestoredModificationContent> restoreAudioModificationContent(
+    const juce::XmlElement& el, SourceWindow sourceWindow, int archiveVersion)
+{
+    RestoredModificationContent restored;
+    auto& analysisContinuationPending = restored.analysisContinuationPending;
+    auto& content = restored.content;
     content.sourceWindow = std::move(sourceWindow);
     std::vector<PitchCorrectionSegment> restoredCorrectionSegments;
 
@@ -804,6 +814,28 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
                 return std::nullopt;
         }
 
+        // The stamp identifies the source state the archived analysis belongs to.
+        // Archives without the stamp attributes (older format) restore without
+        // one and count as mismatch in the restore apply loop.
+        if (archiveVersion >= OpenTuneDocumentController::kContentArchiveVersionF0Continuation
+            && content.analysis.originalF0State == OriginalF0State::Ready
+            && !analysisContinuationPending
+            && analysis->hasAttribute("sourcePersistentId"))
+        {
+            OriginalF0InputStamp stamp;
+            stamp.sourcePersistentId = analysis->getStringAttribute("sourcePersistentId");
+            stamp.sourceSampleGeneration = static_cast<uint64_t>(
+                analysis->getStringAttribute("sourceSampleGeneration").getLargeIntValue());
+            stamp.sourceSampleRate = analysis->getDoubleAttribute("sourceSampleRate");
+            stamp.numSamples = analysis->getStringAttribute("numSamples").getLargeIntValue();
+            stamp.numChannels = analysis->getIntAttribute("numChannels");
+            // The archived window endpoints are stored separately and belong to
+            // the same content; the live stamp projects them identically.
+            stamp.sourceStartSeconds = content.sourceWindow.sourceStartSeconds;
+            stamp.sourceEndSeconds = content.sourceWindow.sourceEndSeconds;
+            restored.originalF0InputStamp = std::move(stamp);
+        }
+
         // DetectedKey: 可选，absence 保持默认（未检测）
         if (auto* dk = analysis->getChildByName("DetectedKey"))
         {
@@ -984,7 +1016,7 @@ std::optional<ContentState> restoreAudioModificationContent(const juce::XmlEleme
         content.analysis.pitchCurve->replaceCorrectionSegments(restoredCorrectionSegments);
     }
 
-    return content;
+    return restored;
 }
 } // namespace
 
@@ -1589,8 +1621,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
     {
         AudioModification& target;
         const AudioSource& source;
-        ContentState content;
-        bool analysisContinuationPending;
+        RestoredModificationContent restored;
     };
     std::vector<PendingRestore> pending;
     pending.reserve(bindingCount);
@@ -1642,14 +1673,13 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         if (windowStartSample < 0 || windowStartSample >= windowEndSample || windowEndSample > shape.numSamples)
             return reject("source_window_unreadable");
 
-        bool continuationPending = false;
-        auto content = restoreAudioModificationContent(*xml, std::move(*sourceWindow), version, continuationPending);
-        if (!content.has_value())
+        auto restored = restoreAudioModificationContent(*xml, std::move(*sourceWindow), version);
+        if (!restored.has_value())
             return reject("modification_content");
         AppLogger::log(logPrefix + record + " decode=ok analysis_state="
-            + juce::String(static_cast<int>(content->analysis.originalF0State))
-            + " continuation=" + (continuationPending ? "true" : "false"));
-        pending.push_back({*target, *source, std::move(*content), continuationPending});
+            + juce::String(static_cast<int>(restored->content.analysis.originalF0State))
+            + " continuation=" + (restored->analysisContinuationPending ? "true" : "false"));
+        pending.push_back({*target, *source, std::move(*restored)});
     }
 
     const bool notesPrimary = AudioEditingScheme::usesNotesPrimaryScheme(appPreferences_.getAudioEditingScheme());
@@ -1660,14 +1690,34 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
             + "revoke_reception reason=RestoreReplacement");
         revokeF0Reception(target);
         removeCRSArtifactsForModification(target);
-        target.content = std::move(entry.content);
+        target.content = std::move(entry.restored.content);
         target.birthState = AudioModificationBirthState::WaitingForSource;
-        target.analysisContinuationPending = entry.analysisContinuationPending;
+        target.analysisContinuationPending = entry.restored.analysisContinuationPending;
         target.registerNoteTopologyInitialization(notesPrimary);
         target.originalF0InputStamp.reset();
         target.attachSource(entry.source);
+        // Archived F0 is adopted only when its recorded input stamp still
+        // matches the live parent source. A mismatch (or a stamp-less older
+        // archive) keeps the user's edits, clears the stale analysis and
+        // re-enters analysis once through the pending continuation.
+        const auto liveStamp = makeF0InputStamp(entry.source, target);
         if (target.hasReadyOriginalF0())
-            target.originalF0InputStamp = makeF0InputStamp(entry.source, target);
+        {
+            if (entry.restored.originalF0InputStamp
+                && *entry.restored.originalF0InputStamp == liveStamp)
+            {
+                AppLogger::log(f0Diagnostic(this, target.persistentId, target.birthRevision)
+                    + "restore_adopted_archive_f0 stamp=" + liveStamp.sourcePersistentId.quoted());
+                target.originalF0InputStamp = liveStamp;
+            }
+            else
+            {
+                AppLogger::log(f0Diagnostic(this, target.persistentId, target.birthRevision)
+                    + "restore_stamp_mismatch clear_original_analysis reason=RestoreStampMismatch");
+                target.clearOriginalAnalysis();
+                target.analysisContinuationPending = true;
+            }
+        }
     }
 
     // The host initiated the restore. Publish the completed batch to internal views only.
@@ -1772,26 +1822,6 @@ AudioSource* OpenTuneDocumentController::findAudioSource(juce::ARAAudioSource* a
                                  [audioSource](const AudioSource& source)
                                  {
                                      return source.matches(audioSource);
-                                 });
-    return it != audioSources_.end() ? &*it : nullptr;
-}
-
-AudioSource* OpenTuneDocumentController::findAudioSource(const juce::String& persistentId)
-{
-    const auto it = std::find_if(audioSources_.begin(), audioSources_.end(),
-                                 [&persistentId](const AudioSource& source)
-                                 {
-                                     return source.getIdentity().persistentId == persistentId;
-                                 });
-    return it != audioSources_.end() ? &*it : nullptr;
-}
-
-const AudioSource* OpenTuneDocumentController::findAudioSource(const juce::String& persistentId) const
-{
-    const auto it = std::find_if(audioSources_.begin(), audioSources_.end(),
-                                 [&persistentId](const AudioSource& source)
-                                 {
-                                     return source.getIdentity().persistentId == persistentId;
                                  });
     return it != audioSources_.end() ? &*it : nullptr;
 }
@@ -2413,14 +2443,13 @@ void OpenTuneDocumentController::abortSourceF0(const AudioSource& source, AraF0A
         if (modification.audioModification->getAudioSource() == source.getAraAudioSource())
             modification.revokeAnalysisReception();
 
-    // Look up tasks by source even when an orphaned owner has no local receiver.
-    std::set<F0TaskId> tasks;
-    for (const auto& [key, id] : f0Flights_.byLocalKey)
-        if (key.input.sourcePersistentId == source.getIdentity().persistentId)
-            tasks.insert(id);
-    if (tasks.empty())
+    // Look up tasks by source object identity; the host may have rebound the
+    // source's persistentId while its flights were in flight.
+    const auto sourceTasks = f0Flights_.bySource.find(source.getAraAudioSource());
+    if (sourceTasks == f0Flights_.bySource.end())
         return;
 
+    const std::set<F0TaskId> tasks = sourceTasks->second;
     for (auto id : tasks)
         f0Flights_.take(id);
     ProcessF0Runtime::getInstance().araAnalysisQueue()->abortTasks(tasks, reason);
@@ -2438,6 +2467,7 @@ void OpenTuneDocumentController::revokeDocumentF0()
         tasks.insert(entry.first);
     f0Flights_.byTaskId.clear();
     f0Flights_.byLocalKey.clear();
+    f0Flights_.bySource.clear();
     ProcessF0Runtime::getInstance().araAnalysisQueue()->abortTasks(tasks, AraF0Abort::Orphaned);
 }
 
@@ -2482,6 +2512,18 @@ void OpenTuneDocumentController::scheduleAsyncF0Extraction(
         submission = queue->submit(f0Flights_, key, std::move(pcm),
             {modification.contentKey(), modification.wrapperGeneration,
              modification.birthRevision, modification.persistentId, stamp});
+        switch (submission.admission)
+        {
+            case AraF0Admission::Accepted:
+            case AraF0Admission::Attached:
+                f0Flights_.bySource[modification.audioModification->getAudioSource()]
+                    .insert(submission.taskId);
+                break;
+            case AraF0Admission::QueueFull:
+            case AraF0Admission::InvalidInput:
+            case AraF0Admission::Closing:
+                break;
+        }
     }
     AppLogger::log(logPrefix + "submit_result=" + juce::String(static_cast<int>(submission.admission))
         + " task=" + juce::String(static_cast<juce::uint64>(submission.taskId.value)));

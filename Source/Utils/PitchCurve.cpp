@@ -11,9 +11,17 @@ void PitchCurve::replaceOriginalAnalysis(std::vector<float> f0, std::vector<floa
                                          int hopSize, double sampleRate)
 {
     const auto previous = getSnapshot();
+    const auto& erasedRanges = previous->getErasedRanges();
+    for (auto* frames : { &f0, &energy }) {
+        for (const auto& range : erasedRanges) {
+            const auto start = std::min(frames->size(), static_cast<size_t>(range.startFrame));
+            const auto end = std::min(frames->size(), static_cast<size_t>(range.endFrameExclusive));
+            std::fill(frames->begin() + start, frames->begin() + end, 0.0f);
+        }
+    }
     auto next = std::make_shared<const PitchCurveSnapshot>(
         std::move(f0), std::move(energy), previous->getCorrectionSegments(),
-        hopSize, sampleRate, incrementGeneration(), previous->getErasedRanges());
+        hopSize, sampleRate, incrementGeneration(), erasedRanges);
     std::atomic_store(&snapshot_, std::move(next));
 }
 
@@ -28,31 +36,30 @@ void insertSegmentSorted(std::vector<PitchCorrectionSegment>& segments, PitchCor
     segments.insert(insertPos, std::move(seg));
 }
 
+PitchCorrectionSegment sliceCorrectionSegment(const PitchCorrectionSegment& segment,
+                                              int startFrame, int endFrame)
+{
+    PitchCorrectionSegment piece;
+    piece.startFrame = startFrame;
+    piece.endFrame = endFrame;
+    piece.parameterSnapshot = segment.parameterSnapshot;
+    piece.source = segment.source;
+    const int offset = startFrame - segment.startFrame;
+    const int end = endFrame - segment.startFrame;
+    piece.f0Data.assign(segment.f0Data.begin() + offset, segment.f0Data.begin() + end);
+    if (static_cast<size_t>(end) <= segment.baseF0Data.size())
+        piece.baseF0Data.assign(segment.baseF0Data.begin() + offset, segment.baseF0Data.begin() + end);
+    return piece;
+}
+
 void insertVoicedSegmentPieces(std::vector<PitchCorrectionSegment>& segments,
                                const PitchCorrectionSegment& segment,
                                const std::vector<float>& originalF0)
 {
     int pieceStart = -1;
     auto flush = [&](int endFrame) {
-        if (pieceStart < 0 || endFrame <= pieceStart) {
-            pieceStart = -1;
-            return;
-        }
-
-        PitchCorrectionSegment piece = segment;
-        piece.startFrame = pieceStart;
-        piece.endFrame = endFrame;
-        const int dataOffset = pieceStart - segment.startFrame;
-        const int length = endFrame - pieceStart;
-        piece.f0Data.assign(segment.f0Data.begin() + dataOffset,
-                            segment.f0Data.begin() + dataOffset + length);
-        if (static_cast<int>(segment.baseF0Data.size()) >= dataOffset + length) {
-            piece.baseF0Data.assign(segment.baseF0Data.begin() + dataOffset,
-                                    segment.baseF0Data.begin() + dataOffset + length);
-        } else {
-            piece.baseF0Data.clear();
-        }
-        insertSegmentSorted(segments, std::move(piece));
+        if (pieceStart >= 0 && endFrame > pieceStart)
+            insertSegmentSorted(segments, sliceCorrectionSegment(segment, pieceStart, endFrame));
         pieceStart = -1;
     };
 
@@ -93,26 +100,13 @@ void clearSegmentsInRangePreserveOutside(std::vector<PitchCorrectionSegment>& se
             continue;
         }
 
-        if (seg.startFrame < startFrame) {
-            PitchCorrectionSegment left = seg;
-            left.endFrame = startFrame;
-            const int leftLen = left.endFrame - left.startFrame;
-            if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
-                left.f0Data.assign(seg.f0Data.begin(), seg.f0Data.begin() + leftLen);
-                kept.push_back(std::move(left));
-            }
-        }
+        if (seg.startFrame < startFrame
+            && static_cast<size_t>(startFrame - seg.startFrame) <= seg.f0Data.size())
+            kept.push_back(sliceCorrectionSegment(seg, seg.startFrame, startFrame));
 
-        if (seg.endFrame > endFrame) {
-            PitchCorrectionSegment right = seg;
-            right.startFrame = endFrame;
-            const int offset = right.startFrame - seg.startFrame;
-            const int rightLen = right.endFrame - right.startFrame;
-            if (offset >= 0 && rightLen > 0 && offset + rightLen <= static_cast<int>(seg.f0Data.size())) {
-                right.f0Data.assign(seg.f0Data.begin() + offset, seg.f0Data.begin() + offset + rightLen);
-                kept.push_back(std::move(right));
-            }
-        }
+        if (seg.endFrame > endFrame
+            && static_cast<size_t>(seg.endFrame - seg.startFrame) <= seg.f0Data.size())
+            kept.push_back(sliceCorrectionSegment(seg, endFrame, seg.endFrame));
     }
 
     segments.swap(kept);

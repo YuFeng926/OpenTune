@@ -25,9 +25,6 @@ void AudioSource::updateFrom(juce::ARAAudioSource* audioSource)
     if (audioSource == nullptr)
         return;
 
-    shape_.sourceName = audioSource->getName() != nullptr
-        ? juce::String::fromUTF8(audioSource->getName())
-        : juce::String("ARA Source");
     shape_.sourceSampleRate = audioSource->getSampleRate();
     shape_.numChannels = static_cast<int>(audioSource->getChannelCount());
     shape_.numSamples = static_cast<int64_t>(audioSource->getSampleCount());

@@ -16,11 +16,13 @@
 #include <vector>
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_events/juce_events.h>
 
 #include "../Content/ContentKey.h"
 #include "../Content/OriginalF0InputStamp.h"
 #include "../Inference/F0InferenceService.h"
-#include "../Utils/SilentGapDetector.h"
+
+namespace juce { class ARAAudioSource; }
 
 namespace OpenTune {
 
@@ -102,6 +104,11 @@ struct AraF0DocumentFlights {
     std::shared_ptr<CompletionSink> sink;
     std::vector<std::pair<AraF0LocalKey, F0TaskId>> byLocalKey;
     std::map<F0TaskId, Receivers> byTaskId;
+    // Source-object index filled by the DC on submit. Revocation matches the
+    // ARAAudioSource identity because the host may rebind a live source's
+    // persistentId (didUpdateAudioSourceProperties); persistentId stays an
+    // archive-mapping and logging value only.
+    std::map<juce::ARAAudioSource*, std::set<F0TaskId>> bySource;
 
     F0TaskId taskForReceiver(uint64_t wrapperGeneration) const;
     Receivers take(F0TaskId taskId);
@@ -111,15 +118,10 @@ class F0ExtractionService {
 public:
     struct Result {
         bool success{false};
-        int trackId{0};
-        int placementIndexHint{-1};
-        ContentKey contentKey;
-        std::shared_ptr<const juce::AudioBuffer<float>> sourceAudioBuffer;
         int hopSize{0};
         int f0SampleRate{0};
         std::vector<float> f0;
         std::vector<float> energy;
-        std::vector<SilentGap> silentGaps;
         std::string errorMessage;
 
         double audioDurationSeconds{0.0};
@@ -144,7 +146,8 @@ public:
                         std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver);
     ~F0ExtractionService();
 
-    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit);
+    SubmitResult submit(F0RequestKey requestKey, ExecuteFn execute, CommitFn commit,
+                        CommitFn dispatcherFailure = {});
     void cancel(F0RequestKey requestKey);
 
     static AraF0ConfigTag snapshotAraConfig(double sourceSampleRate);
@@ -160,6 +163,7 @@ public:
 
 private:
     friend class ProcessF0Runtime;
+    friend struct F0ExtractionServiceTestAccess; // Test exes construct an isolated ARA face.
     explicit F0ExtractionService(size_t maxQueueSize);
 
     struct ProcessorTaskId {
@@ -175,6 +179,7 @@ private:
     struct ProcessorEntry {
         uint64_t token;
         CommitFn commit;
+        CommitFn dispatcherFailure;
         std::optional<Result> result;
     };
     using ProcessorEntries = std::unordered_map<ContentKey, ProcessorEntry>;
@@ -225,6 +230,22 @@ private:
         std::shared_ptr<F0RunOwnerState> processorRunOwner_;
         AraGroups araGroups_;
         std::map<F0TaskId, AraEntry> araEntries_;
+
+        // Processor-private failure mailbox: a dispatcher rejection re-delivers
+        // the failed result on the message thread so waiting content settles as
+        // Failed with its reason. The ARA queue allocates none and keeps the
+        // value-side release.
+        class DispatcherFailureMailbox final : public juce::AsyncUpdater {
+        public:
+            void enqueue(CommitFn callback, std::shared_ptr<Result> result);
+            void cancelAndClear();
+            void handleAsyncUpdate() override;
+
+        private:
+            std::mutex mutex_;
+            std::deque<std::pair<CommitFn, std::shared_ptr<Result>>> queue_;
+        };
+        std::shared_ptr<DispatcherFailureMailbox> dispatcherFailureMailbox_;
     };
 
     std::shared_ptr<SharedState> state_;

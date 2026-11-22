@@ -19,6 +19,16 @@ struct ProcessRenderRuntimeTestAccess
         runtime.vocoderReconfiguring_ = value;
     }
 
+    static std::size_t deferredRetryCount(ProcessRenderRuntime& runtime)
+    {
+        return runtime.deferredRetryCount();
+    }
+
+    static std::size_t deferredRetrySnapshotBytes(ProcessRenderRuntime& runtime)
+    {
+        return runtime.deferredRetrySnapshotBytes();
+    }
+
     static void setVocoderAvailable(ProcessRenderRuntime& runtime, bool available)
     {
         std::unique_ptr<VocoderDomain> retired;
@@ -166,8 +176,8 @@ bool runDeferredRetryContract()
         return true;
     };
 
-    const auto baselineCount = runtime.deferredRetryCount();
-    const auto baselinePayloadBytes = runtime.deferredRetrySnapshotBytes();
+    const auto baselineCount = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime);
+    const auto baselinePayloadBytes = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime);
     ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, true);
     constexpr std::size_t deferredJobs = 102;
     for (std::size_t i = 0; i < deferredJobs; ++i)
@@ -184,7 +194,7 @@ bool runDeferredRetryContract()
         caches.push_back(std::move(cache));
     }
 
-    const auto sharedPayloadBytes = runtime.deferredRetrySnapshotBytes() - baselinePayloadBytes;
+    const auto sharedPayloadBytes = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime) - baselinePayloadBytes;
 
     bool allRunning = true;
     for (const auto& cache : caches)
@@ -192,7 +202,7 @@ bool runDeferredRetryContract()
         const auto stats = cache->getChunkStats();
         allRunning = allRunning && stats.running == 1 && stats.failed == 0;
     }
-    if (!check(runtime.deferredRetryCount() == baselineCount + deferredJobs,
+    if (!check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount + deferredJobs,
                "more_than_100_deferred_jobs_not_retained")
         || !check(allRunning, "deferred_jobs_failed_running_chunks"))
         return false;
@@ -206,9 +216,9 @@ bool runDeferredRetryContract()
                                caches.back(), service->getTimeStretchCache()));
     if (!deferRunningChunk(replacementKey, caches.back(), replacement,
                            ProcessRenderRuntime::kDeferredSnapshotBudgetBytes)
-        || !check(runtime.deferredRetryCount() == baselineCount + deferredJobs,
+        || !check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount + deferredJobs,
                   "same_revision_retry_not_replaced")
-        || !check(runtime.deferredRetrySnapshotBytes() > baselinePayloadBytes + sharedPayloadBytes,
+        || !check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime) > baselinePayloadBytes + sharedPayloadBytes,
                   "same_revision_snapshot_payload_not_updated"))
         return false;
 
@@ -217,12 +227,12 @@ bool runDeferredRetryContract()
     descriptorCache->reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
     auto descriptorSnapshot = std::make_shared<EditableContentSnapshot>(*snapshot);
     descriptorSnapshot->notes.reserve(256);
-    const auto bytesBeforeDescriptor = runtime.deferredRetrySnapshotBytes();
-    const auto countBeforeDescriptor = runtime.deferredRetryCount();
+    const auto bytesBeforeDescriptor = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime);
+    const auto countBeforeDescriptor = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime);
     if (!deferRunningChunk(descriptorKey, descriptorCache, descriptorSnapshot, 1)
-        || !check(runtime.deferredRetryCount() == countBeforeDescriptor + 1,
+        || !check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == countBeforeDescriptor + 1,
                   "over_budget_descriptor_not_retained")
-        || !check(runtime.deferredRetrySnapshotBytes() == bytesBeforeDescriptor,
+        || !check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime) == bytesBeforeDescriptor,
                   "over_budget_snapshot_payload_not_released"))
         return false;
 
@@ -249,7 +259,7 @@ bool runDeferredRetryContract()
     ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, false);
     runtime.pruneStaleDeferredJobsForCache(caches.front());
     const auto prunedStats = caches.front()->getChunkStats();
-    if (!check(runtime.deferredRetryCount() == countBeforeDescriptor,
+    if (!check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == countBeforeDescriptor,
                "new_plan_did_not_prune_stale_deferred_job")
         || !check(prunedStats.pending == 1 && prunedStats.failed == 0,
                   "new_plan_pruning_failed_valid_chunk"))
@@ -257,7 +267,7 @@ bool runDeferredRetryContract()
 
     service->removeRenderCache(keys[1]);
     const auto removedStats = caches[1]->getChunkStats();
-    if (!check(runtime.deferredRetryCount() == countBeforeDescriptor - 1,
+    if (!check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == countBeforeDescriptor - 1,
                "cache_removal_did_not_release_deferred_job")
         || !check(removedStats.total() == 0 && removedStats.failed == 0,
                   "cache_removal_failed_to_clear_chunk_state"))
@@ -279,15 +289,15 @@ bool runDeferredRetryContract()
     lateContext.gate = gate;
     ProcessRenderRuntimeTestAccess::defer(runtime, service, std::move(lateCompletion),
                                           std::move(lateContext));
-    if (!check(runtime.deferredRetryCount() == countBeforeDescriptor - 1,
+    if (!check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == countBeforeDescriptor - 1,
                "late_defer_after_cache_removal_was_retained"))
         return false;
 
     service->clearAll();
     ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, false);
-    const bool cleared = check(runtime.deferredRetryCount() == baselineCount,
+    const bool cleared = check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount,
                                "clear_all_did_not_release_deferred_jobs")
-        && check(runtime.deferredRetrySnapshotBytes() == baselinePayloadBytes,
+        && check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime) == baselinePayloadBytes,
                  "clear_all_did_not_release_snapshot_budget");
     service.reset();
     return cleared;
@@ -451,8 +461,8 @@ bool runDeferredDescriptorBudgetResumeContract()
     using namespace OpenTune;
     auto& runtime = ProcessRenderRuntime::getInstance();
     auto service = std::make_shared<ContentRenderService>();
-    const auto baselineCount = runtime.deferredRetryCount();
-    const auto baselineBytes = runtime.deferredRetrySnapshotBytes();
+    const auto baselineCount = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime);
+    const auto baselineBytes = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime);
     auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
     audio->clear();
     auto gate = std::make_shared<ProcessRenderRuntime::CompletionGate>();
@@ -513,14 +523,14 @@ bool runDeferredDescriptorBudgetResumeContract()
     }
     ProcessRenderRuntimeTestAccess::setVocoderAvailable(runtime, true);
 
-    passed = check(runtime.deferredRetrySnapshotBytes()
+    passed = check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime)
                        == ProcessRenderRuntime::kDeferredSnapshotBudgetBytes,
                    "resume_budget_pressure_setup_failed");
     ProcessRenderRuntimeTestAccess::resume(runtime);
     const auto descriptorHeldStats = descriptorCache->getChunkStats();
     passed = check(passed
-                       && runtime.deferredRetryCount() == baselineCount + 1
-                       && runtime.deferredRetrySnapshotBytes()
+                       && OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount + 1
+                       && OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime)
                            <= ProcessRenderRuntime::kDeferredSnapshotBudgetBytes
                        && service->renderQueueDepth() == 1
                        && descriptorHeldStats.running == 1
@@ -530,8 +540,8 @@ bool runDeferredDescriptorBudgetResumeContract()
     ProcessRenderRuntimeTestAccess::resume(runtime);
     const auto descriptorQueuedStats = descriptorCache->getChunkStats();
     passed = check(passed
-                       && runtime.deferredRetryCount() == baselineCount
-                       && runtime.deferredRetrySnapshotBytes() == baselineBytes
+                       && OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount
+                       && OpenTune::ProcessRenderRuntimeTestAccess::deferredRetrySnapshotBytes(runtime) == baselineBytes
                        && service->renderQueueDepth() == 2
                        && descriptorQueuedStats.pending == 1
                        && descriptorQueuedStats.failed == 0,
@@ -549,7 +559,7 @@ bool runPlanNotSynchronizedRetryContract()
     using namespace OpenTune;
     auto& runtime = ProcessRenderRuntime::getInstance();
     auto service = std::make_shared<ContentRenderService>();
-    const auto baselineCount = runtime.deferredRetryCount();
+    const auto baselineCount = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime);
     auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 2048);
     audio->clear();
     auto oldSnapshot = std::make_shared<EditableContentSnapshot>();
@@ -606,7 +616,7 @@ bool runPlanNotSynchronizedRetryContract()
     ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, true);
     ProcessRenderRuntimeTestAccess::defer(runtime, service, job, std::move(completion));
     auto stats = cache->getChunkStats();
-    if (!check(runtime.deferredRetryCount() == baselineCount + 1
+    if (!check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount + 1
                    && stats.running == 1 && stats.failed == 0,
                "defer_dropped_unsynchronized_running_chunk"))
         return false;
@@ -614,7 +624,7 @@ bool runPlanNotSynchronizedRetryContract()
     ProcessRenderRuntimeTestAccess::setVocoderAvailable(runtime, true);
     ProcessRenderRuntimeTestAccess::resume(runtime);
     stats = cache->getChunkStats();
-    if (!check(runtime.deferredRetryCount() == baselineCount + 1
+    if (!check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount + 1
                    && stats.running == 1 && stats.failed == 0
                    && service->renderQueueDepth() == 0,
                "resume_consumed_unsynchronized_running_chunk"))
@@ -637,7 +647,7 @@ bool runPlanNotSynchronizedRetryContract()
     ProcessRenderRuntimeTestAccess::resume(runtime);
     stats = cache->getChunkStats();
     const auto ready = cache->getPendingJobs();
-    const bool resumed = check(runtime.deferredRetryCount() == baselineCount
+    const bool resumed = check(OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baselineCount
                                    && stats.running == 0 && stats.failed == 0
                                    && std::any_of(ready.begin(), ready.end(), [](const auto& item) {
                                           return item.startSample == 0;
@@ -655,7 +665,7 @@ bool runExportDrainDeferredBatchContract()
     using namespace OpenTune;
     auto& runtime = ProcessRenderRuntime::getInstance();
     auto service = std::make_shared<ContentRenderService>();
-    const auto baseline = runtime.deferredRetryCount();
+    const auto baseline = OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime);
     auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 256);
     audio->clear();
     auto snapshot = std::make_shared<EditableContentSnapshot>();
@@ -756,7 +766,7 @@ bool runExportDrainDeferredBatchContract()
                                      && !runtime.hasDeferredRetriesForService(service.get())
                                      && runtime.hasDeferredRetriesForService(otherService.get())
                                      && otherStats.running == 1 && otherStats.failed == 0
-                                     && runtime.deferredRetryCount() == baseline + 1,
+                                     && OpenTune::ProcessRenderRuntimeTestAccess::deferredRetryCount(runtime) == baseline + 1,
                                  "export_drain_dropped_or_failed_deferred_batch");
     service->clearAll();
     service->detachExecutionLease(&owner);

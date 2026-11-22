@@ -316,53 +316,6 @@ public:
         return true;
     }
 
-    F0ModelType getCurrentF0Model() const {
-        std::lock_guard<std::mutex> lock(extractorMutex_);
-        return currentModelType_;
-    }
-
-    std::vector<F0ModelInfo> getAvailableF0Models() const {
-        std::string modelDir;
-        {
-            std::lock_guard<std::mutex> lock(extractorMutex_);
-            modelDir = modelDir_;
-        }
-        return ModelFactory::getAvailableF0Models(modelDir);
-    }
-
-    void setConfidenceThreshold(float threshold) {
-        std::unique_lock<std::mutex> lock(extractorMutex_);
-        confidenceThreshold_ = threshold;
-        ++selectionRevision_;
-    }
-
-    void setF0Min(float minFreq) {
-        std::unique_lock<std::mutex> lock(extractorMutex_);
-        f0Min_ = minFreq;
-        ++selectionRevision_;
-    }
-
-    void setF0Max(float maxFreq) {
-        std::unique_lock<std::mutex> lock(extractorMutex_);
-        f0Max_ = maxFreq;
-        ++selectionRevision_;
-    }
-
-    float getConfidenceThreshold() const {
-        std::lock_guard<std::mutex> lock(extractorMutex_);
-        return confidenceThreshold_;
-    }
-
-    float getF0Min() const {
-        std::lock_guard<std::mutex> lock(extractorMutex_);
-        return f0Min_;
-    }
-
-    float getF0Max() const {
-        std::lock_guard<std::mutex> lock(extractorMutex_);
-        return f0Max_;
-    }
-
     int getF0HopSize() const {
         std::lock_guard<std::mutex> lock(extractorMutex_);
         return f0HopSize_;
@@ -371,11 +324,6 @@ public:
     int getF0SampleRate() const {
         std::lock_guard<std::mutex> lock(extractorMutex_);
         return f0SampleRate_;
-    }
-
-    bool isInitialized() const {
-        // 语义：service 已配置（modelDir + modelType 已设置），不是 session 常驻。
-        return initialized_.load(std::memory_order_acquire);
     }
 
 private:
@@ -463,48 +411,12 @@ bool F0InferenceService::setF0Model(F0ModelType type, std::string* errorMessage)
     return pImpl_->setF0Model(type, errorMessage);
 }
 
-F0ModelType F0InferenceService::getCurrentF0Model() const {
-    return pImpl_->getCurrentF0Model();
-}
-
-std::vector<F0ModelInfo> F0InferenceService::getAvailableF0Models() const {
-    return pImpl_->getAvailableF0Models();
-}
-
-void F0InferenceService::setConfidenceThreshold(float threshold) {
-    pImpl_->setConfidenceThreshold(threshold);
-}
-
-void F0InferenceService::setF0Min(float minFreq) {
-    pImpl_->setF0Min(minFreq);
-}
-
-void F0InferenceService::setF0Max(float maxFreq) {
-    pImpl_->setF0Max(maxFreq);
-}
-
-float F0InferenceService::getConfidenceThreshold() const {
-    return pImpl_->getConfidenceThreshold();
-}
-
-float F0InferenceService::getF0Min() const {
-    return pImpl_->getF0Min();
-}
-
-float F0InferenceService::getF0Max() const {
-    return pImpl_->getF0Max();
-}
-
 int F0InferenceService::getF0HopSize() const {
     return pImpl_->getF0HopSize();
 }
 
 int F0InferenceService::getF0SampleRate() const {
     return pImpl_->getF0SampleRate();
-}
-
-bool F0InferenceService::isInitialized() const {
-    return pImpl_->isInitialized();
 }
 
 } // namespace OpenTune
