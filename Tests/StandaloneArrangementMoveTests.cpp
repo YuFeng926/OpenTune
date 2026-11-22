@@ -23,6 +23,10 @@
 #include "../Source/Control/Ops/TrackOps.h"
 #include "../Source/Control/Ops/UndoOps.h"
 #include "../Source/Render/RenderChunkPlanner.h"
+#include "../Source/SourceStore.h"
+#include "../Source/Standalone/UI/MenuBarComponent.h"
+#include "../Source/Utils/ProjectPersistence.h"
+#include "../Source/Utils/ProjectSession.h"
 
 #include <string>
 #endif
@@ -762,6 +766,128 @@ bool testControlDeleteUndoSurvivesSweep()
            });
 }
 
+bool testNotesOnlyMenuAndControlParity()
+{
+    ProcessorFixture fixture;
+    auto& processor = fixture.processor;
+    StandaloneArrangement::Placement placement;
+    if (!insertTestPlacement(processor, 0, 0.0, placement))
+        return false;
+    const auto key = placement.contentKey;
+    auto* content = processor.getStandaloneContentRepository()->findClip(key);
+    auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 88200);
+    audio->clear();
+    const auto sourceId = processor.getSourceStore()->createSource({"parity", {}, audio, 44100.0, 1, 88200});
+    content->content().sourceWindow = {sourceId, {}, 0.0, 2.0};
+    content->content().nativeSource = {audio, 44100.0, 0};
+    content->applyAudioBuffer(audio, 44100.0);
+    auto curve = std::make_shared<OpenTune::PitchCurve>();
+    curve->replaceOriginalAnalysis(std::vector<float>(200, 220.0f), {}, 441, 44100.0);
+    content->applyOriginalF0(std::move(curve));
+
+    auto* renderService = processor.getContentRenderService();
+    renderService->pauseRenderWorker();
+    const auto cache = renderService->getOrCreateRenderCache(key);
+    const auto snapshot = processor.getContentSnapshot(key);
+    renderService->publishPlaybackSource(key, OpenTune::makePlaybackReadSource(
+        key, snapshot, snapshot->nativeSource, audio, 44100.0, 0, cache, renderService->getTimeStretchCache()));
+
+    OpenTune::ProjectSession project(processor, processor.getAppPreferences());
+    processor.setContentEditCompletedCallback([&project](OpenTune::ContentKey) { project.markDirty(); });
+    OpenTune::MenuBarComponent menu(processor);
+    menu.noteGenerationContext = [key] { return std::make_pair(key, OpenTune::NoteGeneratorParams{}); };
+    const auto editMenu = menu.getMenuForIndex(1, {});
+    juce::PopupMenu::MenuItemIterator items(editMenu);
+    int menuItemId = 0;
+    while (items.next()) {
+        const auto& item = items.getItem();
+        if (item.text == LOC(kRegenerateNotes) && item.isEnabled)
+            menuItemId = item.itemID;
+    }
+    if (!expect(menuItemId != 0, "regenerate notes must be enabled for usable Ready F0"))
+        return false;
+
+    OpenTune::ControlInstanceFacts facts;
+    facts.instanceId = "0123456789abcdef0123456789abcdef";
+    OpenTune::ControlOpContext context(processor, nullptr, facts);
+    OpenTune::ControlMethodTable methods;
+    OpenTune::registerContentTuneOps(methods);
+    const auto contentId = OpenTune::controlContentId(context, key);
+    auto& undo = processor.getUndoManager();
+    const auto run = [&](bool viaControl, bool voiced) -> juce::ValueTree {
+        auto f0 = std::make_shared<OpenTune::PitchCurve>();
+        f0->replaceOriginalAnalysis(std::vector<float>(200, voiced ? 220.0f : 0.0f), {}, 441, 44100.0);
+        f0->replaceCorrectionSegments({{10, 14, {221.0f, 222.0f, 223.0f, 224.0f},
+                                        OpenTune::PitchCorrectionSegment::Source::HandDraw}});
+        content->applyOriginalF0(std::move(f0));
+        content->applyNotes({});
+        cache->clear();
+        project.clearDirty();
+        if (!commitGain(processor, 0, placement.placementId, 0.5, "could not seed redo history")
+            || undo.undo() == nullptr || !undo.canRedo())
+            return {};
+        const auto before = processor.getContentSnapshot(key);
+        const auto dirtyBefore = project.getDirtyGeneration();
+        if (viaControl) {
+            auto params = OpenTune::JsonValue::object();
+            params.appendMember("contentId", OpenTune::JsonValue::string(contentId));
+            params.appendMember("mode", OpenTune::JsonValue::string("notesOnly"));
+            params.appendMember("expectedRevision", OpenTune::JsonValue::string(
+                OpenTune::controlContentVersions(context, contentId, *before).revision()));
+            OpenTune::JsonValue response;
+            if (!runControlMethod(methods, "content.autoTune", context, params, response))
+                return {};
+        } else {
+            menu.menuItemSelected(menuItemId, 1);
+        }
+
+        const auto after = processor.getContentSnapshot(key);
+        if (!expect(undo.size() == 0 && project.isDirty() && project.getDirtyGeneration() == dirtyBefore + 1
+                        && after->notesRevision == before->notesRevision + 1
+                        && after->pitchCurve == before->pitchCurve,
+                    "notesOnly must commit exactly once, preserve the curve, clear redo and mark dirty"))
+            return {};
+
+        int64_t coveredSamples = 0;
+        for (const auto& job : cache->getPendingJobs()) {
+            OpenTune::RenderCache::RunningChunkSnapshot chunk;
+            if (!expect(job.startSample == coveredSamples && cache->claimPendingJob(job)
+                            && cache->getRunningChunk(job.startSample, chunk)
+                            && chunk.lastRequestedContentRevision == after->contentRevision,
+                        "notesOnly must queue contiguous render chunks for the committed content revision"))
+                return {};
+            coveredSamples = chunk.endSampleExclusive;
+        }
+        if (!expect(coveredSamples == audio->getNumSamples(), "notesOnly must render the whole content"))
+            return {};
+
+        const juce::TemporaryFile file(juce::File::getCurrentWorkingDirectory().getChildFile("notes-parity.otproj"));
+        OpenTune::ProjectPersistence persistence;
+        if (!expect(persistence.writeProjectFile(project.captureSnapshot(), file.getFile()),
+                    "could not save generated topology")) {
+            std::cerr << file.getFile().getFullPathName() << '\n';
+            return {};
+        }
+        auto saved = persistence.readProjectFile(file.getFile());
+        if (!expect(saved.ok() && saved.value().contents.size() == 1
+                        && saved.value().contents.front().noteTopologyInitialized
+                        && saved.value().contents.front().notes.size() == (voiced ? 1u : 0u)
+                        && saved.value().contents.front().correctionSegments.size() == 1,
+                    "generated topology and existing correction must survive save and reopen"))
+            return {};
+        return persistence.toValueTree(saved.value()).getChildWithName("Contents");
+    };
+    bool passed = true;
+    for (const bool voiced : {true, false}) {
+        const auto gui = run(false, voiced);
+        const auto api = run(true, voiced);
+        passed = expect(gui.isValid() && api.isValid() && gui.isEquivalentTo(api),
+                        "menu and Control must persist the same content") && passed;
+    }
+    processor.setContentEditCompletedCallback({});
+    return passed;
+}
+
 bool testControlAutoTunePreservesUnrequestedCorrectionGap()
 {
     ProcessorFixture fixture;
@@ -1086,6 +1212,7 @@ int main()
 #if defined(OPENTUNE_ENABLE_CONTROL_API)
     passed = passed && expect(testTrackSetVolumeWarnings(), "Control track volume regression failed");
     passed = passed && expect(testControlDeleteUndoSurvivesSweep(), "Control delete/undo regression failed");
+    passed = passed && expect(testNotesOnlyMenuAndControlParity(), "Regenerate Notes menu and Control parity failed");
     passed = passed && expect(testControlAutoTunePreservesUnrequestedCorrectionGap(),
                               "Control multi-range AUTO correction regression failed");
 #endif

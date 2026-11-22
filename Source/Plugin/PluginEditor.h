@@ -3,8 +3,7 @@
 /**
  * VST3 插件编辑器（Plugin Editor）
  *
- * VST3/ARA 格式专属的 UI 壳层。通过 Timer 心跳轮询 Processor 状态，
- * 将 ARA EditorView selection 的 Content 投射到 PianoRoll 进行编辑。
+ * VST3/ARA 格式专属的 UI 壳层。订阅 ARA 文档和选择事件，将内容投射到 PianoRoll。
  * 与 Standalone Editor 共享 PianoRollComponent 和 ParameterPanel，
  * 但不包含多轨 Arrangement 视图。
  *
@@ -46,7 +45,8 @@ namespace OpenTune::PluginUI {
 class OpenTuneAudioProcessorEditor : public juce::AudioProcessorEditor,
 #if JucePlugin_Enable_ARA
                                      public juce::AudioProcessorEditorARAExtension,
-                                      public juce::ARAAudioModificationListener,
+                                     private juce::ARAEditorView::Listener,
+                                     private juce::ChangeListener,
 #endif
                                      public TimelineOverviewComponent::Listener,
                                      public ParameterPanel::Listener,
@@ -97,12 +97,6 @@ public:
     void cursorStyleChanged(CursorStyleId style) override;
     void onboardingRequested() override;
     void languageChanged(Language newLanguage) override;
-#if JucePlugin_Enable_ARA
-    void didUpdateAudioModificationContent(juce::ARAAudioModification* audioModification,
-                                           juce::ARAContentUpdateScopes scopeFlags) override;
-    void willDestroyAudioModification(juce::ARAAudioModification* audioModification) override;
-#endif
-
     void playRequested() override;
     void pauseRequested() override;
     void stopRequested() override;
@@ -168,11 +162,13 @@ private:
     std::vector<juce::ARAPlaybackRegion*> resolveContentScopeRegions() const;
     void readScopeAudio();
 #if JucePlugin_Enable_ARA
-    void subscribePendingNoteGeneration(ContentKey key, juce::ARAAudioModification* modification,
-                                        const NoteGeneratorParams& params);
-    void queuePendingNoteGeneration(ContentKey key, juce::ARAAudioModification* modification);
-    void clearPendingNoteGenerationSubscription();
+    void onNewSelection(const juce::ARAViewSelection&) override;
+    void changeListenerCallback(juce::ChangeBroadcaster*) override;
+    void refreshAraPresentation();
+    void syncOriginalF0Overlay();
 #endif
+    void syncPresentedContentRevisions(ContentKey key, const EditableContentSnapshot* snapshot);
+    void showOriginalF0Failures(std::deque<OriginalF0FailureEvent> events);
     void syncParameterPanelFromSelection(bool forceClipParameterProjection = false);
     PianoRollContentSync syncContentProjectionToPianoRoll();
     void rememberPresentedPianoRollViewport();
@@ -226,30 +222,16 @@ private:
     TimelineDisplayMode timelineDisplayMode_ = TimelineDisplayMode::Time;
 
     bool showingSingleNoteParams_{false};
-    // 读取音频后 latch：F0 提取 + note 生成全部完成前保持"正在处理音频"遮罩
-    bool originalF0OverlayLatched_ = false;
-    std::vector<ContentKey> originalF0OverlayTargetContentKeys_;
+    // Content whose analysis is shown in the Read progress overlay.
+    ContentKey originalF0OverlayTargetContentKey_;
     // Accessibility: "Rendering done" is spoken only for renders at least this long.
     static constexpr juce::uint32 kRenderDoneSpeechMinMs = 1000;
     bool renderBadgeWasShown_ = false;
     int lastExternalEditAppliedCount_ = -1;
     juce::uint32 renderStartedMs_ = 0;
-    // Tracks last-seen notesRevision per active content so the timer
-    // can pull fresh notes when an async note generator commits late.
-    // Tracks last-seen ContentKey for revision baseline only (not session last-active).
+    // Revisions last presented for the active content.
     ContentKey lastRevisionObservedContentKey_;
     std::optional<PianoRollPlacementIdentity> presentedPlacementIdentity_;
-#if JucePlugin_Enable_ARA
-    struct PendingNoteGenerationIntent
-    {
-        ContentKey key;
-        NoteGeneratorParams params;
-        uint64_t wrapperGeneration{0};
-        uint64_t birthRevision{0};
-    };
-    std::optional<PendingNoteGenerationIntent> pendingNoteGenerationIntent_;
-    juce::ARAAudioModification* pendingNoteGenerationListenerTarget_{nullptr};
-#endif
     uint64_t lastPianoRollNotesRevision_{0};
     uint64_t lastPianoRollTimeGridRevision_{0};
     uint64_t lastPianoRollPitchRevision_{0};
@@ -261,10 +243,8 @@ private:
     int lastPianoRollSampleRate_{0};
     PitchShiftSettings lastPitchShiftIndicatorSettings_;
 
-    // First-insert auto Read: run once per scope; failures re-arm with a cap.
+    // First-insert auto Read: run once for this view.
     bool autoReadAttempted_{false};
-    int autoReadFailureCount_{0};
-    static constexpr int kMaxAutoReadFailures = 5;
 
     static constexpr int TOP_BAR_HEIGHT = 88;
     static constexpr int PARAMETER_PANEL_WIDTH = 240;

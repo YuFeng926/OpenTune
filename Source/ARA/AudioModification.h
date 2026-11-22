@@ -36,12 +36,14 @@ struct AudioModification
     std::optional<ContentState> content;
     std::optional<OriginalF0InputStamp> originalF0InputStamp;
     bool analysisContinuationPending{false};
+    bool noteTopologyInitPending{false};
 
     // 身份更新
     void updateIdentity(juce::ARAAudioModification* modification);
     bool attachSource(const AudioSource& source);
     void revokeAnalysisReception() noexcept;
     void clearOriginalAnalysis();
+    void registerNoteTopologyInitialization(bool notesPrimary) noexcept;
     bool hasReadyOriginalF0() const;
     bool isRenderable() const noexcept;
 

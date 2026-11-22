@@ -101,8 +101,11 @@ public:
         juce::String fileName = "app-preferences.settings";
     };
 
+    using AudioEditingSchemeChanged = std::function<void(AudioEditingScheme::Scheme)>;
+
     AppPreferences();
-    explicit AppPreferences(const StorageOptions& storageOptions);
+    explicit AppPreferences(const StorageOptions& storageOptions,
+                            AudioEditingSchemeChanged onAudioEditingSchemeChanged = {});
 
     AppPreferencesState getState() const;
 
@@ -115,6 +118,7 @@ public:
     void setDemoTourConsumed(bool consumed);
     void setTheme(ThemeId theme);
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme);
+    AudioEditingScheme::Scheme getAudioEditingScheme() const;
     void setNoteNameMode(NoteNameMode noteNameMode);
     void setShowPianoKeyboard(bool shouldShow);
     void setScaleAssistEnabled(bool enabled);
@@ -164,6 +168,7 @@ public:
 
 private:
     StorageOptions storageOptions_;
+    AudioEditingSchemeChanged onAudioEditingSchemeChanged_;
     mutable std::mutex mutex_;
     AppPreferencesState state_;
     std::unique_ptr<juce::InterProcessLock> processLock_;

@@ -47,13 +47,6 @@ std::optional<ControlUiBridge::ProjectInfo> ControlEditorBridge::projectInfo() c
     return info;
 }
 
-void ControlEditorBridge::markDirty()
-{
-    // ProjectSession::markDirty(), as the editor's own edits do. The title is not refreshed here, as after
-    // the editor's own edits.
-    editor_.projectSession_.markDirty();
-}
-
 std::optional<ControlUiBridge::BusyState> ControlEditorBridge::queryBusy() const
 {
     BusyState busy;

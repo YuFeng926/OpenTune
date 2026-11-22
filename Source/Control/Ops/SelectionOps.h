@@ -16,9 +16,8 @@ class ControlMethodTable;
  *
  * Selecting can change more than the selection, as a click does, and the result reports what the call observed:
  * - notesGenerated (warnings SELECTION_GENERATED_NOTES and IRREVERSIBLE, the project marked as changed): in the
- * openDyne scheme the piano roll generates the notes of the clip it shows when they were never generated and its pitch
- *   analysis is ready (PianoRollComponent::ensureOpenDyneNotesIfNeeded, called by setEditedContentAndProjection when
- *   the piano roll gets another clip), with no undo entry;
+ *   OpenDyne scheme the selection command initializes the selected clip's topology when F0 is ready,
+ *   with no undo entry;
  * - uiScaleChanged: the transport bar shows the clip's key (applyResolvedScaleForPlacementContent);
  * - workspaceSwitched: openEditor switched from the arrangement to the piano roll (placementDoubleClicked).
  * - tempoRounded (and the change of the singleton tempo, as transport.setTempo reports it): the switch moved the

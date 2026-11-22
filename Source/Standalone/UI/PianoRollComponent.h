@@ -541,8 +541,6 @@ private:
     void initializeRenderer();
     void applyAudioEditingScheme(AudioEditingScheme::Scheme scheme);
     void stopNotePitchAudition();
-    /** OpenDyne 语义保证：切入 OpenDyne 模式或加载内容时，若已有 F0 数据但无音符则生成。 */
-    void ensureOpenDyneNotesIfNeeded();
     PianoRollToolHandler::Context buildToolHandlerContext();
     void initializeToolHandler();
     void applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve);

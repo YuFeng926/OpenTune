@@ -16,6 +16,7 @@
 #include "../Inference/RenderCache.h"
 #include "../Utils/SourceWindow.h"
 #include "../Utils/AppLogger.h"
+#include "../Content/ContentEditCommands.h"
 #include "../Content/ContentSnapshotProjection.h"
 
 #include <algorithm>
@@ -162,6 +163,7 @@ bool editorRendererOwnsRegion(juce::ARAEditorRenderer* renderer,
 OpenTuneDocumentController::OpenTuneDocumentController(const ARA::PlugIn::PlugInEntry* entry,
                                                         const ARA::ARADocumentControllerHostInstance* instance)
     : ARADocumentControllerSpecialisation(entry, instance)
+    , appPreferences_({}, [this](auto scheme) { audioEditingSchemeChanged(scheme); })
     , contentRenderService_(std::make_shared<ContentRenderService>())
     , resamplingManager_(std::make_shared<ResamplingManager>())
     , transportRelay_(std::make_shared<HostTransportRelayState>())
@@ -1264,19 +1266,6 @@ int OpenTuneDocumentController::requestReadAudioForPlaybackRegion(
     return materialized ? 1 : -1;
 }
 
-void OpenTuneDocumentController::requestReadAudioForPlaybackRegionAsync(
-    juce::ARAPlaybackRegion* playbackRegion,
-    std::function<void(int)> completionCallback)
-{
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    // ARA SDK requires DocumentController operations on main thread.
-    // This method now executes synchronously to comply with ARA thread constraints.
-    // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    const int count = requestReadAudioForPlaybackRegion(playbackRegion);
-    if (completionCallback)
-        completionCallback(count);
-}
-
 void OpenTuneDocumentController::registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer)
 {
     if (std::find(playbackRenderers_.begin(), playbackRenderers_.end(), &renderer) == playbackRenderers_.end())
@@ -1321,6 +1310,7 @@ void OpenTuneDocumentController::willBeginEditing(juce::ARADocument* document)
 void OpenTuneDocumentController::didEndEditing(juce::ARADocument* document)
 {
     juce::ignoreUnused(document);
+    initializePendingNoteTopologies();
     readRestoredAudio(nullptr);
     refreshRegisteredRenderers(publishModelChange());
 }
@@ -1339,6 +1329,9 @@ void OpenTuneDocumentController::didUpdateAudioModificationProperties(juce::ARAA
             + modification.persistentId.quoted() + " source=" + juce::String(parent->getPersistentID()).quoted());
     if (auto* source = findAudioSource(parent))
         modification.attachSource(*source);
+    if (created)
+        modification.registerNoteTopologyInitialization(
+            AudioEditingScheme::usesNotesPrimaryScheme(appPreferences_.getAudioEditingScheme()));
     // Note: birthContentForModification() called lazily on read request, not here
 
     refreshRegisteredRenderers(publishModelChange());
@@ -1656,6 +1649,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         pending.push_back({*target, *source, std::move(*content), continuationPending});
     }
 
+    const bool notesPrimary = AudioEditingScheme::usesNotesPrimaryScheme(appPreferences_.getAudioEditingScheme());
     for (auto& entry : pending)
     {
         auto& target = entry.target;
@@ -1666,6 +1660,7 @@ bool OpenTuneDocumentController::doRestoreObjectsFromStream(juce::ARAInputStream
         target.content = std::move(entry.content);
         target.birthState = AudioModificationBirthState::WaitingForSource;
         target.analysisContinuationPending = entry.analysisContinuationPending;
+        target.registerNoteTopologyInitialization(notesPrimary);
         target.originalF0InputStamp.reset();
         target.attachSource(entry.source);
         if (target.hasReadyOriginalF0())
@@ -1984,6 +1979,7 @@ OpenTuneDocumentController::makeProjection(const PlaybackRegion& placement) cons
 
 std::vector<OpenTunePlaybackRenderer*> OpenTuneDocumentController::publishModelChange()
 {
+    presentationChanges_.sendChangeMessage();
     return playbackRenderers_;
 }
 
@@ -2028,6 +2024,56 @@ bool OpenTuneDocumentController::publishPlaybackReadSourceForModification(
     // The plan freezes the published source view; a new publication is the
     // event that refreshes it.
     refreshRegisteredRenderers(publishModelChange());
+    return true;
+}
+
+void OpenTuneDocumentController::audioEditingSchemeChanged(AudioEditingScheme::Scheme scheme)
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    const bool notesPrimary = AudioEditingScheme::usesNotesPrimaryScheme(scheme);
+    for (auto& modification : audioModifications_)
+        modification.registerNoteTopologyInitialization(notesPrimary);
+
+    if (notesPrimary && !getDocumentController()->isHostEditingDocument())
+        initializePendingNoteTopologies();
+    presentationChanges_.sendChangeMessage();
+}
+
+void OpenTuneDocumentController::initializePendingNoteTopologies()
+{
+    for (auto& modification : audioModifications_)
+        initializePendingNoteTopology(modification);
+}
+
+bool OpenTuneDocumentController::initializePendingNoteTopology(AudioModification& modification)
+{
+    if (!modification.noteTopologyInitPending
+        || !modification.hasReadyOriginalF0()
+        || modification.content->noteTopologyInitialized
+        || modification.audioModification->isDeactivatedForUndoHistory()
+        || modification.audioModification->getAudioSource()->isDeactivatedForUndoHistory())
+        return false;
+
+    return generateNotesOnly(modification, {});
+}
+
+bool OpenTuneDocumentController::generateNotesOnly(ContentKey key, const NoteGeneratorParams& params)
+{
+    jassert(juce::MessageManager::existsAndIsCurrentThread());
+    auto* modification = findAudioModificationByContentKey(key);
+    return modification != nullptr && modification->hasContentState() && generateNotesOnly(*modification, params);
+}
+
+bool OpenTuneDocumentController::generateNotesOnly(AudioModification& modification, const NoteGeneratorParams& params)
+{
+    const auto snapshot = modification.snapshotContent();
+    const auto patch = ContentEditCommands::planGenerateNotesOnly(*snapshot, params);
+    if (!patch)
+        return false;
+
+    applyNotesToModification(modification.contentKey(),
+                             mergeNotesRange(snapshot->notes, patch->affectedRange, patch->afterNotesInRange));
+    requestFullModificationRender(modification.contentKey());
     return true;
 }
 
@@ -2090,6 +2136,8 @@ bool OpenTuneDocumentController::birthContentForModification(AudioModification& 
     const bool alreadyHasF0 = modification.originalF0InputStamp == currentStamp
         && modification.hasReadyOriginalF0();
     const bool wasPending = modification.analysisContinuationPending;
+    modification.registerNoteTopologyInitialization(
+        AudioEditingScheme::usesNotesPrimaryScheme(appPreferences_.getAudioEditingScheme()));
     AppLogger::log(f0Diagnostic(this, modification.persistentId, modification.birthRevision)
         + "revoke_reception reason=Birth");
     revokeF0Reception(modification);
@@ -2508,11 +2556,8 @@ void OpenTuneDocumentController::commitF0Completion(const AraF0Target& target, c
     if (pitchCurve == nullptr)
         pitchCurve = std::make_shared<PitchCurve>();
     pitchCurve->replaceOriginalAnalysis(result.f0, result.energy, result.hopSize, result.f0SampleRate);
-    mod->applyOriginalF0(std::move(pitchCurve));
+    applyOriginalF0ToModification(target.key, std::move(pitchCurve));
     AppLogger::log(logPrefix + "commit_applied");
-
-    requestFullModificationRender(target.key);
-    hostModification->notifyContentChanged(juce::ARAContentUpdateScopes::tuningIsAffected(), true);
 }
 
 // Per architecture: DC owns CRS and installs render execution lease.
@@ -2958,15 +3003,6 @@ OriginalF0State OpenTuneDocumentController::readOriginalF0State(ContentKey key) 
     return mod->content->analysis.originalF0State;
 }
 
-std::optional<std::pair<uint64_t, uint64_t>>
-OpenTuneDocumentController::getAnalysisGeneration(ContentKey key) const
-{
-    jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
-    const auto* mod = findAudioModificationByContentKey(key);
-    if (mod == nullptr || !mod->hasContentState())
-        return std::nullopt;
-    return std::make_pair(mod->wrapperGeneration, mod->birthRevision);
-}
 
 DetectedKey OpenTuneDocumentController::readDetectedKey(ContentKey key) const
 {
@@ -3110,12 +3146,10 @@ bool OpenTuneDocumentController::applyOriginalF0ToModification(const ContentKey&
     if (mod == nullptr || !mod->hasContentState()) return false;
     mod->applyOriginalF0(std::move(curve));
 
-    // Notify ARA host of content change for cache/save state invalidation
-    if (mod->audioModification != nullptr)
-        mod->audioModification->notifyContentChanged(
-            juce::ARAContentUpdateScopes::tuningIsAffected(), true);
-
-    // OriginalF0 只更新分析数据，不触发音频渲染，所以不调用 refreshRegisteredRenderers
+    if (getDocumentController()->isHostEditingDocument() || !initializePendingNoteTopology(*mod))
+        requestFullModificationRender(key);
+    mod->audioModification->notifyContentChanged(juce::ARAContentUpdateScopes::tuningIsAffected(), true);
+    presentationChanges_.sendChangeMessage();
     return true;
 }
 

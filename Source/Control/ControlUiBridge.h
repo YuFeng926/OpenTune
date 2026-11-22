@@ -69,9 +69,6 @@ public:
     /** The open project as the editor sees it; nullopt when not supported. */
     virtual std::optional<ProjectInfo> projectInfo() const { return std::nullopt; }
 
-    /** Marks the project as changed, as the editor does after its own edits. Default: nothing. */
-    virtual void markDirty() {}
-
     // ---- Busy state ---------------------------------------------------------------------------
 
     /** Why the UI must not be changed under the user's hands right now: each member is one reason of BUSY. */

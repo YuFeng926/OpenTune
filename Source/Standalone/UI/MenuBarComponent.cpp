@@ -142,6 +142,11 @@ juce::PopupMenu MenuBarComponent::getMenuForIndex(int topLevelMenuIndex, const j
             const bool canRedo = canRedoQuery ? canRedoQuery() : true;
             menu.addItem(EditUndo, LOC(kUndo) + "  (Ctrl+Z)", canUndo);
             menu.addItem(EditRedo, LOC(kRedo) + "  (Ctrl+Shift+Z)", canRedo);
+            if (noteGenerationContext) {
+                const auto snapshot = processor_.getContentSnapshot(noteGenerationContext().first);
+                menu.addItem(EditRegenerateNotes, LOC(kRegenerateNotes),
+                             snapshot != nullptr && ContentEditCommands::canGenerateNotesOnly(*snapshot));
+            }
             break;
         }
         case 2:  // View
@@ -410,6 +415,12 @@ void MenuBarComponent::menuItemSelected(int menuItemID, int topLevelMenuIndex)
         case EditRedo:
             listeners_.call([](Listener& l) { l.redoRequested(); });
             break;
+
+        case EditRegenerateNotes: {
+            const auto [key, params] = noteGenerationContext();
+            processor_.getContentCommands()->generateNotesOnly(key, params);
+            break;
+        }
 
         default:
         {

@@ -164,9 +164,11 @@ public:
         const NoteGeneratorParams& params,
         const std::optional<ScaleSnapConfig>& scaleSnap) const = 0;
 
-    virtual std::optional<ContentNoteRangePatch> planGenerateNotesOnly(
-        const EditableContentSnapshot& snapshot,
-        const NoteGeneratorParams& params) const = 0;
+    static bool canGenerateNotesOnly(const EditableContentSnapshot& snapshot);
+    static std::optional<ContentNoteRangePatch> planGenerateNotesOnly(
+        const EditableContentSnapshot& snapshot, const NoteGeneratorParams& params);
+    static std::optional<ContentNoteRangePatch> planInitialNotesOnly(
+        const EditableContentSnapshot& snapshot, const NoteGeneratorParams& params);
 
     virtual bool setTimeGrid(ContentKey key,
                              std::shared_ptr<const TimeGridSnapshot> grid) = 0;
@@ -198,9 +200,8 @@ public:
         const std::optional<ScaleSnapConfig>& scaleSnap,
         const juce::String& description) = 0;
 
-    // 仅生成音符唯一入口：generate → validate → 拓扑提交。
-    // 全内容范围（0..f0Count，内部从同一 snapshot 派生）。不写 correction segments、
-    // 不吸附、不请求 render、不创建 undo；owner 清 redo 并发送编辑完成通知。
+    // Whole-content notes-only command. The content owner submits the topology and
+    // handles render, dirty and redo. Generating notes leaves corrections untouched.
     virtual bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) = 0;
     virtual bool commitGeneratedNotesOnly(ContentKey key, ContentNoteRangePatch patch) = 0;
 

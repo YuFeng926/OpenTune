@@ -76,6 +76,11 @@ void AudioModification::clearOriginalAnalysis()
     birthState = AudioModificationBirthState::WaitingForSource;
 }
 
+void AudioModification::registerNoteTopologyInitialization(bool notesPrimary) noexcept
+{
+    noteTopologyInitPending = notesPrimary && content.has_value() && !content->noteTopologyInitialized;
+}
+
 bool AudioModification::hasReadyOriginalF0() const
 {
     return content.has_value()
@@ -118,6 +123,7 @@ void AudioModification::applyNotes(const std::vector<Note>& notes)
     for (auto& note : content->notes)
         note.outputGainDb = content->volumeEnvelope.evalAt(note.startTime);
     content->noteTopologyInitialized = true;
+    noteTopologyInitPending = false;
     ++content->notesRevision;
     ++content->contentRevision;
 }

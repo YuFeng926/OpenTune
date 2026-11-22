@@ -38,11 +38,6 @@ std::optional<Error> controlCheckBusy(ControlOpContext& context, ControlBusyScop
     without an editor, which has no project session. */
 bool controlProjectDirty(ControlOpContext& context);
 
-/** Marks the project as changed through the editor (ControlUiBridge::markDirty(), the editor's
-    ProjectSession::markDirty()), after a change that is saved with the project, also where the UI does
-    not. Without an editor nothing. */
-void controlMarkDirty(ControlOpContext& context);
-
 /** True when the instance reports the capability: a revert recipe whose method needs an unreported
     capability cannot restore anything. */
 bool controlReportsCapability(ControlOpContext& context, std::string_view capability);

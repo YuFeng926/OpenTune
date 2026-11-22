@@ -42,7 +42,6 @@ public:
     ControlEditorBridge& operator=(const ControlEditorBridge&) = delete;
 
     std::optional<ProjectInfo> projectInfo() const override;
-    void markDirty() override;
     std::optional<BusyState> queryBusy() const override;
     void onStructureChanged() override;
     UndoAction* performUndoRedo(bool undo, const std::function<bool(UndoAction*)>& validateTop) override;

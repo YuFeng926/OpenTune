@@ -3741,7 +3741,6 @@ bool PianoRollComponent::setEditedContentAndProjection(ContentKey contentKey,
     }
 
     requestContentRedraw();
-    ensureOpenDyneNotesIfNeeded();
 
     return projectionChanged;
 }
@@ -3840,9 +3839,6 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
         rasterizeDirtySurfaces();
         repaint();
     }
-
-    if (!deferRedraw)
-        ensureOpenDyneNotesIfNeeded();
 
     if (contentChanged || externalRevisionChanged)
         parameterTargetDidChange();
@@ -4495,27 +4491,6 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     // Scheme changed → relayout to show/hide the horizontal scrollbar.
     if (wasOpenDyne != nowOpenDyne)
         resized();
-
-    ensureOpenDyneNotesIfNeeded();
-}
-
-void PianoRollComponent::ensureOpenDyneNotesIfNeeded()
-{
-    // OpenDyne 语义：模式呈现需要音符可见。切入 OpenDyne 或加载/切换内容时，
-    // 若内容已有 OriginalF0 数据但尚未初始化音符拓扑，则生成音符（复用导入同一路径：
-    // 初始状态不量化，保持 originalPitch，SNAP 负责吸附；不重新提取 F0）。
-    if (!isOpenDyne() || !editedContentKey_.isValid() || contentCommands_ == nullptr)
-        return;
-    auto snap = readEditedSnapshot();
-    if (snap == nullptr || snap->noteTopologyInitialized)
-        return;  // 内容已经历过至少一次音符拓扑提交（导入生成 / 用户绘制 / 粘贴 / 合法空结果）
-    if (snap->pitchCurve == nullptr)
-        return;
-    const auto curveSnap = snap->pitchCurve;
-    if (curveSnap == nullptr || curveSnap->getOriginalF0().empty())
-        return;  // F0 未就绪（提取中或失败）
-    contentCommands_->generateNotesOnly(editedContentKey_, getCurrentAutoTuneParams());
-    // 提交置位 noteTopologyInitialized 并推进 notesRevision → onNotesRevisionChanged 自动刷新缓存并重绘
 }
 
 void PianoRollComponent::setCurrentTool(ToolId tool) {

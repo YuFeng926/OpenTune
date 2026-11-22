@@ -324,8 +324,7 @@ NotesWatch captureNotesWatch(ControlOpContext& context)
     auto* bridge = context.bridge();
     if (bridge == nullptr)
         return watch;
-    // ControlUiBridge::viewState(): the placement the piano roll shows; the editor generates the notes of the content
-    // it edits when the scheme becomes openDyne (PianoRollComponent::ensureOpenDyneNotesIfNeeded).
+    // The Standalone editor applies the shared initialization command to its active clip on a scheme change.
     const auto view = bridge->viewState();
     if (!view || view->pianoRollPlacementId == 0)
         return watch;
@@ -357,8 +356,7 @@ bool notesWereGenerated(ControlOpContext& context, const NotesWatch& watch)
     return snapshot != nullptr && snapshot->noteTopologyInitialized;
 }
 
-/** Records the notes the editor generated for the watched clip: the side effect, the two warnings, the project marked
-    as changed (the scheme change has no undo entry, and nothing but deleting the clip takes the notes away). */
+/** Reports the generated notes and their irreversible history policy. */
 bool recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envelope, const NotesWatch& watch)
 {
     if (!notesWereGenerated(context, watch))
@@ -375,7 +373,6 @@ bool recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
         envelope.addWarning(code, std::move(subject));
     }
     envelope.touchContent(watch.contentId);
-    controlMarkDirty(context);
     return true;
 }
 

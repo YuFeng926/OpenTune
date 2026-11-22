@@ -658,11 +658,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
 Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& params, const ControlContentRef& ref,
                                const ControlContentVersions& versions)
 {
-    auto history = historyOf(context);
-    if (!history.ok())
-        return history.error();
-    auto& processor = context.processor();
-    auto commands = processor.getContentCommands();
+    auto commands = context.processor().getContentCommands();
     const auto generator = generatorParams(params);
     const auto beforeNotes = ref.snapshot->notes;
     const auto beforeWorld = controlCaptureWorldVersions(context);
@@ -681,7 +677,6 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
         // no valid result changes nothing.
         if (!commands->generateNotesOnly(ref.key, generator))
             return controlOpError("INTERNAL", "", "OpenTune's note generator returned no valid result");
-        history.value()->onChangeWithoutEntry(processor.getUndoManager());
         auto committed = controlReadCommittedNotes(context, ref, std::nullopt);
         if (!committed.ok())
             return committed.error();
@@ -808,8 +803,10 @@ Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& p
     const auto& ref = content.value();
     if (auto busy = controlCheckBusy(context))
         return *busy;
-    if (auto notReady = controlCheckContentReady(context, ref))
-        return *notReady;
+    if (params.mode != TuneMode::NotesOnly || !ContentEditCommands::canGenerateNotesOnly(*ref.snapshot)) {
+        if (auto notReady = controlCheckContentReady(context, ref))
+            return *notReady;
+    }
     const auto versions = controlContentVersions(context, ref.contentId, *ref.snapshot);
     if (auto conflict = controlCheckExpectedTokens(versions, params.expectedRevision, params.expectedKeyRevision))
         return *conflict;

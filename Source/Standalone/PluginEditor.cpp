@@ -673,6 +673,9 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
     // Undo/Redo 菜单项实时反映撤销栈状态
     menuBar_.canUndoQuery = [this]() { return processorRef_.getUndoManager().canUndo(); };
     menuBar_.canRedoQuery = [this]() { return processorRef_.getUndoManager().canRedo(); };
+    menuBar_.noteGenerationContext = [this] {
+        return std::make_pair(pianoRoll_.editedContentKey(), pianoRoll_.getCurrentAutoTuneParams());
+    };
 
 #if JUCE_MAC
     // Populate the macOS system menu bar with File/Edit/View menus.
@@ -2282,6 +2285,8 @@ void OpenTuneAudioProcessorEditor::syncSharedAppPreferences()
     // and resize the overview strip for Melodyne-style integration.
     if (appliedAudioEditingScheme_ != sharedPreferences.audioEditingScheme) {
         appliedAudioEditingScheme_ = sharedPreferences.audioEditingScheme;
+        if (pianoRoll_.isOpenDyne() && pianoRoll_.editedContentKey().isValid())
+            processorRef_.initializeLocalNoteTopology(pianoRoll_.editedContentKey(), pianoRoll_.getCurrentAutoTuneParams());
         resized();
     }
 
@@ -2341,6 +2346,8 @@ void OpenTuneAudioProcessorEditor::syncActiveContentFromProcessor(int trackId,
         && getStandalonePlacementByIndex(processorRef_, trackId, placementIndex, placement);
     const ContentKey contentKey = hasPlacement ? placement.contentKey : ContentKey{};
 
+    if (pianoRoll_.isOpenDyne() && contentKey.isValid())
+        processorRef_.initializeLocalNoteTopology(contentKey, pianoRoll_.getCurrentAutoTuneParams());
     auto snap = processorRef_.getContentSnapshot(contentKey);
     const double sr = snap ? snap->audioSampleRate : 0.0;
     std::shared_ptr<const juce::AudioBuffer<float>> contentBuffer =
@@ -2420,11 +2427,9 @@ std::optional<ControlUiBridge::SelectionPlan> OpenTuneAudioProcessorEditor::plan
             static_cast<int>(key.root), scaleToUiScaleType(key.scale)};
 
         const auto snapshot = processorRef_.getContentSnapshot(placement.contentKey);
-        if (pianoRoll_.isOpenDyne() && snapshot != nullptr && !snapshot->noteTopologyInitialized
-            && snapshot->pitchCurve != nullptr && !snapshot->pitchCurve->getOriginalF0().empty()) {
-            if (auto commands = processorRef_.getContentCommands())
-                plan.generatedNotes = commands->planGenerateNotesOnly(
-                    *snapshot, pianoRoll_.getCurrentAutoTuneParams());
+        if (pianoRoll_.isOpenDyne() && snapshot != nullptr) {
+            plan.generatedNotes = ContentEditCommands::planInitialNotesOnly(
+                *snapshot, pianoRoll_.getCurrentAutoTuneParams());
             if (plan.generatedNotes)
                 plan.generatedNotesKey = placement.contentKey;
         }

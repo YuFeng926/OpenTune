@@ -957,10 +957,7 @@ public:
         const NoteGeneratorParams& params,
         const std::optional<ScaleSnapConfig>& scaleSnap);
 
-    // 仅生成音符唯一入口：ContentEditCommands 统一计划后拓扑提交。
-    // 不写 correction segments、不吸附、不请求 render。不创建 undo、不 mark dirty。
-    // 空音符（全静音）是合法结果：仍提交拓扑 patch 清除该 range 音符。
-    bool generateNotesOnlyByContentKey(ContentKey key, const NoteGeneratorParams& params);
+    void initializeLocalNoteTopology(ContentKey key, const NoteGeneratorParams& params);
 public:
 
     ReferenceAnalysisPreheatStatus preheatReferenceFeatures(ContentKey key);
@@ -1037,9 +1034,9 @@ public:
     SnapSettings getSnapSettings() const;
     void setSnapSettings(const SnapSettings& snap);
 
-    /** Valid after runtime initialization; the processor owns this object. */
-    AppPreferences& getAppPreferences() noexcept { return *appPreferences_; }
-    const AppPreferences& getAppPreferences() const noexcept { return *appPreferences_; }
+    /** Valid after runtime initialization. ARA shares the document's preferences. */
+    AppPreferences& getAppPreferences() noexcept;
+    const AppPreferences& getAppPreferences() const noexcept;
 
     UndoManager& getUndoManager() { return undoManager_; }
     PianoKeyAudition& getPianoKeyAudition() { return pianoKeyAudition_; }

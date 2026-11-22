@@ -39,8 +39,6 @@ public:
     std::optional<std::vector<Note>> planAutoTuneContentRange(
         const EditableContentSnapshot&, int, int, const NoteGeneratorParams&,
         const std::optional<ScaleSnapConfig>&) const override { return std::nullopt; }
-    std::optional<ContentNoteRangePatch> planGenerateNotesOnly(
-        const EditableContentSnapshot&, const NoteGeneratorParams&) const override { return std::nullopt; }
     bool setTimeGrid(ContentKey, std::shared_ptr<const TimeGridSnapshot>) override { return false; }
     TimeGridEditAction* commitTimeGridEdit(
         ContentKey, std::shared_ptr<const TimeGridSnapshot>, std::shared_ptr<const TimeGridSnapshot>,

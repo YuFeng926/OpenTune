@@ -171,16 +171,28 @@ struct HostAudioAccess final : ARA::Host::AudioAccessControllerInterface
 
 struct HostArchiving final : ARA::Host::ArchivingControllerInterface
 {
-    ARA::ARASize getArchiveSize(ARA::ARAArchiveReaderHostRef) noexcept override { return 0; }
-    bool readBytesFromArchive(ARA::ARAArchiveReaderHostRef, ARA::ARASize,
-                              ARA::ARASize, ARA::ARAByte[]) noexcept override { return false; }
-    bool writeBytesToArchive(ARA::ARAArchiveWriterHostRef, ARA::ARASize,
-                             ARA::ARASize, const ARA::ARAByte[]) noexcept override { return false; }
+    juce::MemoryBlock bytes;
+    ARA::ARAPersistentID archiveId{};
+
+    ARA::ARASize getArchiveSize(ARA::ARAArchiveReaderHostRef) noexcept override { return bytes.getSize(); }
+    bool readBytesFromArchive(ARA::ARAArchiveReaderHostRef, ARA::ARASize offset,
+                              ARA::ARASize count, ARA::ARAByte destination[]) noexcept override
+    {
+        bytes.copyTo(destination, static_cast<int>(offset), count);
+        return true;
+    }
+    bool writeBytesToArchive(ARA::ARAArchiveWriterHostRef, ARA::ARASize offset,
+                             ARA::ARASize count, const ARA::ARAByte source[]) noexcept override
+    {
+        bytes.ensureSize(offset + count);
+        bytes.copyFrom(source, static_cast<int>(offset), count);
+        return true;
+    }
     void notifyDocumentArchivingProgress(float) noexcept override {}
     void notifyDocumentUnarchivingProgress(float) noexcept override {}
     ARA::ARAPersistentID getDocumentArchiveID(ARA::ARAArchiveReaderHostRef) noexcept override
     {
-        return "ARALifecycleContractTests";
+        return archiveId;
     }
 };
 
@@ -464,6 +476,80 @@ bool runPlaybackRendererLifecycleRegression(ARA::ARADocumentControllerRef docume
         secondInstance->playbackRendererRef, playbackRegionRef);
     return passed;
 }
+
+bool runNoteTopologyRegression(OpenTune::OpenTuneDocumentController& controller,
+                               ARA::Host::DocumentController& host,
+                               HostArchiving& archive,
+                               const std::vector<juce::ARAPlaybackRegion*>& regions)
+{
+    using OpenTune::AudioEditingScheme::Scheme;
+    const auto projections = controller.getPlaybackRegionProjectionsFor(regions);
+    if (!check(projections.size() == 4, "note_topology_region_projections_missing"))
+        return false;
+    const auto restoredKey = projections[0].contentKey;
+    const auto deletedKey = projections[1].contentKey;
+    const auto unvoicedKey = projections[2].contentKey;
+    const auto freshKey = projections[3].contentKey;
+    const auto makeF0 = [](float hz) {
+        auto curve = std::make_shared<OpenTune::PitchCurve>();
+        curve->replaceOriginalAnalysis(std::vector<float>(64, hz), {}, 160, 16000.0);
+        return curve;
+    };
+
+    auto& preferences = controller.getAppPreferences();
+    preferences.setAudioEditingScheme(Scheme::CorrectedF0Primary);
+    controller.applyOriginalF0ToModification(restoredKey, makeF0(220.0f));
+    controller.applyOriginalF0ToModification(deletedKey, makeF0(220.0f));
+    controller.applyNotesToModification(deletedKey, {});
+    bool passed = check(!controller.readContentSnapshot(restoredKey)->noteTopologyInitialized,
+                        "corrected_f0_mode_initialized_topology");
+    if (!check(host.storeObjectsToArchive(reinterpret_cast<ARA::ARAArchiveWriterHostRef>(&archive), nullptr),
+               "note_topology_archive_write_failed"))
+        return false;
+
+    preferences.setAudioEditingScheme(Scheme::NotesPrimary);
+    const auto onSwitch = controller.readContentSnapshot(restoredKey);
+    passed = check(onSwitch->noteTopologyInitialized && !onSwitch->notes.empty(),
+                   "scheme_change_did_not_initialize_ready_topology") && passed;
+
+    host.beginEditing();
+    const bool restored = host.restoreObjectsFromArchive(
+        reinterpret_cast<ARA::ARAArchiveReaderHostRef>(&archive), nullptr);
+    const bool wasDeferred = !controller.readContentSnapshot(restoredKey)->noteTopologyInitialized;
+    host.endEditing();
+    if (!check(restored && wasDeferred, "note_topology_archive_batch_not_deferred"))
+        return false;
+
+    const auto onRestore = controller.readContentSnapshot(restoredKey);
+    passed = check(onRestore->noteTopologyInitialized && !onRestore->notes.empty()
+                       && controller.readAudioBuffer(restoredKey) == nullptr,
+                   "restored_topology_requires_sample_access") && passed;
+    const auto deleted = controller.readContentSnapshot(deletedKey);
+    passed = check(deleted->noteTopologyInitialized && deleted->notes.empty(),
+                   "restored_deleted_topology_regenerated") && passed;
+
+    controller.applyOriginalF0ToModification(unvoicedKey, makeF0(0.0f));
+    controller.applyOriginalF0ToModification(freshKey, makeF0(220.0f));
+    const auto unvoiced = controller.readContentSnapshot(unvoicedKey);
+    const auto fresh = controller.readContentSnapshot(freshKey);
+    passed = check(unvoiced->noteTopologyInitialized && unvoiced->notes.empty()
+                       && fresh->noteTopologyInitialized && !fresh->notes.empty(),
+                   "ready_deliveries_did_not_initialize_each_modification") && passed;
+
+    controller.applyOriginalF0ToModification(unvoicedKey, makeF0(220.0f));
+    controller.applyOriginalF0ToModification(freshKey, makeF0(220.0f));
+    preferences.setAudioEditingScheme(Scheme::CorrectedF0Primary);
+    preferences.setAudioEditingScheme(Scheme::NotesPrimary);
+    passed = check(controller.readContentSnapshot(unvoicedKey)->notesRevision == unvoiced->notesRevision
+                       && controller.readContentSnapshot(freshKey)->notesRevision == fresh->notesRevision
+                       && controller.readContentSnapshot(deletedKey)->notesRevision == deleted->notesRevision,
+                   "initialized_topology_committed_twice") && passed;
+
+    passed = check(controller.generateNotesOnly(deletedKey, {})
+                       && !controller.readContentSnapshot(deletedKey)->notes.empty(),
+                   "explicit_generation_rejected_initialized_empty_content") && passed;
+    return passed;
+}
 }
 
 int runChild(int argc, char** argv)
@@ -485,6 +571,7 @@ int runChild(int argc, char** argv)
 
     HostAudioAccess audioAccess;
     HostArchiving archiving;
+    archiving.archiveId = factory->documentArchiveID;
     ARA::Host::DocumentControllerHostInstance host(&audioAccess, &archiving);
     ARA::ARADocumentProperties documentProperties {};
     documentProperties.structSize = sizeof (documentProperties);
@@ -566,6 +653,25 @@ int runChild(int argc, char** argv)
         instance->documentControllerRef, documentController, source, region);
     documentController.enableAudioSourceSamplesAccess(source, false);
 
+    auto* controller = juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<
+        OpenTune::OpenTuneDocumentController>(
+            ARA::PlugIn::fromRef<ARA::PlugIn::DocumentController>(instance->documentControllerRef));
+    std::vector<ARA::ARAPlaybackRegionRef> topologyRegions;
+    std::vector<juce::ARAPlaybackRegion*> topologyProjections{
+        ARA::PlugIn::fromRef<juce::ARAPlaybackRegion>(region)};
+    documentController.beginEditing();
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        const auto extraRegion = documentController.createPlaybackRegion(extraModifications[i], nullptr, &regionProperties);
+        topologyRegions.push_back(extraRegion);
+        topologyProjections.push_back(ARA::PlugIn::fromRef<juce::ARAPlaybackRegion>(extraRegion));
+    }
+    documentController.endEditing();
+    const bool noteTopologyPassed = runNoteTopologyRegression(*controller, documentController, archiving, topologyProjections);
+
+    documentController.beginEditing();
+    for (auto extraRegion : topologyRegions)
+        documentController.destroyPlaybackRegion(extraRegion);
     documentController.destroyPlaybackRegion (region);
     documentController.destroyAudioModification (modification);
     for (auto* extra : extraModifications)
@@ -587,6 +693,7 @@ int runChild(int argc, char** argv)
                  "audio_model_rebuild_failed"))
         return 1;
 
+    documentController.endEditing();
     std::atomic<bool> dispatcherRan{false};
     if (! check (juce::MessageManager::callAsync ([&dispatcherRan]
         {
@@ -599,18 +706,19 @@ int runChild(int argc, char** argv)
         return 1;
     OpenTuneTest::trace("ARALifecycleContractTests", "message_dispatch_complete");
 
+    documentController.beginEditing();
     documentController.destroyAudioModification (rebuiltModification);
     documentController.destroyAudioSource (rebuiltSource);
+    documentController.endEditing();
     documentController.destroyDocumentController();
     factory->uninitializeARA();
 
     juce::Timer::callPendingTimersSynchronously();
-    if (rendererLifecyclePassed)
-        std::fprintf (stdout, "{\"event\":\"ara_lifecycle_contract\",\"result\":\"success\",\"completionGate\":\"pumped\",\"wrapperGeneration\":\"recreated\"}\n");
-    else
-        std::fprintf (stderr, "{\"event\":\"ara_lifecycle_contract\",\"result\":\"failure\",\"reason\":\"renderer_lifecycle_regression_failed\"}\n");
+    const bool passed = rendererLifecyclePassed && noteTopologyPassed;
+    if (passed)
+        std::fprintf (stdout, "{\"event\":\"ara_lifecycle_contract\",\"result\":\"success\",\"completionGate\":\"pumped\",\"wrapperGeneration\":\"recreated\",\"noteTopology\":\"initialized_once\"}\n");
     OpenTuneTest::trace("ARALifecycleContractTests", "process_end");
-    return rendererLifecyclePassed ? 0 : 1;
+    return passed ? 0 : 1;
 }
 
 int main(int argc, char** argv)

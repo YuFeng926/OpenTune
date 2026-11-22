@@ -23,6 +23,7 @@
 #include "../Services/F0ExtractionService.h"
 #include "../Content/ContentKey.h"
 #include "../Content/OriginalF0FailureEvent.h"
+#include "../Utils/AppPreferences.h"
 #include "../Utils/Note.h"
 #include "../Utils/PlaybackSampleGeometry.h"
 #include "../Utils/PlayHeadState.h"
@@ -37,6 +38,7 @@ class ResamplingManager;
 class NotePitchAudition;
 class NoteAudition;
 struct RenderJob;
+struct NoteGeneratorParams;
 
 /**
  * Document-shared audition routing published for the audio callbacks.
@@ -89,6 +91,10 @@ public:
         const ARA::ARARestoreObjectsFilter* hostFilter,
         int archiveVersion);
 
+    AppPreferences& getAppPreferences() noexcept { return appPreferences_; }
+    juce::ChangeBroadcaster& presentationChanges() noexcept { return presentationChanges_; }
+    bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params);
+
     const ContentRenderService* getContentRenderService() const noexcept;
     std::shared_ptr<ContentRenderService> getContentRenderServiceShared() const noexcept;
     // ARA mutation/render API — processor 通过这些 API 请求 ARA 渲染
@@ -113,7 +119,6 @@ public:
 
     /** 读取 OriginalF0 状态 */
     OriginalF0State readOriginalF0State(ContentKey key) const;
-    std::optional<std::pair<uint64_t, uint64_t>> getAnalysisGeneration(ContentKey key) const;
     std::string readOriginalF0FailureReason(ContentKey key) const;
     std::deque<OriginalF0FailureEvent> takeOriginalF0FailureEvents();
 
@@ -131,11 +136,6 @@ public:
     // 用户 Read 入口：只读取当前内容范围内的首个 PlaybackRegion。
     // archive 恢复且已有有效 F0 的内容由 readRestoredAudio 自动读取，无需此入口。
     int requestReadAudioForPlaybackRegion(juce::ARAPlaybackRegion* playbackRegion);
-    // ARA SDK requires DocumentController operations on main thread.
-    // This method executes synchronously to comply with ARA thread constraints.
-    // Callers should display a loading overlay before calling if UI responsiveness is needed.
-    void requestReadAudioForPlaybackRegionAsync(juce::ARAPlaybackRegion* playbackRegion,
-                                                std::function<void(int)> completionCallback);
     void registerPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void unregisterPlaybackRenderer(OpenTunePlaybackRenderer& renderer);
     void collectPlaybackSnapshots();
@@ -198,6 +198,8 @@ private:
         const std::vector<PlaybackSampleGeometry::SampleSpan>& requestRanges,
         std::shared_ptr<const EditableContentSnapshot> snapshot);
 
+    AppPreferences appPreferences_;
+    juce::ChangeBroadcaster presentationChanges_;
     std::vector<AudioSource> audioSources_;
     std::list<AudioModification> audioModifications_;
     std::vector<PlaybackRegion> playbackRegions_;
@@ -302,6 +304,10 @@ private:
         NativePcmSource nativeSource,
         std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
         int64_t firstCanonicalSample);
+    void audioEditingSchemeChanged(AudioEditingScheme::Scheme scheme);
+    void initializePendingNoteTopologies();
+    bool initializePendingNoteTopology(AudioModification& modification);
+    bool generateNotesOnly(AudioModification& modification, const NoteGeneratorParams& params);
     void readRestoredAudio(const AudioSource* enabledSource);
     bool birthContentForModification(AudioModification& modification, const AudioSource& source,
                                       const OriginalF0InputStamp& currentStamp);

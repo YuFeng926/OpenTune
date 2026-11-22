@@ -195,6 +195,7 @@ constexpr const char* kExternalEditCurveCorrupt = "The returned curve file is co
 
 constexpr const char* kUndo = "Undo";
 constexpr const char* kRedo = "Redo";
+constexpr const char* kRegenerateNotes = "Regenerate Notes";
 
 constexpr const char* kShowWaveform = "Show Waveform";
 constexpr const char* kPianoKeyboard = "Piano Keyboard";
@@ -546,6 +547,7 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kExternalEditCurveCorrupt, "The returned curve file is corrupt. The external edit session stays open — fix or save the curve in the standalone editor and try again.", "返回的曲线文件已损坏。外部编辑会话保持打开，请在独立编辑器中修复或重新保存曲线后重试。", "返されたカーブファイルが破損しています。外部編集セッションは開いたままです。スタンドアロンエディターで曲線を修復または保存し直して、再試行してください。", "Файл кривой повреждён. Сессия внешнего редактирования остаётся открытой — исправьте или сохраните кривую заново в автономном редакторе и повторите попытку.", "El archivo de curva devuelto está dañado. La sesión de edición externa permanece abierta: corrija o vuelva a guardar la curva en el editor independiente e inténtelo de nuevo." },
         { Keys::kUndo, "Undo", "撤销", "元に戻す", "Отменить", "Deshacer" },
         { Keys::kRedo, "Redo", "重做", "やり直す", "Повтор", "Rehacer" },
+        { Keys::kRegenerateNotes, "Regenerate Notes", "重新生成音符", "ノートを再生成", "Создать ноты заново", "Regenerar notas" },
         
         { Keys::kShowWaveform, "Show Waveform", "显示波形", "波形を表示", "Волновая форма", "Ver forma de onda" },
         { Keys::kPianoKeyboard, "Piano Keyboard", "钢琴键盘", "ピアノキーボード", "Клавиатура пианино", "Teclado de piano" },

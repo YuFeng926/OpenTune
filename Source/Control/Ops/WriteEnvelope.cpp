@@ -101,12 +101,6 @@ bool controlProjectDirty(ControlOpContext& context)
     return info && info->dirty;
 }
 
-void controlMarkDirty(ControlOpContext& context)
-{
-    if (auto* bridge = context.bridge())
-        bridge->markDirty();
-}
-
 bool controlReportsCapability(ControlOpContext& context, std::string_view capability)
 {
     const auto& capabilities = context.facts().capabilities;

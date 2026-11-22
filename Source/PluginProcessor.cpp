@@ -550,7 +550,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     auto f0SvcOwner = std::make_unique<F0ExtractionService>(
         1, 100, [] { return ProcessF0Runtime::getInstance().getF0Service(); });
     auto refSvc = std::make_unique<ReferenceAnalysisService>();
-    auto appPreferences = std::make_unique<AppPreferences>();
 
     // 资源所有权：ARA 绑定实例的渲染全部走 DC 自己的 CRS（DC 构造时安装自己的
     // ExecutionLease），processor 不得再持有 local CRS / CaptureSession，避免出现
@@ -561,6 +560,7 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
     const bool araBound = false;
 #endif
 
+    auto appPreferences = araBound ? std::unique_ptr<AppPreferences>{} : std::make_unique<AppPreferences>();
     std::shared_ptr<ContentRenderService> crs;
 #if JucePlugin_Build_Standalone
     auto srcStore = std::make_shared<SourceStore>();
@@ -797,19 +797,29 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
 
         bool generateNotesOnly(ContentKey key, const NoteGeneratorParams& params) override
         {
+#if JucePlugin_Enable_ARA
+            if (key.domainKind == DomainKind::ARAAudioModification) {
+                auto* dc = proc_.getDocumentController();
+                if (dc == nullptr || !dc->generateNotesOnly(key, params))
+                    return false;
+                proc_.getUndoManager().clearRedo();
+                return true;
+            }
+#endif
             const auto snapshot = proc_.getContentSnapshot(key);
             if (snapshot == nullptr)
                 return false;
             auto patch = planGenerateNotesOnly(*snapshot, params);
-            if (!patch || !commitGeneratedNotesOnly(key, std::move(*patch)))
-                return false;
-            return true;
+            return patch && commitGeneratedNotesOnly(key, std::move(*patch));
         }
 
         bool commitGeneratedNotesOnly(ContentKey key, ContentNoteRangePatch patch) override
         {
-            if (proc_.commitContentNoteTopologyPatch(key, std::move(patch)) == nullptr)
+            const auto snapshot = proc_.getContentSnapshot(key);
+            if (snapshot == nullptr || !proc_.replaceContentNotesForFullMutation(
+                    key, mergeNotesRange(snapshot->notes, patch.affectedRange, patch.afterNotesInRange)))
                 return false;
+            proc_.onContentFullMutationCompleted(key);
             proc_.getUndoManager().clearRedo();
             proc_.notifyContentEditCompleted(key);
             return true;
@@ -1165,36 +1175,6 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             std::sort(merged.begin(), merged.end(),
                       [](const Note& a, const Note& b) { return a.startTime < b.startTime; });
             return normalizeStoredNotes(std::move(merged));
-        }
-
-        std::optional<ContentNoteRangePatch> planGenerateNotesOnly(
-            const EditableContentSnapshot& snapshot,
-            const NoteGeneratorParams& params) const override
-        {
-            if (snapshot.pitchCurve == nullptr)
-                return std::nullopt;
-            const auto& curve = *snapshot.pitchCurve;
-            const auto& f0 = curve.getOriginalF0();
-            const int count = static_cast<int>(f0.size());
-            if (count == 0)
-                return std::nullopt;
-            auto generated = LegacyNoteGenerator::generate(
-                f0.data(), count, nullptr, 0, count, curve.getHopSize(), curve.getSampleRate(), params);
-            if (!LegacyNoteGenerator::validate(generated))
-                return std::nullopt;
-            for (auto& note : generated)
-                if (note.originalPitch > 0.0f)
-                    note.pitch = note.originalPitch;
-
-            const F0Timeline timeline{curve.getHopSize(), curve.getSampleRate(), count};
-            ContentNoteRangePatch patch;
-            patch.affectedRange = {0.0, timeline.timeAtFrame(count)};
-            for (const auto& note : generated) {
-                patch.affectedRange.startSeconds = std::min(patch.affectedRange.startSeconds, note.startTime);
-                patch.affectedRange.endSeconds = std::max(patch.affectedRange.endSeconds, note.endTime);
-            }
-            patch.afterNotesInRange = std::move(generated);
-            return patch;
         }
 
         bool setTimeGrid(ContentKey key,
@@ -4037,7 +4017,7 @@ void OpenTuneAudioProcessor::mixAuditions(juce::AudioBuffer<float>& buffer, int 
 void OpenTuneAudioProcessor::auditionNotePitch(ContentKey key, double startSeconds, double endSeconds, float targetHz)
 {
     // UI 线程入口：不投递 render job，不触碰 RenderCache，只读取已发布的 playback read source。
-    if (!appPreferences_->getNoteTransposePreviewEnabled() || !key.isValid() || targetHz <= 0.0f) {
+    if (!getAppPreferences().getNoteTransposePreviewEnabled() || !key.isValid() || targetHz <= 0.0f) {
         stopNotePitchAudition();
         return;
     }
@@ -4460,6 +4440,20 @@ void OpenTuneAudioProcessor::setUiZoomPercent(int percent) noexcept {
 
 int OpenTuneAudioProcessor::getUiZoomPercent() const noexcept {
     return uiZoomPercent_.load(std::memory_order_relaxed);
+}
+
+AppPreferences& OpenTuneAudioProcessor::getAppPreferences() noexcept
+{
+#if JucePlugin_Enable_ARA
+    if (auto* dc = getDocumentController())
+        return dc->getAppPreferences();
+#endif
+    return *appPreferences_;
+}
+
+const AppPreferences& OpenTuneAudioProcessor::getAppPreferences() const noexcept
+{
+    return const_cast<OpenTuneAudioProcessor*>(this)->getAppPreferences();
 }
 
 SnapSettings OpenTuneAudioProcessor::getSnapSettings() const {
@@ -4905,26 +4899,22 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
             processor->updateContentKeyFromOriginalF0(capturedRequest.contentKey);
 
-            if (capturedRequest.generateNotesWholeContentOnReady) {
-                // OpenDyne 导入：仅生成音符，不写修正曲线（还原 Melodyne 初始状态）。
-                // 不吸附、不请求 render；成功回调（onNotesGenerated）推进调用方 dirty。
-                if (processor->generateNotesOnlyByContentKey(
-                        capturedRequest.contentKey,
-                        capturedRequest.noteGenerationParams)) {
-                    if (capturedRequest.onNotesGenerated) {
-                        capturedRequest.onNotesGenerated();
-                    }
-                } else {
-                    AppLogger::log("ContentRefresh: note generation failed contentKey objectId="
-                        + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
-                }
-            }
-
             processor->f0RequestTokens_.erase(capturedRequest.contentKey);
             if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
                 processor->ensureTimeToolAnchorSeed(capturedRequest.contentKey);
 
-            // F0 就绪后请求完整渲染：此前因无 F0 而 Blank 的 chunk 需重新渲染
+            if (capturedRequest.generateNotesWholeContentOnReady) {
+                if (processor->contentCommands_->generateNotesOnly(capturedRequest.contentKey,
+                                                                   capturedRequest.noteGenerationParams)) {
+                    if (capturedRequest.onNotesGenerated)
+                        capturedRequest.onNotesGenerated();
+                    return;
+                }
+                AppLogger::log("ContentRefresh: note generation failed contentKey objectId="
+                    + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
+            }
+
+            // With no notes commit, the Ready F0 still makes blank chunks renderable.
             processor->requestFullContentRender(capturedRequest.contentKey);
         },
         [processor, gate, capturedRequest, capturedContentRevision, requestToken]
@@ -6752,16 +6742,12 @@ PitchShiftEditAction* OpenTuneAudioProcessor::commitPitchShiftEdit(
     return actionPtr;
 }
 
-bool OpenTuneAudioProcessor::generateNotesOnlyByContentKey(
-    ContentKey key, const NoteGeneratorParams& params)
+void OpenTuneAudioProcessor::initializeLocalNoteTopology(ContentKey key, const NoteGeneratorParams& params)
 {
-    auto snap = getContentSnapshot(key);
-    if (snap == nullptr || contentCommands_ == nullptr)
-        return false;
-    auto patch = contentCommands_->planGenerateNotesOnly(*snap, params);
-    if (!patch)
-        return false;
-    return commitContentNoteTopologyPatch(key, std::move(*patch)) != nullptr;
+    const auto snapshot = getContentSnapshot(key);
+    if (snapshot != nullptr)
+        if (auto patch = ContentEditCommands::planInitialNotesOnly(*snapshot, params))
+            contentCommands_->commitGeneratedNotesOnly(key, std::move(*patch));
 }
 
 void OpenTuneAudioProcessor::notifyContentEditCompleted(ContentKey key)

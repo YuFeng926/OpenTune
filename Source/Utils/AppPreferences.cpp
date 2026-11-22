@@ -698,8 +698,10 @@ AppPreferences::AppPreferences()
 {
 }
 
-AppPreferences::AppPreferences(const StorageOptions& storageOptions)
+AppPreferences::AppPreferences(const StorageOptions& storageOptions,
+                               AudioEditingSchemeChanged onAudioEditingSchemeChanged)
     : storageOptions_(storageOptions)
+    , onAudioEditingSchemeChanged_(std::move(onAudioEditingSchemeChanged))
 {
     initialiseStorage();
     load();
@@ -785,9 +787,21 @@ void AppPreferences::setTheme(ThemeId theme)
 
 void AppPreferences::setAudioEditingScheme(AudioEditingScheme::Scheme scheme)
 {
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        if (state_.shared.audioEditingScheme == scheme)
+            return;
+        state_.shared.audioEditingScheme = scheme;
+        saveLocked();
+    }
+    if (onAudioEditingSchemeChanged_)
+        onAudioEditingSchemeChanged_(scheme);
+}
+
+AudioEditingScheme::Scheme AppPreferences::getAudioEditingScheme() const
+{
     const std::lock_guard<std::mutex> lock(mutex_);
-    state_.shared.audioEditingScheme = scheme;
-    saveLocked();
+    return state_.shared.audioEditingScheme;
 }
 
 void AppPreferences::setNoteNameMode(NoteNameMode noteNameMode)
