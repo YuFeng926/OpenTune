@@ -1,11 +1,16 @@
-﻿; OpenTune Installer for Windows
+; OpenTune Installer for Windows
 ; Inno Setup 6 Script
 ; Build: ISCC.exe OpenTune_Installer.iss
 
 #define MyAppName "OpenTune"
 #define MyAppShortName "OpenTune"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.8.2"
+  #define MyAppVersion "1.8.2-beta"
+#endif
+; 数值核心版本：VERSION 资源、VersionInfoVersion 与装机校验基准必须纯数字，
+; 与 CMake project() 的 VERSION 一致。
+#ifndef MyAppNumericVersion
+  #define MyAppNumericVersion "1.8.2"
 #endif
 #define MyAppPublisher "DAYA"
 #define MyAppURL "https://github.com/YuFeng926/OpenTune"
@@ -26,7 +31,7 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 AppCopyright=Copyright (C) DAYA and contributors
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppNumericVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Installer
 DefaultDirName={commonpf}\{#MyAppName}
@@ -255,12 +260,12 @@ begin
       FailureDetails := FailureDetails + #13#10 + 'Cannot read version: ' + FilePath;
       Log('Standalone install validation: cannot read version from ' + FilePath);
     end
-    else if not VersionMatchesExpected(InstalledVersion, '{#MyAppVersion}') then
+    else if not VersionMatchesExpected(InstalledVersion, '{#MyAppNumericVersion}') then
     begin
       Result := False;
       FailureDetails := FailureDetails + #13#10 +
-        'Version mismatch: expected {#MyAppVersion}, found ' + InstalledVersion;
-      Log('Standalone install validation: expected version {#MyAppVersion}, found ' + InstalledVersion);
+        'Version mismatch: expected {#MyAppNumericVersion}, found ' + InstalledVersion;
+      Log('Standalone install validation: expected version {#MyAppNumericVersion}, found ' + InstalledVersion);
     end
     else
       Log('Standalone install validation: OpenTune.exe version ' + InstalledVersion);

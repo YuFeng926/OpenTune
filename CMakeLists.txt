@@ -47,6 +47,10 @@ endif()
 # ==============================================================================
 project(OpenTune VERSION 1.8.2 LANGUAGES CXX C)
 
+# 产品版本串：上面的数值核心供给版本码与资源（必须纯数字），产品串携带
+# 预发布限定符，用于 Control API 自报、启动日志、工程持久化与安装包标识。
+set(OPENTUNE_PRODUCT_VERSION "1.8.2-beta")
+
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -1252,9 +1256,13 @@ foreach(_opentune_target IN LISTS OPENTUNE_SHARED_CODE_TARGETS)
             JUCE_STRICT_REFCOUNTEDPOINTER=1
             JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
 
+        PUBLIC
+            # 自报产品版本：Control API appVersion、工程持久化头、启动日志、
+            # Standalone 应用身份。PUBLIC 使链接共享代码的 exe 目标同样可见。
+            OPENTUNE_VERSION="${OPENTUNE_PRODUCT_VERSION}"
+
         PRIVATE
             # OpenTune specific
-            OPENTUNE_VERSION="${PROJECT_VERSION}"
             OPENTUNE_D3D12_AGILITY_SDK_VERSION=${OPENTUNE_D3D12_SDK_VERSION}
             ORT_API_MANUAL_INIT
             # Both products decode the embedded MP3 piano samples.
