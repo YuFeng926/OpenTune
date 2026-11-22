@@ -22,8 +22,6 @@ namespace OpenTune {
  */
 class ResamplingManager {
 public:
-    static constexpr int kCacheAlgorithmVersion = 1;
-
     ResamplingManager();
     ~ResamplingManager();
 

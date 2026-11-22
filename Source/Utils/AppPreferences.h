@@ -70,7 +70,6 @@ struct SharedPreferencesState {
     KeyShortcutConfig::KeyShortcutSettings shortcuts = KeyShortcutConfig::KeyShortcutSettings::getDefault();
     bool suppressEqRemoveConfirmation = false;  ///< 抑制 EQ 工具删除确认弹窗
     bool lightPitchCorrectionEnabled = true;  ///< 轻量修音开关（AutoTune 周期重采样，默认开）
-    bool araF0AnalysisCacheEnabled = true;
     bool onboardingShown = false;
     // 首次运行的演示工程已经自动打开过。和 onboardingShown 放在同一份偏好里，
     // 避免只靠旁路标记文件时，中途退出导致下次启动再次自动打开。
@@ -105,9 +104,6 @@ public:
     AppPreferences();
     explicit AppPreferences(const StorageOptions& storageOptions);
 
-    static bool readAraF0AnalysisCacheEnabledFromDisk();
-    static juce::File getStorageDirectory();
-
     AppPreferencesState getState() const;
 
     void load();
@@ -141,7 +137,6 @@ public:
     TrackColorMode getTrackColorMode() const;
 
     void setLightPitchCorrectionEnabled(bool enabled);
-    void setAraF0AnalysisCacheEnabled(bool enabled);
     void setNoteTransposePreviewEnabled(bool enabled);
     bool getNoteTransposePreviewEnabled() const;
 
@@ -184,7 +179,6 @@ struct ProcessingPreferencePatch
     std::optional<float> tuningHz;
     std::optional<AudioEditingScheme::Scheme> audioEditingScheme;
     std::optional<bool> lightPitchCorrectionEnabled;
-    std::optional<bool> araF0AnalysisCacheEnabled;
     std::optional<bool> experimentalFeaturesEnabled;
     std::optional<RenderingPriority> renderingPriority;
     std::optional<F0ModelType> f0ModelType;
@@ -196,7 +190,6 @@ struct ProcessingPreferenceState
     float tuningHz = TuningConfig::kDefaultTuningHz;
     AudioEditingScheme::Scheme audioEditingScheme = AudioEditingScheme::Scheme::CorrectedF0Primary;
     bool lightPitchCorrectionEnabled = true;
-    bool araF0AnalysisCacheEnabled = true;
     bool experimentalFeaturesEnabled = false;
     RenderingPriority renderingPriority = RenderingPriority::GpuFirst;
     F0ModelType f0ModelType = F0ModelType::FCPE;
@@ -208,7 +201,6 @@ struct ProcessingPreferenceDelta
     bool tuning = false;
     bool scheme = false;
     bool hybrid = false;
-    bool araF0AnalysisCache = false;
     bool experimental = false;
     bool priority = false;
     bool f0 = false;

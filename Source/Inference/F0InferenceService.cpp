@@ -67,7 +67,7 @@ public:
         std::function<void(float)> progressCallback,
         std::function<void(const std::vector<float>&, int)> partialCallback,
         const F0ExtractionConfigSnapshot* requestedConfig = nullptr,
-        const std::string* requestedModelPath = nullptr,
+        const F0ModelVersion* requestedModel = nullptr,
         int* actualHopSize = nullptr,
         int* actualSampleRate = nullptr,
         std::string* actualBackend = nullptr)
@@ -160,10 +160,10 @@ public:
                 ? config.backend : AccelerationDetector::getInstance().getSelection();
             if (requestedConfig == nullptr && cpuFallbackSticky_.load(std::memory_order_acquire))
                 backend = {};
-            const auto modelPath = requestedModelPath != nullptr
-                ? *requestedModelPath : ModelFactory::getModelPath(config.modelType, config.modelDirectory);
+            const auto model = requestedModel != nullptr
+                ? *requestedModel : ModelFactory::resolveF0ModelVersion(config.modelType, config.modelDirectory);
             auto extractorResult = ModelFactory::createF0Extractor(
-                config.modelType, modelPath, *env_, resamplingManager_, backend);
+                config.modelType, model, *env_, resamplingManager_, backend);
 
             if (!extractorResult) {
                 AppLogger::error("[F0InferenceService] Failed to create F0 extractor: "
@@ -446,13 +446,13 @@ Result<std::vector<float>> F0InferenceService::extractF0ForAnalysis(
     int sampleRate,
     std::shared_ptr<F0RunOwnerState> ownerState,
     const F0ExtractionConfigSnapshot& config,
-    const std::string& absoluteModelPath,
+    const F0ModelVersion& model,
     int& actualHopSize,
     int& actualSampleRate,
     std::string& actualBackend)
 {
     return pImpl_->extractF0(audio, length, sampleRate, std::move(ownerState), {}, {},
-                             &config, &absoluteModelPath, &actualHopSize, &actualSampleRate, &actualBackend);
+                             &config, &model, &actualHopSize, &actualSampleRate, &actualBackend);
 }
 
 void F0InferenceService::terminateActiveRun(const std::shared_ptr<F0RunOwnerState>& ownerState) {

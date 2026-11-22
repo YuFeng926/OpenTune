@@ -297,9 +297,7 @@ private:
         std::shared_ptr<const juce::AudioBuffer<float>> canonicalBuffer,
         int64_t firstCanonicalSample);
     void readRestoredAudio(const AudioSource* enabledSource);
-    bool birthContentForModification(AudioModification& modification,
-                                     const AudioSource& source,
-                                     bool allowCachedAnalysis);
+    bool birthContentForModification(AudioModification& modification, const AudioSource& source);
     // Reuses a full native PCM already published for the same source identity and
     // sample content generation. Returns null when a fresh read is required.
     std::shared_ptr<const juce::AudioBuffer<float>> findReusableNativePcm(
@@ -309,11 +307,12 @@ private:
         int sourceChannelCount,
         uint64_t sampleGeneration,
         int64_t sourceSampleCount) const;
+    void abortSourceF0(const AudioSource& source, AraF0Abort reason);
     void revokeDocumentF0();
     void revokeF0Reception(AudioModification& modification);
     void removeCRSArtifactsForModification(const AudioModification& modification);
     void scheduleAsyncF0Extraction(AudioModification& modification, AraF0Pcm pcm,
-                                   const OriginalF0InputStamp& stamp, bool allowCachedAnalysis);
+                                   const OriginalF0InputStamp& stamp);
     void commitF0Completion(const AraF0Target& target, const AraF0Result& result);
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;

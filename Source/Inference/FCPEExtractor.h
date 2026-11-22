@@ -15,8 +15,6 @@ class ResamplingManager;
 
 class FCPEExtractor : public IF0Extractor {
 public:
-    static constexpr int kCacheAlgorithmVersion = 1;
-
     FCPEExtractor(
         std::unique_ptr<Ort::Session> session,
         std::shared_ptr<ResamplingManager> resampler,

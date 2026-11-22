@@ -5,12 +5,7 @@
 #include "../Utils/AppLogger.h"
 #include "../Utils/ModelPathResolver.h"
 #include "ImportedClipF0Extraction.h"
-#if JucePlugin_Enable_ARA
-#include "F0AnalysisCache.h"
-#include "../DSP/ResamplingManager.h"
-#include "../Inference/FCPEExtractor.h"
-#include "../Utils/AppPreferences.h"
-#endif
+#include <juce_cryptography/juce_cryptography.h>
 #include <algorithm>
 #include <exception>
 #include <limits>
@@ -26,22 +21,19 @@ F0ExtractionService::F0ExtractionService(int workerCount, size_t maxQueueSize,
     state_->maxQueueSize_ = maxQueueSize;
     state_->processorRunOwner_ = std::make_shared<F0RunOwnerState>();
     state_->dispatcherFailureMailbox_ = std::make_shared<SharedState::DispatcherFailureMailbox>();
-    startWorkers(workerCount);
-}
-
-F0ExtractionService::F0ExtractionService(int workerCount, size_t maxQueueSize)
-    : state_(std::make_shared<SharedState>())
-{
-    state_->maxQueueSize_ = maxQueueSize;
-    startWorkers(workerCount);
-}
-
-void F0ExtractionService::startWorkers(int workerCount)
-{
     const int count = std::max(1, workerCount);
     workers_.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i)
-        workers_.emplace_back([state = state_] { workerLoop(state); });
+        workers_.emplace_back([state = state_] { processorWorkerLoop(state); });
+}
+
+F0ExtractionService::F0ExtractionService(size_t maxQueueSize)
+    : state_(std::make_shared<SharedState>())
+{
+    state_->maxQueueSize_ = maxQueueSize;
+    workers_.reserve(2);
+    workers_.emplace_back([state = state_] { prepareAraTasks(state); });
+    workers_.emplace_back([state = state_] { executeAraTasks(state); });
 }
 
 F0ExtractionService::~F0ExtractionService()
@@ -66,7 +58,7 @@ void F0ExtractionService::shutdown()
 
         std::deque<Job> discardedTasks;
         decltype(state.activeEntries_) discardedProcessorEntries;
-        std::vector<F0TaskId> araTasks;
+        std::set<F0TaskId> araTasks;
         {
             std::lock_guard<std::mutex> lock(state.entriesMutex_);
             state.shutdownStarted_ = true;
@@ -75,11 +67,10 @@ void F0ExtractionService::shutdown()
             if (mailbox)
                 state.processorRunOwner_->closed.store(true, std::memory_order_release);
             for (const auto& entry : state.araEntries_)
-                araTasks.push_back(entry.first);
+                araTasks.insert(entry.first);
         }
 
-        for (auto id : araTasks)
-            abortTask(id, AraF0Abort::Orphaned);
+        abortTasks(araTasks, AraF0Abort::Orphaned);
         if (f0ServiceResolver_) {
             if (auto svc = f0ServiceResolver_())
                 svc->terminateActiveRun(state.processorRunOwner_);
@@ -186,11 +177,13 @@ void F0ExtractionService::cancel(F0RequestKey requestKey)
 
 bool AraF0ConfigTag::operator==(const AraF0ConfigTag& rhs) const noexcept
 {
-    return selectionRevision == rhs.selectionRevision
-        && absoluteModelPath == rhs.absoluteModelPath
-        && modelBytes == rhs.modelBytes
-        && modelWriteTime == rhs.modelWriteTime
-        && allowCachedAnalysis == rhs.allowCachedAnalysis;
+    const auto& a = extraction;
+    const auto& b = rhs.extraction;
+    // Initial automatic detection preserves its policy revision across cold startup.
+    return model == rhs.model && sourceSampleRate == rhs.sourceSampleRate
+        && a.selectionRevision == b.selectionRevision && a.modelType == b.modelType
+        && a.confidence == b.confidence && a.f0Min == b.f0Min && a.f0Max == b.f0Max
+        && a.backend.revision == b.backend.revision;
 }
 
 F0TaskId AraF0DocumentFlights::taskForReceiver(uint64_t wrapperGeneration) const
@@ -204,7 +197,8 @@ F0TaskId AraF0DocumentFlights::taskForReceiver(uint64_t wrapperGeneration) const
 AraF0DocumentFlights::Receivers AraF0DocumentFlights::take(F0TaskId taskId)
 {
     auto entry = byTaskId.extract(taskId);
-    jassert(!entry.empty());
+    if (entry.empty()) // A previously invoked document sink can revoke this flight during delivery.
+        return {};
     const auto key = std::find_if(byLocalKey.begin(), byLocalKey.end(),
         [taskId](const auto& item) { return item.second == taskId; });
     jassert(key != byLocalKey.end());
@@ -212,7 +206,7 @@ AraF0DocumentFlights::Receivers AraF0DocumentFlights::take(F0TaskId taskId)
     return std::move(entry.mapped());
 }
 
-AraF0ConfigTag F0ExtractionService::snapshotAraConfig(bool allowCachedAnalysis)
+AraF0ConfigTag F0ExtractionService::snapshotAraConfig(double sourceSampleRate)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     auto& runtime = ProcessF0Runtime::getInstance();
@@ -223,11 +217,8 @@ AraF0ConfigTag F0ExtractionService::snapshotAraConfig(bool allowCachedAnalysis)
         config.modelDirectory = ModelPathResolver::getModelsDirectory();
         config.backend = AccelerationDetector::getInstance().getSelection();
     }
-    const auto path = ModelFactory::getModelPath(config.modelType, config.modelDirectory);
-    const auto file = juce::File::getCurrentWorkingDirectory().getChildFile(path);
-    return {config.selectionRevision + config.backend.revision,
-            file.getFullPathName().toStdString(), file.getSize(), file.getLastModificationTime(),
-            std::move(config), allowCachedAnalysis};
+    auto model = ModelFactory::resolveF0ModelVersion(config.modelType, config.modelDirectory);
+    return {std::move(model), std::move(config), sourceSampleRate};
 }
 
 AraF0Submission F0ExtractionService::submit(AraF0DocumentFlights& flights,
@@ -248,16 +239,19 @@ AraF0Submission F0ExtractionService::submit(AraF0DocumentFlights& flights,
         [&key](const auto& item) { return item.first == key; });
     if (local != flights.byLocalKey.end()) {
         const auto id = local->second;
-        if (isActive(id)) {
-            flights.byTaskId.at(id).insert_or_assign(receiver.wrapperGeneration, std::move(receiver));
-            return {AraF0Admission::Attached, id};
+        {
+            std::lock_guard<std::mutex> lock(state_->entriesMutex_);
+            const auto entry = state_->araEntries_.find(id);
+            if (!state_->shutdownStarted_ && entry != state_->araEntries_.end()) {
+                flights.byTaskId.at(id).insert_or_assign(receiver.wrapperGeneration, std::move(receiver));
+                entry->second.hasReceivers = true;
+                return {AraF0Admission::Attached, id};
+            }
         }
         // A dispatcher rejection releases the service entry without touching the document.
         flights.take(id);
     }
 
-    auto owner = std::make_shared<F0RunOwnerState>();
-    AraTask task{{}, std::move(pcm), key.config, owner};
     F0TaskId id;
     {
         std::lock_guard<std::mutex> lock(state_->entriesMutex_);
@@ -268,13 +262,14 @@ AraF0Submission F0ExtractionService::submit(AraF0DocumentFlights& flights,
 
         id = {state_->tokenCounter_++};
         jassert(id.value != 0);
-        task.id = id;
-        state_->araEntries_.emplace(id, AraEntry{owner, flights.sink, nullptr, {}});
+        auto task = std::make_shared<const AraTask>(AraTask{id, std::move(pcm), key.config,
+            std::make_shared<F0RunOwnerState>()});
+        state_->araEntries_.emplace(id, AraEntry{task, flights.sink, {}, nullptr});
         state_->queue_.emplace_back(std::move(task));
     }
     flights.byLocalKey.emplace_back(key, id);
     flights.byTaskId[id].emplace(receiver.wrapperGeneration, std::move(receiver));
-    state_->queueCv_.notify_one();
+    state_->queueCv_.notify_all();
     return {AraF0Admission::Accepted, id};
 }
 
@@ -286,32 +281,95 @@ bool F0ExtractionService::isActive(F0TaskId taskId) const
 
 void F0ExtractionService::abortTask(F0TaskId taskId, AraF0Abort reason)
 {
-    decltype(state_->araEntries_)::node_type entry;
-    std::optional<AraTask> discarded;
+    abortTasks({taskId}, reason);
+}
+
+void F0ExtractionService::abortTasks(const std::set<F0TaskId>& taskIds, AraF0Abort reason)
+{
+    if (taskIds.empty())
+        return;
+
+    std::vector<AraEntry> revoked;
+    std::vector<AraGroups::node_type> discardedGroups;
+    std::vector<std::unique_ptr<const AraF0Result>> discardedResults;
+    bool promoted = false;
     {
         std::lock_guard<std::mutex> lock(state_->entriesMutex_);
-        entry = state_->araEntries_.extract(taskId);
-        if (entry.empty())
-            return;
-        entry.mapped().owner->closed.store(true, std::memory_order_release);
-        const auto queued = std::find_if(state_->queue_.begin(), state_->queue_.end(),
-            [taskId](const Job& job) {
-                const auto* task = std::get_if<AraTask>(&job);
-                return task != nullptr && task->id == taskId;
+        auto& entries = state_->araEntries_;
+        auto& queue = state_->queue_;
+        const auto close = [&](F0TaskId id) {
+            auto& origin = revoked.emplace_back(std::move(entries.extract(id).mapped()));
+            origin.task->owner->closed.store(true, std::memory_order_release);
+        };
+        // Mark the complete revoked scope before looking for a successor.
+        for (auto id : taskIds)
+            if (const auto entry = entries.find(id); entry != entries.end())
+                entry->second.hasReceivers = false;
+
+        for (auto id : taskIds) {
+            const auto entry = entries.find(id);
+            if (entry == entries.end())
+                continue;
+            if (!entry->second.group) {
+                close(id);
+                continue;
+            }
+
+            const auto groupIt = *entry->second.group;
+            auto& group = groupIt->second;
+            if (group.phase == AraGroupPhase::Delivering) {
+                group.origins.erase(id);
+                close(id);
+                continue;
+            }
+
+            const auto next = std::find_if(group.origins.begin(), group.origins.end(), [&](F0TaskId candidate) {
+                return entries.at(candidate).hasReceivers;
             });
-        if (queued != state_->queue_.end()) {
-            discarded.emplace(std::move(std::get<AraTask>(*queued)));
-            state_->queue_.erase(queued);
+            if (next == group.origins.end()) {
+                for (auto origin : group.origins)
+                    close(origin);
+                discardedGroups.push_back(state_->araGroups_.extract(groupIt));
+                continue;
+            }
+
+            // Removing the owner's last local receiver leaves its PCM lease serving the other origins.
+            if (group.owner == id && reason == AraF0Abort::Orphaned && !state_->shutdownStarted_)
+                continue;
+
+            group.origins.erase(id);
+            close(id);
+            if (!(group.owner == id) || state_->shutdownStarted_)
+                continue;
+
+            group.owner = *next;
+            discardedResults.push_back(std::move(group.result));
+            if (group.phase == AraGroupPhase::Queued) {
+                const auto slot = std::find_if(queue.begin(), queue.end(), [id](const Job& job) {
+                    return std::get<AraJob>(job)->id == id;
+                });
+                *slot = entries.at(*next).task;
+            } else {
+                // Reuse the executing group's admission on handoff.
+                group.phase = AraGroupPhase::Resuming;
+            }
+            promoted = true;
         }
+        queue.erase(std::remove_if(queue.begin(), queue.end(), [&entries](const Job& job) {
+            return entries.find(std::get<AraJob>(job)->id) == entries.end();
+        }), queue.end());
     }
 
-    // Registration publishes the exact service for this origin. Cold startup
-    // has no registration yet, so a revoke never waits on runtime initialization.
-    if (auto* inference = entry.mapped().inference)
-        inference->terminateActiveRun(entry.mapped().owner);
+    // The closed state rejects a late lease. A registered lease is terminated outside the queue lock.
     static constexpr const char* reasons[] = {"SamplesDisabled", "SourceUndo", "SamplesChanged", "Orphaned"};
-    AppLogger::logNoThrow("ARA-F0: task=" + juce::String(static_cast<juce::uint64>(taskId.value))
-        + " abort_requested reason=" + reasons[static_cast<size_t>(reason)]);
+    for (const auto& origin : revoked) {
+        if (auto* inference = origin.inference)
+            inference->terminateActiveRun(origin.task->owner);
+        AppLogger::logNoThrow("ARA-F0: task=" + juce::String(static_cast<juce::uint64>(origin.task->id.value))
+            + " abort_requested reason=" + reasons[static_cast<size_t>(reason)]);
+    }
+    if (promoted)
+        state_->queueCv_.notify_all();
 }
 
 void F0ExtractionService::revokeReceiver(AraF0DocumentFlights& flights, uint64_t wrapperGeneration)
@@ -323,32 +381,29 @@ void F0ExtractionService::revokeReceiver(AraF0DocumentFlights& flights, uint64_t
     auto& receivers = flights.byTaskId.at(id);
     receivers.erase(wrapperGeneration);
     if (receivers.empty()) {
-        flights.take(id);
         abortTask(id, AraF0Abort::Orphaned);
+        // Keep the source lookup until an orphaned owner finishes serving its peers.
+        if (!isActive(id))
+            flights.take(id);
     }
 }
 
-void F0ExtractionService::workerLoop(std::shared_ptr<SharedState> state)
+void F0ExtractionService::processorWorkerLoop(const std::shared_ptr<SharedState>& state)
 {
     for (;;) {
-        Job job;
+        Task task;
         {
             std::unique_lock<std::mutex> lock(state->entriesMutex_);
             state->queueCv_.wait(lock, [&] { return state->shutdownStarted_ || !state->queue_.empty(); });
             if (state->shutdownStarted_)
                 return;
-            job = std::move(state->queue_.front());
+            task = std::move(std::get<Task>(state->queue_.front()));
             state->queue_.pop_front();
-            if (auto* processorTask = std::get_if<Task>(&job)) {
-                const auto it = state->activeEntries_.find(processorTask->requestKey.contentKey);
-                if (it == state->activeEntries_.end() || it->second != processorTask->token)
-                    continue;
-            }
+            const auto it = state->activeEntries_.find(task.requestKey.contentKey);
+            if (it == state->activeEntries_.end() || it->second != task.token)
+                continue;
         }
-        if (auto* processorTask = std::get_if<Task>(&job))
-            runProcessorTask(*state, std::move(*processorTask));
-        else
-            runAraTask(state, std::move(std::get<AraTask>(job)));
+        runProcessorTask(*state, std::move(task));
     }
 }
 
@@ -391,132 +446,225 @@ void F0ExtractionService::runProcessorTask(SharedState& state, Task task)
     }
 }
 
-void F0ExtractionService::runAraTask(const std::shared_ptr<SharedState>& state, AraTask task)
+void F0ExtractionService::prepareAraTasks(const std::shared_ptr<SharedState>& state)
 {
-    auto result = std::make_shared<AraF0Result>();
-    try {
-        executeAraTask(state, task, *result);
-    } catch (const std::exception& e) {
-        result->errorMessage = e.what();
+    for (;;) {
+        AraJob task;
+        {
+            std::unique_lock<std::mutex> lock(state->entriesMutex_);
+            auto next = state->queue_.end();
+            state->queueCv_.wait(lock, [&] {
+                if (state->shutdownStarted_)
+                    return true;
+                // The ready owners form a prefix of the same admission queue.
+                next = std::find_if(state->queue_.begin(), state->queue_.end(), [&](const Job& job) {
+                    return !state->araEntries_.at(std::get<AraJob>(job)->id).group;
+                });
+                return next != state->queue_.end();
+            });
+            if (state->shutdownStarted_)
+                return;
+            task = std::get<AraJob>(*next);
+        }
+
+        auto& runtime = ProcessF0Runtime::getInstance();
+        auto frozen = task->config;
+        auto& config = frozen.extraction;
+        std::string initializationError;
+        const bool ready = runtime.isReady()
+            || runtime.initialize(config.modelDirectory, config.modelType, &initializationError);
+        const auto inference = ready ? runtime.getF0Service() : nullptr;
+        if (task->owner->closed.load(std::memory_order_acquire))
+            continue;
+        if (ready && !config.backend.detected)
+            config.backend = AccelerationDetector::getInstance().resolveAutomaticSelection();
+        const auto& data = task->pcm.channel0;
+        auto pcmHash = juce::SHA256(data.data(), data.size() * sizeof(float)).toHexString();
+
+        {
+            std::lock_guard<std::mutex> lock(state->entriesMutex_);
+            const auto entry = state->araEntries_.find(task->id);
+            if (state->shutdownStarted_ || entry == state->araEntries_.end())
+                continue;
+            auto [first, last] = state->araGroups_.equal_range(pcmHash);
+            auto group = std::find_if(first, last, [&frozen](const auto& item) {
+                return item.second.phase != AraGroupPhase::Delivering && item.second.config == frozen;
+            });
+            if (group != last) {
+                entry->second.group = group;
+                group->second.origins.insert(task->id);
+                // Only the owner takes an execution slot. Followers retain value PCM for handoff.
+                const auto queued = std::find_if(state->queue_.begin(), state->queue_.end(), [&task](const Job& job) {
+                    return std::get<AraJob>(job) == task;
+                });
+                state->queue_.erase(queued);
+                continue;
+            }
+            group = state->araGroups_.emplace(std::move(pcmHash), AraGroup{std::move(frozen), task->id,
+                {task->id}, inference.get(), std::move(initializationError), {}});
+            entry->second.group = group;
+        }
+        state->queueCv_.notify_all();
+    }
+}
+
+void F0ExtractionService::executeAraTasks(const std::shared_ptr<SharedState>& state)
+{
+    for (;;) {
+        AraJob task;
+        AraF0ConfigTag frozen;
+        F0InferenceService* inference;
+        std::string initializationError;
+        {
+            std::unique_lock<std::mutex> lock(state->entriesMutex_);
+            auto group = state->araGroups_.end();
+            state->queueCv_.wait(lock, [&] {
+                if (state->shutdownStarted_)
+                    return true;
+                group = std::find_if(state->araGroups_.begin(), state->araGroups_.end(), [](const auto& item) {
+                    return item.second.phase == AraGroupPhase::Resuming;
+                });
+                if (group != state->araGroups_.end())
+                    return true;
+                if (state->queue_.empty())
+                    return false;
+                const auto& front = state->araEntries_.at(std::get<AraJob>(state->queue_.front())->id);
+                if (!front.group)
+                    return false;
+                group = *front.group;
+                return true;
+            });
+            if (state->shutdownStarted_)
+                return;
+
+            auto& batch = group->second;
+            auto& origin = state->araEntries_.at(batch.owner);
+            task = origin.task;
+            if (batch.phase == AraGroupPhase::Queued) {
+                jassert(std::get<AraJob>(state->queue_.front()) == task);
+                state->queue_.pop_front();
+            }
+            batch.phase = AraGroupPhase::Running;
+            origin.inference = inference = batch.inference;
+            frozen = batch.config;
+            initializationError = batch.initializationError;
+        }
+        runAraTask(state, *task, frozen, inference, std::move(initializationError));
+    }
+}
+
+void F0ExtractionService::runAraTask(const std::shared_ptr<SharedState>& state, const AraTask& task,
+                                     const AraF0ConfigTag& frozen, F0InferenceService* inference,
+                                     std::string initializationError)
+{
+    auto result = std::make_unique<AraF0Result>();
+    result->errorMessage = std::move(initializationError);
+    if (inference != nullptr) {
+        try {
+            executeAraTask(*inference, task, frozen, *result);
+        } catch (const std::exception& e) {
+            result->errorMessage = e.what();
+        }
     }
     {
         std::lock_guard<std::mutex> lock(state->entriesMutex_);
         const auto entry = state->araEntries_.find(task.id);
         if (state->shutdownStarted_ || entry == state->araEntries_.end())
-            return;
+            return; // Revocation removes the old owner ID before a successor is queued.
         entry->second.inference = nullptr;
-        entry->second.result = std::move(result);
+        auto& batch = (*entry->second.group)->second;
+        batch.result = std::move(result);
+        batch.phase = AraGroupPhase::ReadyToDeliver;
     }
-    // The worker hands off only a weak, non-model service state and an ID. The
-    // weak document sink is resolved exclusively in message-thread delivery.
+
     if (!ProcessRenderRuntime::postAsyncCallback([weak = std::weak_ptr<SharedState>(state), id = task.id] {
             deliverAraResult(weak, id);
         })) {
-        decltype(state->araEntries_)::node_type released;
+        std::vector<AraEntry> released;
+        AraGroups::node_type releasedGroup;
         {
             std::lock_guard<std::mutex> lock(state->entriesMutex_);
-            released = state->araEntries_.extract(task.id);
+            const auto group = findAraBatch(*state, task.id);
+            if (group != state->araGroups_.end())
+                releasedGroup = releaseAraBatch(*state, group, released);
         }
         AppLogger::logNoThrow("ARA-F0: completion dispatcher rejected task="
             + juce::String(static_cast<juce::uint64>(task.id.value)));
     }
 }
 
-void F0ExtractionService::deliverAraResult(const std::weak_ptr<SharedState>& weak, F0TaskId id)
+F0ExtractionService::AraGroups::iterator F0ExtractionService::findAraBatch(SharedState& state, F0TaskId owner)
+{
+    const auto entry = state.araEntries_.find(owner);
+    if (state.shutdownStarted_ || entry == state.araEntries_.end())
+        return state.araGroups_.end();
+
+    const auto group = *entry->second.group;
+    jassert(group->second.owner == owner && group->second.phase == AraGroupPhase::ReadyToDeliver);
+    return group;
+}
+
+F0ExtractionService::AraGroups::node_type F0ExtractionService::releaseAraBatch(
+    SharedState& state, AraGroups::iterator group, std::vector<AraEntry>& released)
+{
+    released.reserve(group->second.origins.size());
+    for (auto id : group->second.origins)
+        released.push_back(std::move(state.araEntries_.extract(id).mapped()));
+    return state.araGroups_.extract(group);
+}
+
+void F0ExtractionService::deliverAraResult(const std::weak_ptr<SharedState>& weak, F0TaskId owner)
 {
     jassert(juce::MessageManager::getInstance()->isThisTheMessageThread());
     const auto state = weak.lock();
     if (!state)
         return;
-    decltype(state->araEntries_)::node_type entry;
+
+    using Sink = std::weak_ptr<AraF0DocumentFlights::CompletionSink>;
+    std::map<Sink, std::vector<F0TaskId>, std::owner_less<Sink>> byDocument;
+    AraGroups::iterator group;
+    std::unique_ptr<const AraF0Result> result;
     {
         std::lock_guard<std::mutex> lock(state->entriesMutex_);
-        if (state->shutdownStarted_)
+        group = findAraBatch(*state, owner);
+        if (group == state->araGroups_.end())
             return;
-        entry = state->araEntries_.extract(id);
+        auto& batch = group->second;
+        for (auto id : batch.origins)
+            byDocument[state->araEntries_.at(id).sink].push_back(id);
+        // Close Digest admission at handoff. Local flights remain active until their sink takes them.
+        batch.phase = AraGroupPhase::Delivering;
+        result = std::move(batch.result);
     }
-    if (!entry.empty())
-        if (auto sink = entry.mapped().sink.lock())
-            (*sink)(id, *entry.mapped().result);
+
+    const juce::ScopeGuard finish{[&] {
+        std::vector<AraEntry> released;
+        AraGroups::node_type releasedGroup;
+        std::lock_guard<std::mutex> lock(state->entriesMutex_);
+        releasedGroup = releaseAraBatch(*state, group, released);
+    }};
+    for (const auto& [receiver, ids] : byDocument)
+        if (const auto sink = receiver.lock())
+            (*sink)(ids, *result);
 }
 
-void F0ExtractionService::executeAraTask(const std::shared_ptr<SharedState>& state,
-                                        AraTask& task, AraF0Result& result)
+void F0ExtractionService::executeAraTask(F0InferenceService& inference, const AraTask& task,
+                                        const AraF0ConfigTag& frozen, AraF0Result& result)
 {
-    auto& runtime = ProcessF0Runtime::getInstance();
-    auto& config = task.config.extraction;
-    if (!runtime.isReady() && !runtime.initialize(config.modelDirectory, config.modelType, &result.errorMessage))
-        return;
-
-    auto inference = runtime.getF0Service();
-    {
-        std::lock_guard<std::mutex> lock(state->entriesMutex_);
-        const auto entry = state->araEntries_.find(task.id);
-        if (state->shutdownStarted_ || entry == state->araEntries_.end())
-            return;
-        entry->second.inference = inference.get();
-    }
-
-    // Auto detection on cold startup resolves the frozen automatic policy here.
-    if (!config.backend.detected)
-        config.backend = AccelerationDetector::getInstance().resolveAutomaticSelection();
-    const juce::File model(task.config.absoluteModelPath);
-    if (model.getSize() != task.config.modelBytes || model.getLastModificationTime() != task.config.modelWriteTime) {
-        result.errorMessage = "F0 model changed after task submission";
-        return;
-    }
+    const auto& config = frozen.extraction;
     const auto& pcm = task.pcm;
     const auto& data = pcm.channel0;
-    const std::string backend = AccelerationDetector::backendName(config.backend.backend);
     const auto logPrefix = "ARA-F0: task=" + juce::String(static_cast<juce::uint64>(task.id.value)) + " ";
-
-#if JucePlugin_Enable_ARA
-    // Disk cache policy and key are unchanged in P2. Hashing and I/O stay on the worker.
-    std::optional<F0AnalysisCache::KeyConfig> cacheConfig;
-    F0AnalysisCache::Digest pcmDigest{};
-    F0AnalysisCache::Digest cacheKey{};
-    if (task.config.allowCachedAnalysis && AppPreferences::readAraF0AnalysisCacheEnabledFromDisk()) {
-        if (const auto weights = ModelFactory::getModelWeightDigest(task.config.absoluteModelPath)) {
-            auto& key = cacheConfig.emplace();
-            key.schemaVersion = F0AnalysisCache::kSchemaVersion;
-            key.algorithmVersion = FCPEExtractor::kCacheAlgorithmVersion;
-            key.resamplingAlgorithmVersion = ResamplingManager::kCacheAlgorithmVersion;
-            key.f0AlgorithmVersion = FCPEExtractor::kCacheAlgorithmVersion;
-            key.energyAlgorithmVersion = kFrameEnergyAlgorithmVersion;
-            key.modelType = static_cast<int>(config.modelType);
-            key.modelWeightDigest = *weights;
-            key.confidence = config.confidence;
-            key.f0Min = config.f0Min;
-            key.f0Max = config.f0Max;
-            key.backend = backend;
-            key.sourceSampleRate = pcm.sourceSampleRate;
-            key.sourceChannelCount = pcm.sourceChannelCount;
-            key.channelPolicyVersion = F0AnalysisCache::kChannelZeroPolicyVersion;
-            key.windowSampleCount = data.size();
-            pcmDigest = F0AnalysisCache::digestPcm(data.data(), data.size());
-            cacheKey = F0AnalysisCache::buildKey(key, pcmDigest);
-            if (auto cached = F0AnalysisCache::tryLoad(F0AnalysisCache::cacheDirectory(), cacheKey)) {
-                F0AnalysisCache::touch(F0AnalysisCache::cacheDirectory(), cacheKey);
-                result.hopSize = cached->hopSize;
-                result.f0SampleRate = static_cast<int>(cached->f0SampleRate);
-                result.f0 = std::move(cached->originalF0);
-                result.energy = std::move(cached->energy);
-                AppLogger::log(logPrefix + "cache_hit key=" + juce::String(F0AnalysisCache::keyToHex(cacheKey).substr(0, 16)));
-                return;
-            }
-        }
-    }
-#endif
-
     AppLogger::log(logPrefix + "inference_start worker="
         + juce::String::toHexString(reinterpret_cast<uintptr_t>(juce::Thread::getCurrentThreadId()))
-        + " model=" + juce::String(static_cast<int>(config.modelType)) + " backend=" + juce::String(backend)
+        + " model=" + juce::String(static_cast<int>(config.modelType))
+        + " backend=" + AccelerationDetector::backendName(config.backend.backend)
         + " confidence=" + juce::String(config.confidence)
         + " f0Min=" + juce::String(config.f0Min) + " f0Max=" + juce::String(config.f0Max));
     const auto sampleRate = static_cast<int>(pcm.sourceSampleRate);
     std::string actualBackend;
-    auto extraction = inference->extractF0ForAnalysis(
-        data.data(), data.size(), sampleRate, task.owner, config, task.config.absoluteModelPath,
+    auto extraction = inference.extractF0ForAnalysis(
+        data.data(), data.size(), sampleRate, task.owner, config, frozen.model,
         result.hopSize, result.f0SampleRate, actualBackend);
     if (!extraction.ok()) {
         result.errorMessage = extraction.error().fullMessage();
@@ -531,27 +679,7 @@ void F0ExtractionService::executeAraTask(const std::shared_ptr<SharedState>& sta
     }
     result.energy = computeFrameEnergy(data.data(), static_cast<int>(data.size()), sampleRate,
         result.f0, result.f0SampleRate, result.hopSize);
-
-#if JucePlugin_Enable_ARA
-    if (cacheConfig && !task.owner->closed.load(std::memory_order_acquire)
-        && AppPreferences::readAraF0AnalysisCacheEnabledFromDisk()) {
-        const auto weights = ModelFactory::getModelWeightDigest(task.config.absoluteModelPath);
-        if (weights && *weights == cacheConfig->modelWeightDigest) {
-            if (cacheConfig->backend != actualBackend) {
-                cacheConfig->backend = actualBackend;
-                cacheKey = F0AnalysisCache::buildKey(*cacheConfig, pcmDigest);
-            }
-            F0AnalysisCache::Record record;
-            record.hopSize = result.hopSize;
-            record.f0SampleRate = static_cast<double>(result.f0SampleRate);
-            record.originalF0 = result.f0;
-            record.energy = result.energy;
-            F0AnalysisCache::publish(F0AnalysisCache::cacheDirectory(), cacheKey, record);
-        } else {
-            AppLogger::log(logPrefix + "cache_publish_skipped reason=model_digest_changed");
-        }
-    }
-#endif
+    AppLogger::log(logPrefix + "inference_finish backend=" + juce::String(actualBackend));
 }
 
 } // namespace OpenTune

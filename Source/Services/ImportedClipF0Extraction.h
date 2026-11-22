@@ -13,8 +13,6 @@ namespace OpenTune {
 /// Pure energy computation shared by ARA and Standalone paths.
 /// Returns energy[f0.size()], voiced-gated RMS per F0 frame using ±10ms center-aligned window.
 /// centerSample = round(frameIndex * hopSize / f0SampleRate * sourceSampleRate)
-inline constexpr int kFrameEnergyAlgorithmVersion = 1;
-
 inline std::vector<float> computeFrameEnergy(
     const float* sourcePCM, int numSamples, int sourceSampleRate,
     const std::vector<float>& f0, int f0SampleRate, int hopSize)

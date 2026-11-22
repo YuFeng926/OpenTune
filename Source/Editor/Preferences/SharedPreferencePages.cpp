@@ -249,17 +249,6 @@ public:
         initialiseComboBox(f0ModelSelector_);
         addAndMakeVisible(f0ModelSelector_);
 
-        initialiseToggleButton(araF0AnalysisCacheToggle_);
-        araF0AnalysisCacheToggle_.setButtonText(LOC(kAraF0AnalysisCache));
-        araF0AnalysisCacheToggle_.setToggleState(state.shared.araF0AnalysisCacheEnabled,
-                                                 juce::dontSendNotification);
-        araF0AnalysisCacheToggle_.onClick = [this] {
-            ProcessingPreferencePatch patch;
-            patch.araF0AnalysisCacheEnabled = araF0AnalysisCacheToggle_.getToggleState();
-            applyProcessingPreferencePatch(appPreferences_, patch, runtimeOperations_, onPreferencesChanged_);
-        };
-        addAndMakeVisible(araF0AnalysisCacheToggle_);
-
         f0ModelSelector_.onChange = [this] {
             const auto type = static_cast<F0ModelType>(f0ModelSelector_.getSelectedId() - 1);
             ProcessingPreferencePatch patch;
@@ -309,7 +298,7 @@ public:
         // 供父容器布局使用的确定内容高度
         {
             const int vPad = 4 * 2; // reduced(10, 4) vertical
-            const int rows = isVst3Plugin_ ? 4 : 5; // 插件隐藏实验控件
+            const int rows = isVst3Plugin_ ? 3 : 4; // 插件隐藏实验控件
             const int rowH = 34;
             const int gaps = 8 * (rows - 1) + (isVst3Plugin_ ? 0 : 4); // 行间 8px；实验模式下额外 hint 前 4px
             const int hintHeight = isVst3Plugin_ ? 0 : 42;
@@ -343,10 +332,6 @@ public:
         f0ModelLabel_.setBounds(row.removeFromLeft(labelWidth));
         f0ModelSelector_.setBounds(row.removeFromLeft(selectorWidth).reduced(0, 4));
 
-        bounds.removeFromTop(8);
-        row = bounds.removeFromTop(rowHeight);
-        araF0AnalysisCacheToggle_.setBounds(row.removeFromLeft(labelWidth + selectorWidth + 80));
-
         if (!isVst3Plugin_) {
             bounds.removeFromTop(8);
             row = bounds.removeFromTop(rowHeight);
@@ -374,7 +359,6 @@ private:
     juce::TextButton replayOnboardingButton_;
     juce::Label f0ModelLabel_;
     a11y::AccessibleComboBox f0ModelSelector_;
-    a11y::AccessibleToggleButton araF0AnalysisCacheToggle_;
     a11y::AccessibleToggleButton experimentalFeaturesToggle_;
     juce::Label experimentalFeaturesHintLabel_;
     a11y::AccessibleToggleButton lightPitchCorrectionToggle_;

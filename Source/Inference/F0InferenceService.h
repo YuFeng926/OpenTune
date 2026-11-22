@@ -22,6 +22,18 @@ struct F0RunOwnerState {
     std::atomic<bool> closed{false};
 };
 
+struct F0ModelVersion
+{
+    juce::File file;
+    int64_t bytes{0};
+    juce::Time writeTime;
+
+    bool operator==(const F0ModelVersion& rhs) const noexcept
+    {
+        return file == rhs.file && bytes == rhs.bytes && writeTime == rhs.writeTime;
+    }
+};
+
 struct F0ExtractionConfigSnapshot
 {
     F0ModelType modelType{F0ModelType::FCPE};
@@ -98,7 +110,7 @@ public:
         int sampleRate,
         std::shared_ptr<F0RunOwnerState> ownerState,
         const F0ExtractionConfigSnapshot& config,
-        const std::string& absoluteModelPath,
+        const F0ModelVersion& model,
         int& actualHopSize,
         int& actualSampleRate,
         std::string& actualBackend);

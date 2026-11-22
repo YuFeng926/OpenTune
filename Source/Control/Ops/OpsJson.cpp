@@ -82,7 +82,6 @@ JsonValue controlProcessingJson(const SharedPreferencesState& preferences, const
     json.appendMember("editingScheme", JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
     // The "hybrid" (light pitch correction) switch of the processing preferences.
     json.appendMember("hybridMode", JsonValue::boolean(preferences.lightPitchCorrectionEnabled));
-    json.appendMember("araF0AnalysisCacheEnabled", JsonValue::boolean(preferences.araF0AnalysisCacheEnabled));
     json.appendMember("f0Model", JsonValue::string("fcpe")); // F0ModelType has FCPE only
     json.appendMember(
         "renderingPriority",

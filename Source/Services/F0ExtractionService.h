@@ -7,6 +7,8 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -41,12 +43,9 @@ struct F0TaskId {
 };
 
 struct AraF0ConfigTag {
-    uint64_t selectionRevision{0};
-    std::string absoluteModelPath;
-    int64_t modelBytes{0};
-    juce::Time modelWriteTime;
+    F0ModelVersion model;
     F0ExtractionConfigSnapshot extraction;
-    bool allowCachedAnalysis{false}; // Archive continuation requires a fresh analysis until P3 removes the disk cache.
+    double sourceSampleRate{0.0};
 
     bool operator==(const AraF0ConfigTag& rhs) const noexcept;
 };
@@ -98,7 +97,7 @@ struct AraF0Result {
 
 // Both indexes and the sink belong to one DC and are accessed only on the message thread.
 struct AraF0DocumentFlights {
-    using CompletionSink = std::function<void(F0TaskId, const AraF0Result&)>;
+    using CompletionSink = std::function<void(const std::vector<F0TaskId>&, const AraF0Result&)>;
     using Receivers = std::map<uint64_t, AraF0Receiver>;
 
     std::shared_ptr<CompletionSink> sink;
@@ -154,10 +153,11 @@ public:
     bool isActive(F0RequestKey requestKey) const;
     void cancel(F0RequestKey requestKey);
 
-    static AraF0ConfigTag snapshotAraConfig(bool allowCachedAnalysis);
+    static AraF0ConfigTag snapshotAraConfig(double sourceSampleRate);
     AraF0Submission submit(AraF0DocumentFlights&, const AraF0LocalKey&, AraF0Pcm, AraF0Receiver);
     bool isActive(F0TaskId taskId) const;
     void abortTask(F0TaskId taskId, AraF0Abort reason);
+    void abortTasks(const std::set<F0TaskId>& taskIds, AraF0Abort reason);
     void revokeReceiver(AraF0DocumentFlights&, uint64_t wrapperGeneration);
 
     // Stop admission, revoke outstanding work and join the workers. The process
@@ -166,8 +166,7 @@ public:
 
 private:
     friend class ProcessF0Runtime;
-    F0ExtractionService(int workerCount, size_t maxQueueSize);
-    void startWorkers(int workerCount);
+    explicit F0ExtractionService(size_t maxQueueSize);
 
     struct Task {
         F0RequestKey requestKey;
@@ -185,13 +184,29 @@ private:
         AraF0ConfigTag config;
         std::shared_ptr<F0RunOwnerState> owner;
     };
-    using Job = std::variant<Task, AraTask>;
+    using AraJob = std::shared_ptr<const AraTask>;
+    using Job = std::variant<Task, AraJob>;
+
+    enum class AraGroupPhase { Queued, Running, ReadyToDeliver, Delivering, Resuming };
+
+    struct AraGroup {
+        AraF0ConfigTag config;
+        F0TaskId owner;
+        std::set<F0TaskId> origins;
+        F0InferenceService* inference; // Owned by the process runtime.
+        std::string initializationError;
+        std::unique_ptr<const AraF0Result> result;
+        AraGroupPhase phase{AraGroupPhase::Queued};
+    };
+    // The PCM SHA-256 indexes candidates; the frozen config completes the Digest.
+    using AraGroups = std::multimap<juce::String, AraGroup>;
 
     struct AraEntry {
-        std::shared_ptr<F0RunOwnerState> owner;
+        std::shared_ptr<const AraTask> task;
         std::weak_ptr<AraF0DocumentFlights::CompletionSink> sink; // Resolved only on the message thread.
-        F0InferenceService* inference{nullptr}; // Published at registration; the inference service has process lifetime.
-        std::shared_ptr<const AraF0Result> result;
+        std::optional<AraGroups::iterator> group;
+        F0InferenceService* inference{nullptr}; // The inference service has process lifetime.
+        bool hasReceivers{true};
     };
 
     struct SharedState {
@@ -225,6 +240,7 @@ private:
         std::unordered_map<ContentKey, uint64_t> activeEntries_;
         std::shared_ptr<F0RunOwnerState> processorRunOwner_;
         std::shared_ptr<DispatcherFailureMailbox> dispatcherFailureMailbox_;
+        AraGroups araGroups_;
         std::map<F0TaskId, AraEntry> araEntries_;
     };
 
@@ -233,11 +249,19 @@ private:
     std::vector<std::thread> workers_;
     std::function<std::shared_ptr<F0InferenceService>()> f0ServiceResolver_;
 
-    static void workerLoop(std::shared_ptr<SharedState> state);
+    static void processorWorkerLoop(const std::shared_ptr<SharedState>& state);
     static void runProcessorTask(SharedState& state, Task task);
-    static void runAraTask(const std::shared_ptr<SharedState>& state, AraTask task);
-    static void executeAraTask(const std::shared_ptr<SharedState>& state, AraTask& task, AraF0Result& result);
-    static void deliverAraResult(const std::weak_ptr<SharedState>& state, F0TaskId id);
+    static void prepareAraTasks(const std::shared_ptr<SharedState>& state);
+    static void executeAraTasks(const std::shared_ptr<SharedState>& state);
+    static void runAraTask(const std::shared_ptr<SharedState>& state, const AraTask& task,
+                           const AraF0ConfigTag& frozen, F0InferenceService* inference,
+                           std::string initializationError);
+    static void executeAraTask(F0InferenceService& inference, const AraTask& task,
+                               const AraF0ConfigTag& frozen, AraF0Result& result);
+    static AraGroups::iterator findAraBatch(SharedState& state, F0TaskId owner);
+    static AraGroups::node_type releaseAraBatch(SharedState& state, AraGroups::iterator group,
+                                               std::vector<AraEntry>& released);
+    static void deliverAraResult(const std::weak_ptr<SharedState>& state, F0TaskId owner);
 };
 
 } // namespace OpenTune

@@ -24,7 +24,7 @@ F0ExtractionService* ProcessF0Runtime::araAnalysisQueue()
 {
     std::lock_guard<std::mutex> lock(araQueueMutex_);
     if (!araQueue_ && !araQueueClosing_)
-        araQueue_.reset(new F0ExtractionService(2, 100));
+        araQueue_.reset(new F0ExtractionService(100));
     return araQueue_.get();
 }
 
