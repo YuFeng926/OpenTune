@@ -1,5 +1,6 @@
 #include "ProcessF0Runtime.h"
 #include "../Inference/F0InferenceService.h"
+#include "../Services/F0ExtractionService.h"
 #include "../Utils/ModelPathResolver.h"
 #include "../Utils/AccelerationDetector.h"
 #include "../Utils/AppPreferences.h"
@@ -17,6 +18,26 @@ ProcessF0Runtime& ProcessF0Runtime::getInstance()
     // 持有的 Env / 服务存活到进程退出；F0 session 由 extractF0 按需创建并返回前析构。
     static auto* instance = new ProcessF0Runtime();
     return *instance;
+}
+
+F0ExtractionService* ProcessF0Runtime::araAnalysisQueue()
+{
+    std::lock_guard<std::mutex> lock(araQueueMutex_);
+    if (!araQueue_ && !araQueueClosing_)
+        araQueue_.reset(new F0ExtractionService(2, 100));
+    return araQueue_.get();
+}
+
+void ProcessF0Runtime::shutdownAraAnalysisAndJoin()
+{
+    F0ExtractionService* queue;
+    {
+        std::lock_guard<std::mutex> lock(araQueueMutex_);
+        araQueueClosing_ = true;
+        queue = araQueue_.get();
+    }
+    if (queue)
+        queue->shutdown();
 }
 
 std::shared_ptr<Ort::Env> ProcessF0Runtime::getOrtEnv() const

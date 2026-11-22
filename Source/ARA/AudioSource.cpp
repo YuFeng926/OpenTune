@@ -70,8 +70,8 @@ bool AudioSource::createReaderLease()
     if (!sampleAccessEnabled_ || identity_.audioSource == nullptr)
         return false;
 
-    readerLease_ = std::make_shared<ARA::PlugIn::HostAudioReader>(identity_.audioSource);
-    return readerLease_ != nullptr;
+    readerLease_ = std::make_unique<ARA::PlugIn::HostAudioReader>(identity_.audioSource);
+    return true;
 }
 
 bool AudioSource::readAudioSamples(int64_t sourceSamplePosition,

@@ -11,10 +11,9 @@
 // JUCE 的 VST3 initModule 在返回 true 之前检查它。
 //
 // macOS/Linux/BSD：模块可以卸载，最后一次 bundleExit / ModuleExit 是同步
-// pre-unload 点。JUCE patch 在该点调用 openTuneVst3Shutdown()，同步关闭进程
-// 渲染运行时并 join worker；shutdownAndJoin 在返回前还会排空运行时已接受的
-// 消息线程投递，保证模块卸载后不存在仍指向本模块的回调。Windows 的 shutdown
-// helper 是 no-op，因为模块 pin 已把清理留给进程终止。
+// pre-unload 点。JUCE patch 在该点调用 openTuneVst3Shutdown()，先收敛 ARA F0
+// worker，再关闭渲染运行时，由其排空运行时已接受的消息线程投递。Windows 的
+// shutdown helper 是 no-op，因为模块 pin 已把清理留给进程终止。
 //
 // 本文件随 VST3 wrapper 及其测试编译。Standalone 是
 // 独立进程，进程寿命天然成立，不 pin。
@@ -63,6 +62,7 @@ Vst3ModulePin g_vst3ModulePin;
 #endif // _WIN32
 
 #if !defined(_WIN32)
+#include "../Runtime/ProcessF0Runtime.h"
 #include "../Runtime/ProcessRenderRuntime.h"
 #endif
 
@@ -83,6 +83,7 @@ extern "C" bool openTuneVst3Shutdown() noexcept
 #if defined(_WIN32)
     return true;
 #else
+    OpenTune::ProcessF0Runtime::getInstance().shutdownAraAnalysisAndJoin();
     OpenTune::ProcessRenderRuntime::getInstance().shutdownAndJoin();
     return true;
 #endif

@@ -168,23 +168,29 @@ void AccelerationDetector::detect(bool forceCpu) {
     if (!forceCpu && selection_.load(std::memory_order_acquire) != kUndetected)
         return;
 
-    const auto selection = detectSelection(forceCpu);
-    const auto encoded = encodeSelection(selection);
-
+    auto selection = detectSelection(forceCpu);
     if (forceCpu) {
-        selection_.store(encoded, std::memory_order_release);
+        publishSelection(selection);
         return;
     }
 
     uint64_t expected = kUndetected;
-    selection_.compare_exchange_strong(expected, encoded,
+    selection_.compare_exchange_strong(expected, encodeSelection(selection),
                                        std::memory_order_release,
                                        std::memory_order_acquire);
 }
 
 void AccelerationDetector::resetAndDetect(bool forceCpu) {
-    const auto selection = detectSelection(forceCpu);
-    selection_.store(encodeSelection(selection), std::memory_order_release);
+    publishSelection(detectSelection(forceCpu));
+}
+
+void AccelerationDetector::publishSelection(BackendSelection selection) noexcept {
+    uint64_t current = selection_.load(std::memory_order_acquire);
+    do {
+        selection.revision = decodeSelection(current).revision + 1;
+    } while (!selection_.compare_exchange_weak(current, encodeSelection(selection),
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_acquire));
 }
 
 AccelerationDetector::BackendSelection AccelerationDetector::detectSelection(bool forceCpu) {
@@ -225,11 +231,18 @@ void AccelerationDetector::overrideBackend(AccelBackend backend) {
     selection.backend = backend;
     if (backend != AccelBackend::DirectML)
         selection.dmlAdapterIndex = 0;
-    selection_.store(encodeSelection(selection), std::memory_order_release);
+    publishSelection(selection);
 }
 
 AccelerationDetector::BackendSelection AccelerationDetector::getSelection() const noexcept {
     return decodeSelection(selection_.load(std::memory_order_acquire));
+}
+
+AccelerationDetector::BackendSelection AccelerationDetector::resolveAutomaticSelection() {
+    const auto selection = getSelection();
+    if (selection.detected && selection.revision == 0)
+        return selection;
+    return detectSelection(false);
 }
 
 const char* AccelerationDetector::backendName(AccelBackend backend) noexcept {
@@ -242,7 +255,9 @@ const char* AccelerationDetector::backendName(AccelBackend backend) noexcept {
 }
 
 uint64_t AccelerationDetector::encodeSelection(BackendSelection selection) noexcept {
-    return (static_cast<uint64_t>(selection.backend) << 32)
+    // 32 bits for the DXGI adapter index, 2 for backend, 30 for the policy revision.
+    return (static_cast<uint64_t>(selection.revision) << 34)
+        | (static_cast<uint64_t>(selection.backend) << 32)
         | static_cast<uint32_t>(selection.dmlAdapterIndex);
 }
 
@@ -251,8 +266,10 @@ AccelerationDetector::BackendSelection AccelerationDetector::decodeSelection(uin
         return {};
 
     BackendSelection selection;
-    selection.backend = static_cast<AccelBackend>((encoded >> 32) & 0xffu);
+    selection.backend = static_cast<AccelBackend>((encoded >> 32) & 0x3u);
     selection.dmlAdapterIndex = static_cast<int>(static_cast<uint32_t>(encoded));
+    selection.revision = static_cast<uint32_t>(encoded >> 34);
+    selection.detected = true;
     return selection;
 }
 

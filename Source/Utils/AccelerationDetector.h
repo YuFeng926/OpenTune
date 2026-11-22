@@ -52,7 +52,11 @@ public:
     struct BackendSelection {
         AccelBackend backend = AccelBackend::CPU;
         int dmlAdapterIndex = 0;
+        uint32_t revision = 0;
+        bool detected = false;
     };
+
+    static const char* backendName(AccelBackend backend) noexcept;
 
     /**
      * 获取单例实例
@@ -77,6 +81,8 @@ public:
 
     /** 读取同一时刻的后端和 adapter 快照。 */
     BackendSelection getSelection() const noexcept;
+    // Resolve a policy that was captured before initial backend detection.
+    BackendSelection resolveAutomaticSelection();
 
 private:
     AccelerationDetector() = default;
@@ -91,9 +97,9 @@ private:
     bool detectCoreML();
     bool enumerateGpuDevices(std::vector<GpuDeviceInfo>& gpuDevices);
 
-    static const char* backendName(AccelBackend backend) noexcept;
     static uint64_t encodeSelection(BackendSelection selection) noexcept;
     static BackendSelection decodeSelection(uint64_t encoded) noexcept;
+    void publishSelection(BackendSelection selection) noexcept;
     BackendSelection detectSelection(bool forceCpu);
 
     static constexpr uint64_t kUndetected = (std::numeric_limits<uint64_t>::max)();

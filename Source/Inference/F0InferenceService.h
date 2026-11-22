@@ -1,10 +1,8 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
-#include <array>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 #include <functional>
@@ -12,18 +10,14 @@
 #include <atomic>
 #include "IF0Extractor.h"
 #include "../Utils/Error.h"
+#include "../Utils/AccelerationDetector.h"
 
 namespace Ort { struct Env; }
 
 namespace OpenTune {
 
-/**
- * F0 run owner identity for termination. One F0ExtractionService owns exactly one
- * state for its whole lifetime; shared_ptr ownership removes raw-pointer identity
- * (address reuse can never alias a live owner). closed is set under the service's
- * runMutex_ by terminateActiveRun and checked at lease admission under the same
- * lock, so a closed owner can never start a new Run.
- */
+// Processor services own one state. Each ARA origin owns its own state;
+// closing it also rejects a late admission after cold initialization.
 struct F0RunOwnerState {
     std::atomic<bool> closed{false};
 };
@@ -32,16 +26,11 @@ struct F0ExtractionConfigSnapshot
 {
     F0ModelType modelType{F0ModelType::FCPE};
     std::string modelDirectory;
-    std::string modelPath;
-    std::array<uint8_t, 32> modelWeightDigest{};
-    bool modelWeightDigestAvailable{false};
     float confidence{0.006f};
     float f0Min{32.7f};
     float f0Max{1975.5f};
-    std::string backend;
-    int algorithmVersion{1};
-    int resamplingAlgorithmVersion{1};
-    int energyAlgorithmVersion{1};
+    AccelerationDetector::BackendSelection backend;
+    uint64_t selectionRevision{0};
 };
 
 /**
@@ -102,13 +91,14 @@ public:
         std::function<void(float)> progressCallback = nullptr,
         std::function<void(const std::vector<float>&, int)> partialCallback = nullptr);
 
-    std::optional<F0ExtractionConfigSnapshot> snapshotExtractionConfig(bool includeModelDigest = true) const;
+    F0ExtractionConfigSnapshot snapshotExtractionConfig() const;
     Result<std::vector<float>> extractF0ForAnalysis(
         const float* audio,
         size_t length,
         int sampleRate,
         std::shared_ptr<F0RunOwnerState> ownerState,
-        const F0ExtractionConfigSnapshot* config,
+        const F0ExtractionConfigSnapshot& config,
+        const std::string& absoluteModelPath,
         int& actualHopSize,
         int& actualSampleRate,
         std::string& actualBackend);

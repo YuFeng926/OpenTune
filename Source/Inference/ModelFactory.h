@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IF0Extractor.h"
+#include "../Utils/AccelerationDetector.h"
 #include "../Utils/Error.h"
 #include <onnxruntime_cxx_api.h>
 #include <array>
@@ -20,11 +21,10 @@ public:
 
     static F0ExtractorResult createF0Extractor(
         F0ModelType type,
-        const std::string& modelDir,
+        const std::string& modelPath,
         Ort::Env& env,
         std::shared_ptr<ResamplingManager> resampler,
-        bool forceCpu = false
-    );
+        AccelerationDetector::BackendSelection backend);
 
     static std::string getModelPath(F0ModelType type, const std::string& modelDir);
     static std::optional<std::array<uint8_t, 32>> getModelWeightDigest(const std::string& modelPath);
@@ -33,19 +33,18 @@ public:
 
     static std::vector<F0ModelInfo> getAvailableF0Models(const std::string& modelDir);
 
+private:
     static Ort::SessionOptions createF0SessionOptions(
         F0ModelType type,
         bool& outGpuMode,
-        bool forceCpu = false);
+        AccelerationDetector::BackendSelection backend);
 
-private:
     static std::unique_ptr<Ort::Session> loadF0Session(
         const std::string& modelPath,
         Ort::Env& env,
         F0ModelType type,
         bool& outGpuMode,
-        bool forceCpu = false
-    );
+        AccelerationDetector::BackendSelection backend);
 };
 
 } // namespace OpenTune

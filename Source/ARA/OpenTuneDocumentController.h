@@ -201,7 +201,6 @@ private:
 
     std::shared_ptr<ContentRenderService> contentRenderService_;
     std::shared_ptr<ResamplingManager> resamplingManager_;
-    std::unique_ptr<F0ExtractionService> contentF0ExtractionService_;
 
     // True when the host is Logic and document-shared transport reports playing.
     bool logicHostIsPlaying() const noexcept;
@@ -213,22 +212,7 @@ private:
     void performHostTransportBatch(const HostTransportBatch& batch);
     bool hostSeekAvailable();
 
-    // F0 completion 无锁提交：completion 由 F0ExtractionService 投递到消息线程
-    // 执行，捕获共享 sink；析构时在消息线程把指针置空，回调看到空指针直接退出。
-    struct F0CompletionRecord
-    {
-        F0ExtractionService::Result result;
-        ContentKey key;
-        uint64_t wrapperGeneration{0};
-        juce::String persistentId;
-        uint64_t birthRevision{0};
-        OriginalF0InputStamp stamp;
-    };
-    struct CompletionSink
-    {
-        OpenTuneDocumentController* controller{nullptr};
-    };
-    std::shared_ptr<CompletionSink> completionSink_{std::make_shared<CompletionSink>()};
+    AraF0DocumentFlights f0Flights_;
     std::deque<OriginalF0FailureEvent> pendingF0FailureEvents_;
     std::shared_ptr<ProcessRenderRuntime::CompletionGate> renderCompletionGate_{
         std::make_shared<ProcessRenderRuntime::CompletionGate>()};
@@ -325,17 +309,12 @@ private:
         int sourceChannelCount,
         uint64_t sampleGeneration,
         int64_t sourceSampleCount) const;
+    void revokeDocumentF0();
     void revokeF0Reception(AudioModification& modification);
     void removeCRSArtifactsForModification(const AudioModification& modification);
-    bool scheduleAsyncF0Extraction(ContentKey contentKey,
-                                   std::vector<float> channel0Data,
-                                    double sourceSampleRate,
-                                    int sourceChannelCount,
-                                    uint64_t wrapperGeneration,
-                                   juce::String persistentId,
-                                   OriginalF0InputStamp stamp,
-                                   bool allowCachedAnalysis);
-    void commitF0Completion(F0CompletionRecord record);
+    void scheduleAsyncF0Extraction(AudioModification& modification, AraF0Pcm pcm,
+                                   const OriginalF0InputStamp& stamp, bool allowCachedAnalysis);
+    void commitF0Completion(const AraF0Target& target, const AraF0Result& result);
     static OriginalF0InputStamp makeF0InputStamp(const AudioSource& source, const AudioModification& modification);
     std::shared_ptr<const EditableContentSnapshot> snapshotAudioModification(ContentKey key) const;
     void installDocumentRenderExecution();
