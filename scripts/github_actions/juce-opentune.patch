@@ -1,5 +1,5 @@
 diff --git a/modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp b/modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp
-index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc8153aadd 100644
+index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..c921dd6d8272906ae2737b1660fc45425c803376 100644
 --- a/modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp
 +++ b/modules/juce_audio_devices/audio_io/juce_AudioDeviceManager.cpp
 @@ -204,10 +204,16 @@ AudioDeviceManager::AudioDeviceManager()
@@ -23,7 +23,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  }
  
  //==============================================================================
-@@ -766,16 +772,149 @@ void AudioDeviceManager::setCurrentAudioDeviceType (const String& type, bool treatAsChosenDevice)
+@@ -766,16 +772,145 @@ void AudioDeviceManager::setCurrentAudioDeviceType (const String& type, bool treatAsChosenDevice)
              AudioDeviceSetup s (*lastDeviceTypeConfigs.getUnchecked (i));
              insertDefaultDeviceNames (s);
  
@@ -57,11 +57,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
 +    if (typeChanged)
 +    {
 +        if (currentAudioDevice != nullptr)
-+        {
 +            closeAudioDevice();
-+            Thread::sleep (1500); // allow a moment for OS devices to sort themselves out, to help
-+                                  // avoid things like DirectSound/ASIO clashes
-+        }
 +
 +        currentDeviceType = type;
 +    }
@@ -173,7 +169,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
      return currentAudioDevice != nullptr ? currentAudioDevice->getWorkgroup() : AudioWorkgroup{};
  }
  
-@@ -810,7 +949,28 @@ static void updateSetupChannels (AudioDeviceManager::AudioDeviceSetup& setup, in
+@@ -810,7 +945,28 @@ static void updateSetupChannels (AudioDeviceManager::AudioDeviceSetup& setup, in
  String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup,
                                                  bool treatAsChosenDevice)
  {
@@ -203,7 +199,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
      if (newSetup != currentSetup)
          sendChangeMessage();
-@@ -821,11 +981,12 @@ String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup
+@@ -821,11 +977,12 @@ String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup
  
      if (getCurrentDeviceTypeObject() == nullptr
          || (newSetup.inputDeviceName.isEmpty() && newSetup.outputDeviceName.isEmpty()))
@@ -221,7 +217,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
          return {};
      }
-@@ -903,7 +1064,8 @@ String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup
+@@ -903,7 +1060,8 @@ String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup
      {
          updateCurrentSetup();
  
@@ -231,7 +227,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
              if (availableDeviceTypes.getUnchecked (i)->getTypeName() == currentDeviceType)
                  *(lastDeviceTypeConfigs.getUnchecked (i)) = currentSetup;
  
-@@ -912,8 +1074,10 @@ String AudioDeviceManager::setAudioDeviceSetupInternal (const AudioDeviceSetup& newSetup,
+@@ -912,8 +1070,10 @@ String AudioDeviceManager::setAudioDeviceSetupInternal (const AudioDeviceSetup& newSetup,
      }
      else
      {
@@ -242,7 +238,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
      return error;
  }
-@@ -958,19 +1122,29 @@ int AudioDeviceManager::chooseBestBufferSize (int bufferSize) const
+@@ -958,19 +1118,29 @@ int AudioDeviceManager::chooseBestBufferSize (int bufferSize) const
      return currentAudioDevice->getDefaultBufferSize();
  }
  
@@ -283,7 +279,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  }
  
  void AudioDeviceManager::restartLastAudioDevice()
-@@ -1000,17 +1174,22 @@ void AudioDeviceManager::updateXml()
+@@ -1000,17 +1170,22 @@ void AudioDeviceManager::updateXml()
      lastExplicitSettings->setAttribute ("audioOutputDeviceName", currentSetup.outputDeviceName);
      lastExplicitSettings->setAttribute ("audioInputDeviceName", currentSetup.inputDeviceName);
  
@@ -317,7 +313,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
      for (auto& input : enabledMidiInputs)
      {
-@@ -1046,10 +1176,22 @@ void AudioDeviceManager::updateXml()
+@@ -1046,10 +1221,22 @@ void AudioDeviceManager::updateXml()
  }
  
  //==============================================================================
@@ -344,7 +340,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
          if (callbacks.contains (newCallback))
              return;
-@@ -1058,13 +1200,28 @@ void AudioDeviceManager::addAudioCallback (AudioIODeviceCallback* newCallback)
+@@ -1058,13 +1245,28 @@ void AudioDeviceManager::addAudioCallback (AudioIODeviceCallback* newCallback)
      if (currentAudioDevice != nullptr && newCallback != nullptr)
          newCallback->audioDeviceAboutToStart (currentAudioDevice.get());
  
@@ -380,7 +376,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
      {
          bool needsDeinitialising = currentAudioDevice != nullptr;
  
-@@ -1076,9 +1233,10 @@ void AudioDeviceManager::removeAudioCallback (AudioIODeviceCallback* callbackToR
+@@ -1076,9 +1278,10 @@ void AudioDeviceManager::removeAudioCallback (AudioIODeviceCallback* callbackToR
          }
  
          if (needsDeinitialising)
@@ -394,7 +390,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
  void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChannelData,
                                                     int numInputChannels,
-@@ -1086,16 +1244,40 @@ void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChan
+@@ -1086,16 +1289,40 @@ void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChan
                                                     int numOutputChannels,
                                                     int numSamples,
                                                     const AudioIODeviceCallbackContext& context)
@@ -445,7 +441,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
          callbacks.getUnchecked (0)->audioDeviceIOCallbackWithContext (inputChannelData,
                                                                        numInputChannels,
-@@ -1130,7 +1312,7 @@ void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChan
+@@ -1130,7 +1357,7 @@ void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChan
              zeromem (outputChannelData[i], (size_t) numSamples * sizeof (float));
      }
  
@@ -454,7 +450,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
      {
          auto numSamps = jmin (numSamples, testSound->getNumSamples() - testSoundPosition);
          auto* src = testSound->getReadPointer (0, testSoundPosition);
-@@ -1140,18 +1322,27 @@ void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChan
+@@ -1140,18 +1367,27 @@ void AudioDeviceManager::audioDeviceIOCallbackInt (const float* const* inputChan
                  for (int j = 0; j < numSamps; ++j)
                      dst[j] += src[j];
  
@@ -489,7 +485,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
                          device->getCurrentBufferSizeSamples());
  
      updateCurrentSetup();
-@@ -1166,21 +1357,31 @@ void AudioDeviceManager::audioDeviceAboutToStartInt (AudioIODevice* const device
+@@ -1166,21 +1402,31 @@ void AudioDeviceManager::audioDeviceAboutToStartInt (AudioIODevice* const device
      sendChangeMessage();
  }
  
@@ -531,7 +527,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
      for (int i = callbacks.size(); --i >= 0;)
          callbacks.getUnchecked (i)->audioDeviceError (message);
-@@ -1263,9 +1464,14 @@ void AudioDeviceManager::handleIncomingMidiMessageInt (MidiInput* source, const
+@@ -1263,9 +1509,14 @@ void AudioDeviceManager::handleIncomingMidiMessageInt (MidiInput* source, const
  }
  
  //==============================================================================
@@ -549,7 +545,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
      {
          std::unique_ptr<MidiOutput> oldMidiPort;
          Array<AudioIODeviceCallback*> oldCallbacks;
-@@ -1348,9 +1554,23 @@ double AudioDeviceManager::LevelMeter::getCurrentLevel() const noexcept
+@@ -1348,9 +1599,23 @@ double AudioDeviceManager::LevelMeter::getCurrentLevel() const noexcept
      return level.get();
  }
  
@@ -576,7 +572,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
          std::unique_ptr<AudioBuffer<float>> oldSound;
  
          {
-@@ -1358,13 +1578,20 @@ void AudioDeviceManager::playTestSound()
+@@ -1358,13 +1623,20 @@ void AudioDeviceManager::playTestSound()
              std::swap (oldSound, testSound);
          }
      }
@@ -604,7 +600,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
  
          double frequency = 440.0;
          float amplitude = 0.5f;
-@@ -1379,10 +1606,20 @@ void AudioDeviceManager::playTestSound()
+@@ -1379,10 +1651,20 @@ void AudioDeviceManager::playTestSound()
          newSound->applyGainRamp (0, 0, soundLength / 10, 0.0f, 1.0f);
          newSound->applyGainRamp (0, soundLength - soundLength / 4, soundLength / 4, 1.0f, 0.0f);
  
@@ -629,7 +625,7 @@ index a3a0ae3518b5f9e72ad0ecb47213ead94bbcfb46..4ba99dc26826f71ec753864938e1bbcc
      }
  }
  
-@@ -1638,6 +1875,84 @@ public:
+@@ -1638,6 +1920,84 @@ public:
              closeDeviceByRequestingEmptyNames       (manager);
          }
  
@@ -4239,50 +4235,6 @@ index 8cffcd949dc163f604d106457627e794e516675c..9c62957eb7daf1358eea3f0ecc954f04
 +    double sampleRate = 0;
      int blockSize = 0;
      bool isPrepared = false, isDoublePrecision = false;
- 
-diff --git a/modules/juce_core/threads/juce_SpinLock.h b/modules/juce_core/threads/juce_SpinLock.h
-index 47348283ff2906f252de54ac9338f927224e5554..9f2233fa36a14072d4c79e9461d66af95fc51438 100644
---- a/modules/juce_core/threads/juce_SpinLock.h
-+++ b/modules/juce_core/threads/juce_SpinLock.h
-@@ -68,9 +68,12 @@ public:
-     void enter() const noexcept;
- 
-     /** Attempts to acquire the lock, returning true if this was successful. */
--    inline bool tryEnter() const noexcept
--    {
--        return lock.compareAndSetBool (1, 0);
-+    inline bool tryEnter() const noexcept
-+    {
-+       #if defined (OPENTUNE_REALTIME_AUDIT_SPINLOCK)
-+        OPENTUNE_REALTIME_AUDIT_SPINLOCK();
-+       #endif
-+        return lock.compareAndSetBool (1, 0);
-     }
- 
-     /** Releases the lock. */
-diff --git a/modules/juce_core/threads/juce_Thread.cpp b/modules/juce_core/threads/juce_Thread.cpp
-index 5a75bad4cfea97bd8b2b528b0229d1e3b4f84769..194865985fcfc80dc1604bab09894daf38903bdd 100644
---- a/modules/juce_core/threads/juce_Thread.cpp
-+++ b/modules/juce_core/threads/juce_Thread.cpp
-@@ -343,11 +343,14 @@ bool Thread::launch (Priority priority, std::function<void()> functionToRun)
- }
- 
- //==============================================================================
--void SpinLock::enter() const noexcept
--{
--    if (! tryEnter())
--    {
--        for (int i = 20; --i >= 0;)
-+void SpinLock::enter() const noexcept
-+{
-+    if (! tryEnter())
-+    {
-+       #if defined (OPENTUNE_REALTIME_AUDIT_SPIN_WAIT)
-+        OPENTUNE_REALTIME_AUDIT_SPIN_WAIT();
-+       #endif
-+        for (int i = 20; --i >= 0;)
-             if (tryEnter())
-                 return;
  
 diff --git a/modules/juce_gui_basics/native/juce_Windowing_windows.cpp b/modules/juce_gui_basics/native/juce_Windowing_windows.cpp
 index c58a20ede9c95372950c930d92e8c5a975c12434..55cd72e2a0a64af4ff03e235639e6403c52fa34a 100644

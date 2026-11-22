@@ -78,8 +78,6 @@ private:
     int processEvents(double sampleRate);
     void startVoice(int midiNote, double sampleRate);
     void stopVoice(int midiNote, double sampleRate);
-
-    friend struct AuditionRealtimeTestAccess;
 };
 
 static_assert(std::atomic<int>::is_always_lock_free,

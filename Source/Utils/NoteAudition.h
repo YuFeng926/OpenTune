@@ -59,8 +59,6 @@ private:
     int playingSlot_ = -1;
     double position_ = 0.0;
 
-    friend struct AuditionRealtimeTestAccess;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(NoteAudition)
 };
 

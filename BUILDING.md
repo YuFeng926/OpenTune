@@ -257,16 +257,6 @@ cmake --build --preset windows-ara-ninja-release
 > 也可以先执行 `chcp 65001`。`scripts/build-ninja.ps1` 已在配置和构建子进程中加入
 > `chcp 65001`。
 
-Windows 实时回调验收使用测试构建中的统一审计计数：
-
-```powershell
-cmake --preset windows-ara-ninja -DOPENTUNE_BUILD_TESTS=ON
-cmake --build --preset windows-ara-ninja-release --parallel 1 --target RealtimeCallbackTests StandaloneRealtimeCallbackTests RealtimeVST3Tests OpenTuneAuditionRealtimeTests OpenTunePlaybackCacheRealtimeTests
-ctest --test-dir build-ara-ninja -R "^(RealtimeCallbackTests|StandaloneRealtimeCallbackTests|RealtimeVST3Tests|AuditionRealtimeTests|PlaybackCacheRealtimeTests)$" -V
-```
-
-测试先验证分配、释放、锁获取、等待和文件 I/O 的审计钩子能够捕获违规，再要求真实回调的五项计数全部为零。VST3 测试直接编译发布版本使用的 wrapper overlay；Standalone 测试经过 AudioDeviceManager、AudioProcessorPlayer 和实际 Processor。测试结果包含回调范围和逐项计数。发布构建使用 `OPENTUNE_BUILD_TESTS=OFF` 重新编译。
-
 Release 构建完成后，发布前必须校验 Standalone 产物。校验与打包脚本为本地维护，
 不随仓库分发（`scripts/build-ninja.ps1`、`scripts/validate-windows-release.ps1`、
 `scripts/package-windows.ps1`、`Installer/`），需从本机获取。

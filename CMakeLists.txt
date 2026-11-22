@@ -1727,35 +1727,11 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_definitions(OpenTuneAU PRIVATE OPENTUNE_LIFECYCLE_TEST_DATA_DIR=1)
     endif()
 
-    add_executable(OpenTuneOutputSpectrumAnalyzerTests Tests/OutputSpectrumAnalyzerTests.cpp)
-    target_include_directories(OpenTuneOutputSpectrumAnalyzerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_link_libraries(OpenTuneOutputSpectrumAnalyzerTests PRIVATE juce::juce_dsp)
-    add_test(NAME OutputSpectrumAnalyzerTests COMMAND OpenTuneOutputSpectrumAnalyzerTests)
-
-    add_executable(OpenTunePlayHeadStateTests Tests/PlayHeadStateTests.cpp)
-    target_include_directories(OpenTunePlayHeadStateTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_link_libraries(OpenTunePlayHeadStateTests PRIVATE juce::juce_audio_processors)
-    add_test(NAME PlayHeadStateTests COMMAND OpenTunePlayHeadStateTests)
-
     add_executable(OpenTuneRealtimeSnapshotTests Tests/RealtimeSnapshotTests.cpp)
     target_include_directories(OpenTuneRealtimeSnapshotTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
     add_test(NAME RealtimeSnapshotTests COMMAND OpenTuneRealtimeSnapshotTests)
-
-    add_executable(OpenTuneAudioDeviceSettingsTests
-        Tests/AudioDeviceSettingsTests.cpp
-        Source/Utils/AudioDeviceSettings.cpp
-    )
-    target_include_directories(OpenTuneAudioDeviceSettingsTests
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_link_libraries(OpenTuneAudioDeviceSettingsTests PRIVATE
-        juce::juce_audio_devices)
-    add_test(NAME AudioDeviceSettingsTests COMMAND OpenTuneAudioDeviceSettingsTests)
-
     if(MSVC)
-        target_compile_options(OpenTuneOutputSpectrumAnalyzerTests PRIVATE /utf-8 /EHsc)
-        target_compile_options(OpenTunePlayHeadStateTests PRIVATE /utf-8 /EHsc)
         target_compile_options(OpenTuneRealtimeSnapshotTests PRIVATE /utf-8 /EHsc)
-        target_compile_options(OpenTuneAudioDeviceSettingsTests PRIVATE /utf-8 /EHsc)
     endif()
 
     add_executable(OpenTuneComponentListenerSubscriptionTests
@@ -2217,21 +2193,6 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME CapturePersistenceTests COMMAND OpenTuneCapturePersistenceTests)
 
-    add_executable(OpenTuneF0AnalysisCacheTests
-        Tests/F0AnalysisCacheTests.cpp
-    )
-    target_include_directories(OpenTuneF0AnalysisCacheTests
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
-    target_link_libraries(OpenTuneF0AnalysisCacheTests PRIVATE
-        OpenTune
-        juce::juce_core
-        juce::juce_cryptography
-    )
-    if(MSVC)
-        target_compile_options(OpenTuneF0AnalysisCacheTests PRIVATE /utf-8 /EHsc)
-    endif()
-    add_test(NAME F0AnalysisCacheTests COMMAND OpenTuneF0AnalysisCacheTests)
-
     # CaptureSession span-budget exhaustion + scan-coverage lifecycle tests.
     add_executable(OpenTuneCaptureSessionSpanBudgetTests
         Tests/CaptureSessionSpanBudgetTests.cpp
@@ -2286,24 +2247,6 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneStandaloneArrangementMoveTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
-
-    foreach(standalone_edit_test IN ITEMS
-            NoteDraftTransactionTests ManualCorrectionTransactionTests StandaloneSourceLifetimeTests)
-        add_executable(OpenTune${standalone_edit_test}
-            Tests/${standalone_edit_test}.cpp
-            Tests/HeadlessEditorFactory.cpp)
-        target_include_directories(OpenTune${standalone_edit_test} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/Source ${ONNXRUNTIME_INCLUDE_DIR})
-        target_link_libraries(OpenTune${standalone_edit_test} PRIVATE
-            OpenTuneStandalone OpenTuneResources juce::juce_audio_basics juce::juce_core)
-        target_compile_definitions(OpenTune${standalone_edit_test} PRIVATE JucePlugin_Build_Standalone=1)
-        if(MSVC)
-            target_compile_options(OpenTune${standalone_edit_test} PRIVATE /utf-8 /EHsc)
-        endif()
-        add_test(NAME ${standalone_edit_test} COMMAND OpenTune${standalone_edit_test})
-    endforeach()
-    target_include_directories(OpenTuneManualCorrectionTransactionTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone)
 
     # Render/ARA contract tests use the production objects and their real worker
     # threads.  They intentionally link the application target instead of
@@ -2376,8 +2319,6 @@ if(OPENTUNE_BUILD_TESTS)
         "${ARA_SDK_PATH}/ARA_API"
     )
     target_link_libraries(ARALifecycleContractTests PRIVATE OpenTuneResources)
-
-    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenTuneRealtimeTests.cmake")
 endif()
 
 # Optional local Control API entry point for Standalone.

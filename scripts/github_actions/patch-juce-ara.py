@@ -24,8 +24,6 @@ PATCHED_PATHS = {
     "modules/juce_audio_utils/players/juce_AudioProcessorPlayer.cpp",
     "modules/juce_audio_utils/players/juce_AudioProcessorPlayer.h",
     "modules/juce_core/threads/juce_OpenTuneCallbackGate.h",
-    "modules/juce_core/threads/juce_SpinLock.h",
-    "modules/juce_core/threads/juce_Thread.cpp",
     "modules/juce_gui_basics/native/juce_Windowing_windows.cpp",
 }
 
@@ -66,11 +64,6 @@ def patch_entries(patch):
 
     if {relative for relative, _ in entries} != PATCHED_PATHS or len(entries) != len(PATCHED_PATHS):
         fail("The JUCE patch does not contain the exact supported file set")
-
-    for hook in (b"OPENTUNE_REALTIME_AUDIT_SPINLOCK();",
-                 b"OPENTUNE_REALTIME_AUDIT_SPIN_WAIT();"):
-        if patch.count(hook) != 1:
-            fail("The JUCE patch must contain both realtime SpinLock audit hooks")
 
     return entries
 

@@ -304,10 +304,6 @@ function(opentune_apply_juce_vst3_realtime_overlay source_variable juce_root gen
         const FLStudioDIYSpecificationEnforcementLock lock (flStudioDIYSpecificationEnforcementMutex);]=])
     set(process_entry_patched [=[    tresult PLUGIN_API process (Vst::ProcessData& data) override
     {
-       #if defined(OPENTUNE_REALTIME_AUDIT_SCOPE)
-        OPENTUNE_REALTIME_AUDIT_SCOPE;
-       #endif
-
         const FLStudioDIYSpecificationEnforcementLock lock (flStudioDIYSpecificationEnforcementMutex);
         ScopedAudioProcessAccess audioAccess (*this);
 

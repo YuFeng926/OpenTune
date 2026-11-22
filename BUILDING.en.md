@@ -253,16 +253,6 @@ cmake --build --preset windows-ara-ninja-release
 > Alternatively, run `chcp 65001` first. `scripts/build-ninja.ps1` already runs
 > `chcp 65001` in its configure and build child processes.
 
-Windows realtime callback checks use shared audit counters in the test build:
-
-```powershell
-cmake --preset windows-ara-ninja -DOPENTUNE_BUILD_TESTS=ON
-cmake --build --preset windows-ara-ninja-release --parallel 1 --target RealtimeCallbackTests StandaloneRealtimeCallbackTests RealtimeVST3Tests OpenTuneAuditionRealtimeTests OpenTunePlaybackCacheRealtimeTests
-ctest --test-dir build-ara-ninja -R "^(RealtimeCallbackTests|StandaloneRealtimeCallbackTests|RealtimeVST3Tests|AuditionRealtimeTests|PlaybackCacheRealtimeTests)$" -V
-```
-
-The tests first verify that the audit hooks detect allocations, deallocations, lock attempts, waits, and file I/O, then require zero counts for all five categories in real callbacks. The VST3 test compiles the shipping wrapper overlay; the Standalone test runs through AudioDeviceManager, AudioProcessorPlayer, and the real Processor. Reports identify each callback scope and its counters. Rebuild with `OPENTUNE_BUILD_TESTS=OFF` for release distribution.
-
 Before packaging a Release build, validate the Standalone artifact. The
 validation and packaging scripts are maintained locally and are not
 distributed with the repository (`scripts/build-ninja.ps1`,

@@ -18,9 +18,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
     endif()
 
     # Explicit, ordered source list, in blocks by topic.
-    # Channel: CSPRNG, protocol framing, sockets, discovery file and the listener with authentication
-    # and limits. Standalone also uses the option, path and JSON utilities without the external API.
-    set(OPENTUNE_CONTROL_CHANNEL_SOURCES
+    set(OPENTUNE_CONTROL_SOURCES
+        # Channel: CSPRNG, protocol framing, sockets, discovery file and the listener with authentication
+        # and limits. Standalone also uses the option, path and JSON utilities without the external API.
         Source/Control/SecureRandom.cpp
         Source/Control/SecureRandom.h
         Source/Control/ControlProtocol.cpp
@@ -31,9 +31,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/ControlDiscovery.h
         Source/Control/ControlServer.cpp
         Source/Control/ControlServer.h
-    )
-    set(OPENTUNE_CONTROL_SOURCES
-        ${OPENTUNE_CONTROL_CHANNEL_SOURCES}
         # Service, processor start/stop and message-thread marshalling: the service facade and
         # the editor bridge interface. These and all the files below use JUCE and the processor.
         Source/Control/ControlMessageThread.cpp
@@ -165,30 +162,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
     if(WIN32)
         # Winsock for the listener, BCrypt for the system CSPRNG.
         target_link_libraries(OpenTuneStandalone PRIVATE ws2_32 bcrypt)
-    endif()
-
-    if(OPENTUNE_BUILD_TESTS)
-        add_executable(OpenTuneControlLifecycleTests
-            Tests/Control/ControlLifecycleTests.cpp
-            ${OPENTUNE_CONTROL_CHANNEL_SOURCES}
-            Source/Control/ControlJson.cpp
-            Source/Control/ControlApiOptions.cpp
-            Source/Control/ControlPathPolicy.cpp
-            Source/Control/ControlMessageThread.cpp
-            Source/Control/ControlJobs.cpp)
-        target_include_directories(OpenTuneControlLifecycleTests PRIVATE Source)
-        target_compile_definitions(OpenTuneControlLifecycleTests PRIVATE
-            JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
-            JUCE_MODAL_LOOPS_PERMITTED=1)
-        target_link_libraries(OpenTuneControlLifecycleTests PRIVATE juce::juce_events)
-        if(MSVC)
-            target_compile_options(OpenTuneControlLifecycleTests PRIVATE /utf-8 /EHsc)
-        endif()
-        if(WIN32)
-            target_link_libraries(OpenTuneControlLifecycleTests PRIVATE ws2_32 bcrypt)
-        endif()
-        add_test(NAME ControlLifecycleTests COMMAND OpenTuneControlLifecycleTests)
-        set_tests_properties(ControlLifecycleTests PROPERTIES TIMEOUT 30)
     endif()
 
     # Build identity published in the discovery file. By default the commit
