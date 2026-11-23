@@ -421,11 +421,13 @@ private:
     RasterProbe vblankToRootPaintProbe_;
     RasterProbe zoomPreviewPaintProbe_;
     RasterProbe zoomCommitRasterProbe_;
+    RasterProbe snapshotBuildProbe_;
+    RasterProbe moveImageSectionProbe_;
     double probeReportWindowStart_ = 0.0;
     double lastVBlankMs_ = 0.0;
 
-    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint, ZoomPreviewPaint, ZoomCommitRaster };
-    void recordRenderProbe(RenderProbePoint point, double elapsedMs);
+    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint, ZoomPreviewPaint, ZoomCommitRaster, SnapshotBuild, MoveImageSection };
+    void recordRenderProbe(RenderProbePoint point, double elapsedMs, int samples = 1);
 
     // ── 保留式相机更新 ────────────────────────────────────────
     void applyRasterCamera(const TimelineViewportCamera& newCamera);
@@ -445,7 +447,7 @@ private:
     void updateZoomControlColours();
 
     // ── 内容构建（供 rasterize + overlay 共用） ────────────────
-    std::vector<PianoRollRenderer::ContentRenderItem> buildContentRenderItems() const;
+    std::vector<PianoRollRenderer::ContentRenderItem> buildContentRenderItems();
 
     // ── EQ popup ──────────────────────────────────────────────
     void closeEqPopup();

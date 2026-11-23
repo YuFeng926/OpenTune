@@ -2502,7 +2502,7 @@ void PianoRollComponent::rasterizeDirtySurfaces()
     }
 }
 
-void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapsedMs)
+void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapsedMs, int samples)
 {
     RasterProbe* probe = nullptr;
     switch (point) {
@@ -2513,8 +2513,10 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
         case RenderProbePoint::VBlankToRootPaint: probe = &vblankToRootPaintProbe_; break;
         case RenderProbePoint::ZoomPreviewPaint: probe = &zoomPreviewPaintProbe_; break;
         case RenderProbePoint::ZoomCommitRaster: probe = &zoomCommitRasterProbe_; break;
+        case RenderProbePoint::SnapshotBuild: probe = &snapshotBuildProbe_; break;
+        case RenderProbePoint::MoveImageSection: probe = &moveImageSectionProbe_; break;
     }
-    probe->count++;
+    probe->count += samples;
     probe->totalMs += elapsedMs;
 
     const double now = juce::Time::getMillisecondCounterHiRes();
@@ -2527,7 +2529,9 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
             + " root-paint:" + juce::String(avg(rootPaintProbe_), 1) + "ms x" + juce::String(rootPaintProbe_.count)
             + " vblank-to-root-paint:" + juce::String(avg(vblankToRootPaintProbe_), 1) + "ms x" + juce::String(vblankToRootPaintProbe_.count)
             + " zoom-preview-paint:" + juce::String(avg(zoomPreviewPaintProbe_), 1) + "ms x" + juce::String(zoomPreviewPaintProbe_.count)
-            + " zoom-commit-raster:" + juce::String(avg(zoomCommitRasterProbe_), 1) + "ms x" + juce::String(zoomCommitRasterProbe_.count));
+            + " zoom-commit-raster:" + juce::String(avg(zoomCommitRasterProbe_), 1) + "ms x" + juce::String(zoomCommitRasterProbe_.count)
+            + " snapshot-build:" + juce::String(avg(snapshotBuildProbe_), 1) + "ms x" + juce::String(snapshotBuildProbe_.count)
+            + " move-image-section:" + juce::String(avg(moveImageSectionProbe_), 1) + "ms x" + juce::String(moveImageSectionProbe_.count));
         staticRasterProbe_ = {};
         contentRasterProbe_ = {};
         overlayPresentProbe_ = {};
@@ -2535,6 +2539,8 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
         vblankToRootPaintProbe_ = {};
         zoomPreviewPaintProbe_ = {};
         zoomCommitRasterProbe_ = {};
+        snapshotBuildProbe_ = {};
+        moveImageSectionProbe_ = {};
         probeReportWindowStart_ = now;
     }
 }
@@ -2969,9 +2975,12 @@ void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCame
     const int moveW = physTimelineW - std::abs(physDelta);
 
     if (moveW > 0) {
+        const double moveT0 = juce::Time::getMillisecondCounterHiRes();
         staticSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
         waveformSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
         contentSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
+        recordRenderProbe(RenderProbePoint::MoveImageSection,
+                          juce::Time::getMillisecondCounterHiRes() - moveT0, 3);
     }
 
     // 补绘露出条带（以物理像素区域反推回逻辑坐标，与 move/clear 区域一致）
@@ -3056,8 +3065,11 @@ void PianoRollComponent::applyVerticalPan()
     const int moveH = physContentH - travel;
     // 波形层留在原地：垂直滚动只移动音高网格和音符。
     if (moveH > 0 && physWidth > 0) {
+        const double moveT0 = juce::Time::getMillisecondCounterHiRes();
         staticSurface_.moveImageSection(0, dstY, 0, srcY, physWidth, moveH);
         contentSurface_.moveImageSection(0, dstY, 0, srcY, physWidth, moveH);
+        recordRenderProbe(RenderProbePoint::MoveImageSection,
+                          juce::Time::getMillisecondCounterHiRes() - moveT0, 2);
     }
 
     int stripY = physRulerHeight;
@@ -3109,8 +3121,9 @@ void PianoRollComponent::handleVerticalScrollPixels(double pixelDelta)
     applyVerticalPan();
 }
 
-std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildContentRenderItems() const
+std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildContentRenderItems()
 {
+    const double buildT0 = juce::Time::getMillisecondCounterHiRes();
     std::vector<PianoRollRenderer::ContentRenderItem> items;
     items.reserve(timelineContentPlacements_.size());
     for (const auto& placement : timelineContentPlacements_) {
@@ -3120,6 +3133,9 @@ std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildConte
             items.push_back(std::move(*item));
         }
     }
+    recordRenderProbe(RenderProbePoint::SnapshotBuild,
+                      juce::Time::getMillisecondCounterHiRes() - buildT0,
+                      static_cast<int>(items.size()));
     return items;
 }
 
