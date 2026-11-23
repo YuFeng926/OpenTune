@@ -9,11 +9,12 @@
  * - 多种工具（选择、绘制、音高线锚点等）
  * - 缩放和滚动
  *
- * 渲染架构：两张保留 Image + 一层透明 Overlay
+ * 渲染架构：保留 Image 表面 + owner paint 分层合成
  * - staticSurface_  ：主题背景、标尺、lane、网格、琴键
+ * - waveformSurface_：背景波形（时间参考层）
+ * - contentSurface_ ：无声帧、notes、F0、TimeGrid 锚点、ghost（由 drawContent 共享）
  * - labelsSurface_  ：键盘隐藏时固定的音名
- * - contentSurface_ ：波形、无声帧、notes、F0、TimeGrid 锚点、ghost（由 drawContent 共享）
- * - overlay_        ：播放头、选中高亮、框选、绘制预览、TimeGrid 把手
+ * - overlay 层      ：播放头、选中高亮、框选、绘制预览、TimeGrid 把手（paint 内滚动条之后绘制）
  */
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -44,6 +45,7 @@
 #include <array>
 #include "SmallButton.h"
 #include "PianoRoll/PianoRollRenderer.h"
+#include "PianoRoll/PianoRollTimeMap.h"
 
 #include "PianoRoll/PianoRollToolHandler.h"
 #include "PianoRoll/InteractionState.h"
@@ -65,20 +67,6 @@ class OpenTuneAudioProcessor;
 struct PlayHeadState;
 
 struct PianoRollComponentTestProbe;
-
-// ============================================================================
-// PianoRollOverlayComponent — 透明覆盖层，绘制所有交互/动态元素
-// ============================================================================
-
-class PianoRollComponent; // fwd
-
-class PianoRollOverlayComponent : public juce::Component {
-public:
-    explicit PianoRollOverlayComponent(PianoRollComponent& owner);
-    void paint(juce::Graphics& g) override;
-private:
-    PianoRollComponent& owner_;
-};
 
 // ============================================================================
 // PianoRollComponent — piano roll editor with retained-image rendering.
@@ -246,7 +234,7 @@ public:
     void setScrollMode(ScrollMode mode) {
         if (scrollMode_ == mode) return;
         scrollMode_ = mode;
-        overlay_->repaint();
+        repaint();
     }
     void setScale(int rootNote, int scaleType);
     void setAudioEditingScheme(AudioEditingScheme::Scheme scheme) { applyAudioEditingScheme(scheme); }
@@ -313,7 +301,7 @@ public:
 
     void setPlayheadColour(juce::Colour colour) {
         playheadColour_ = colour;
-        overlay_->repaint();
+        repaint();
     }
 
     void fitToScreen();
@@ -370,7 +358,6 @@ public:
 
 private:
     friend struct PianoRollComponentTestProbe;
-    friend class PianoRollOverlayComponent;
 
     // ── 保留表面状态快照 ──────────────────────────────────────
     juce::Image staticSurface_;
@@ -378,8 +365,16 @@ private:
     juce::Image waveformSurface_;
     juce::Image contentSurface_;
     ViewportState surfaceView_;
+    // 内容表面来源几何 {contentStartX, rulerHeight, 内容视口宽, 内容视口高}；
+    // 全量内容 raster 时记录，缩放预览冻结期变换用
+    juce::Rectangle<int> surfaceContentBounds_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
+    // 内容编辑与相机平移待补的物理像素区域，由同一次 paint 消费。
+    juce::RectangleList<int> pendingContentRaster_;
+    bool cameraPanPending_ = false;
+    // 缩放提交后的首次全量栅格以栅格起点计时记录 ZoomCommitRaster（提交仍恰一次栅格）
+    bool zoomCommitPending_ = false;
     // 有效倍率（peer/host/root transform 真实绘制栈）；0 = 尚未从 paint 捕获
     float renderScale_ = 0.0f;
 
@@ -392,14 +387,24 @@ private:
 
     // ── 表面管理 ──────────────────────────────────────────────
     void invalidateTimeAxisStaticSurface();
-    void rasterizeDirtySurfaces();
+    void ensureSurfaceSizes();
     void rasterizeStatic(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
                          std::optional<juce::Rectangle<int>> physicalDirtyRect = std::nullopt);
     void rasterizeLabels();
     int getTimelineContentStartX() const noexcept;
-    void rasterizeContent(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
+
+    // ── 内容集合（一次 owner render pass 一份，content/waveform/overlay 共用） ──
+    // 唯一构建点在 paint：全量/条带栅格与 overlay 消费同一集合
+    using Item  = PianoRollRenderer::ContentRenderItem;
+    using Items = PianoRollRenderer::ContentRenderItems;   // std::map<ContentKey, Item>
+    Items buildContentRenderItems();
+    std::optional<Item> buildContentRenderItem(ContentKey key) const;
+    void rasterizeContentSurfaces(const Items& items);
+    void rasterizeContent(const Items& items,
+                          std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
                           std::optional<juce::Rectangle<int>> physicalDirtyRect = std::nullopt);
-    void rasterizeWaveform(std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
+    void rasterizeWaveform(const Items& items,
+                           std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
                            std::optional<juce::Rectangle<int>> physicalDirtyRect = std::nullopt);
 
     // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──
@@ -407,10 +412,13 @@ private:
     void drawRuler(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
     void drawPitchBackground(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
     void drawPianoKeyboard(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
-    enum class ContentLayer { Notes, Waveform, All };
+    enum class ContentLayer { Notes, Waveform };
 
     void drawContent(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage,
-                     ContentLayer layer = ContentLayer::All);
+                     ContentLayer layer, const Items& items);
+    /** 缩放预览：固定 chrome/标尺/音高道/键盘按 live 逻辑坐标绘制，
+     *  音频波形与音符/F0 两层只变换冻结 Image。 */
+    void drawZoomPreview(juce::Graphics& g, const ViewportState& liveView, juce::Rectangle<int> damage);
 
     // ── 性能探针 ──────────────────────────────────────────────
     struct RasterProbe { int count = 0; double totalMs = 0.0; };
@@ -430,13 +438,16 @@ private:
     void recordRenderProbe(RenderProbePoint point, double elapsedMs, int samples = 1);
 
     // ── 保留式相机更新 ────────────────────────────────────────
-    void applyRasterCamera(const TimelineViewportCamera& newCamera);
+    // 满足增量条件时提交相机位移，返回波形横移暴露的物理像素范围。
+    juce::Rectangle<int> commitCameraDelta();
+    /** 纵向滚动事件收口：同步滚动条并请求展示（表面提交由 paint 的 commitCameraDelta 完成）。 */
     void applyVerticalPan();
     void handleHorizontalScrollPixels(double pixelDelta);
     void handleVerticalScrollPixels(double pixelDelta);
 
     // ── 缩放事务 ──────────────────────────────────────────────
     void beginZoomPreviewAt(int anchorViewportX, double zoomFactor);
+    void extendZoomPreview();
     void endZoomPreview();
     void handleVerticalZoomAt(float zoomFactor, float contentY);
     void zoomHorizontalIn();
@@ -445,9 +456,6 @@ private:
     void zoomVerticalOut();
     void layoutZoomControls();
     void updateZoomControlColours();
-
-    // ── 内容构建（供 rasterize + overlay 共用） ────────────────
-    std::vector<PianoRollRenderer::ContentRenderItem> buildContentRenderItems();
 
     // ── EQ popup ──────────────────────────────────────────────
     void closeEqPopup();
@@ -503,20 +511,33 @@ private:
     ViewMapper makeViewMapperForView(const ViewportState& view) const noexcept;
     juce::Rectangle<int> timeAxisRect() const;
 
-    // ── Overlay 绘制委托（由 PianoRollOverlayComponent 调用） ──
+    // ── Overlay 绘制（owner paint 收尾层，drawOverlay 按原次序调度） ──
+    /** overlay 本轮内容获取：构造于 paint 局部、按引用下传，禁止存为成员。 */
+    struct OverlayPassItems {
+        const Items* shared = nullptr;   // 本轮已构建集合（栅格路径），可为空=合法空
+        const Item* sharedItem = nullptr; // 共享集合中活动 key 的缓存命中，避免重复解析
+        std::optional<Item> activeItem;  // 惰性构建缓存（无共享集合路径）
+        const TimelineContentPlacement* activePlacement = nullptr;
+        bool activeBuilt = false;
+    };
+    void drawOverlay(juce::Graphics& g, OverlayPassItems& pass);
+    /** 惰性取得活动内容：优先复用本轮共享集合，缺失时构建一次（成功记 SnapshotBuild
+     *  样本 1，失败缓存空不重试）；item 无关元素（播放头线、琴键、橡皮圆、tooltip）零构建。 */
+    std::optional<PianoRollRenderer::PlacedContent> activeContent(OverlayPassItems& pass);
     void drawPlayheadOverlay(juce::Graphics& g);
-    void drawPlayheadNoteHighlight(juce::Graphics& g);
-    void drawTransientOverlay(juce::Graphics& g);
-    void drawHandDrawPreview(juce::Graphics& g);
+    void drawPlayheadNoteHighlight(juce::Graphics& g, OverlayPassItems& pass);
+    void drawTransientOverlay(juce::Graphics& g, OverlayPassItems& pass);
+    void drawHandDrawPreview(juce::Graphics& g, const PianoRollTimeMap& map,
+                             const PianoRollRenderer::ContentRenderItem& item);
     void drawEraserPreview(juce::Graphics& g);
-    void drawLineAnchorPreview(juce::Graphics& g);
-    void drawSelectionBox(juce::Graphics& g, ThemeId themeId);
-    void drawTimeGridHandles(juce::Graphics& g);
-    void drawSelectedNoteHighlights(juce::Graphics& g);
-    void drawF0SelectionHighlight(juce::Graphics& g);
+    void drawLineAnchorPreview(juce::Graphics& g, const PianoRollTimeMap& map);
+    void drawSelectionBox(juce::Graphics& g, const PianoRollTimeMap& map, ThemeId themeId);
+    void drawTimeGridHandles(juce::Graphics& g, OverlayPassItems& pass);
+    void drawSelectedNoteHighlights(juce::Graphics& g, OverlayPassItems& pass);
+    void drawF0SelectionHighlight(juce::Graphics& g, OverlayPassItems& pass);
     void drawPianoKeysPressed(juce::Graphics& g);
     // OpenDyne overlay
-    void drawScissorsPreview(juce::Graphics& g);
+    void drawScissorsPreview(juce::Graphics& g, const PianoRollTimeMap& map);
     void drawModDriftDragPreview(juce::Graphics& g);
     void drawVolumeDragPreview(juce::Graphics& g);
 
@@ -553,8 +574,6 @@ private:
                             double sampleRate,
                             bool activePlacementChanged,
                             bool deferRedraw);
-    std::optional<PianoRollRenderer::ContentRenderItem> buildContentRenderItem(
-        const TimelineContentPlacement& placement) const;
     const std::vector<Note>& getCommittedNotes() const;
     const std::vector<Note>& getDisplayedNotes() const;
     NoteInteractionDraft& getNoteDraft();
@@ -571,7 +590,6 @@ private:
     bool selectNotesOverlappingFrames(int startFrame, int endFrameExclusive);
     juce::Rectangle<int> getNoteBounds(const Note& note) const;
     juce::Rectangle<int> getNotesBounds(const std::vector<Note>& notes) const;
-    juce::Rectangle<int> getSelectionBounds() const;
     juce::Rectangle<int> getHandDrawPreviewBounds() const;
     juce::Rectangle<int> getLineAnchorPreviewBounds() const;
     void invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes);
@@ -809,7 +827,6 @@ private:
     int pressedPianoKey_ = -1;
 
     std::unique_ptr<juce::VBlankAttachment> scrollVBlankAttachment_;
-    std::unique_ptr<PianoRollOverlayComponent> overlay_;
 
     // OpenDyne：双击滚动条 → 缩放到全部音符
     std::unique_ptr<juce::MouseListener> fitToAllNotesOnDoubleClick_;

@@ -7,6 +7,22 @@
 
 namespace OpenTune {
 
+namespace {
+// 峰值沿用旧比较次序逐元素取最大；空/全静音 → 0。
+float computeClipRefMag(const std::vector<float>& samples) noexcept
+{
+    float peak = 0.0f;
+    for (const float e : samples)
+        if (e > peak) peak = e;
+    return peak;
+}
+} // namespace
+
+OriginalEnergy::OriginalEnergy(std::vector<float> energySamples)
+    : samples(std::move(energySamples))
+    , clipRefMag(computeClipRefMag(samples))
+{}
+
 void PitchCurve::replaceOriginalAnalysis(std::vector<float> f0, std::vector<float> energy,
                                          int hopSize, double sampleRate)
 {
@@ -20,7 +36,8 @@ void PitchCurve::replaceOriginalAnalysis(std::vector<float> f0, std::vector<floa
         }
     }
     auto next = std::make_shared<const PitchCurveSnapshot>(
-        std::move(f0), std::move(energy), previous->getCorrectionSegments(),
+        std::move(f0), std::make_shared<const OriginalEnergy>(std::move(energy)),
+        previous->getCorrectionSegments(),
         hopSize, sampleRate, incrementGeneration(), erasedRanges);
     std::atomic_store(&snapshot_, std::move(next));
 }
@@ -682,7 +699,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
-        oldSnapshot->getOriginalEnergy(),
+        oldSnapshot->getOriginalEnergyRef(),
         std::move(correctionSegments),
         hopSize,
         sampleRate,
@@ -706,7 +723,7 @@ void PitchCurve::retainVoicedCorrectionSegments()
     const uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
-        oldSnapshot->getOriginalEnergy(),
+        oldSnapshot->getOriginalEnergyRef(),
         std::move(voicedSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),
@@ -737,7 +754,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::setManualCorrectionRange(
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
-        oldSnapshot->getOriginalEnergy(),
+        oldSnapshot->getOriginalEnergyRef(),
         std::move(correctionSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),
@@ -759,7 +776,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::clearCorrectionRange(int s
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
         oldSnapshot->getOriginalF0(),
-        oldSnapshot->getOriginalEnergy(),
+        oldSnapshot->getOriginalEnergyRef(),
         std::move(correctionSegments),
         oldSnapshot->getHopSize(),
         oldSnapshot->getSampleRate(),

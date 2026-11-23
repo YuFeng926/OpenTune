@@ -65,8 +65,18 @@ static std::vector<bool> computeVocoderMask(
     return mask;
 }
 
+// 能量向量与其峰值的不可变值对象：发布时计算一次峰值，correction-only 快照共享同一对象。
+struct OriginalEnergy
+{
+    explicit OriginalEnergy(std::vector<float> energySamples);
+    const std::vector<float> samples;
+    const float clipRefMag;
+};
+using EnergyRef = std::shared_ptr<const OriginalEnergy>;
+
 class PitchCurveSnapshot {
 public:
+    // 原始分析/外部测试直接构造：委托到共享能量构造，峰值随发布能量计算一次。
     PitchCurveSnapshot(
         std::vector<float> originalF0,
         std::vector<float> originalEnergy,
@@ -75,6 +85,20 @@ public:
         double sampleRate,
         uint64_t renderGeneration = 0,
         std::vector<F0FrameRange> erasedRanges = {})
+        : PitchCurveSnapshot(std::move(originalF0),
+                             std::make_shared<const OriginalEnergy>(std::move(originalEnergy)),
+                             std::move(correctionSegments), hopSize, sampleRate,
+                             renderGeneration, std::move(erasedRanges))
+    {}
+
+    PitchCurveSnapshot(
+        std::vector<float> originalF0,
+        EnergyRef originalEnergy,
+        std::vector<PitchCorrectionSegment> correctionSegments,
+        int hopSize,
+        double sampleRate,
+        uint64_t renderGeneration,
+        std::vector<F0FrameRange> erasedRanges)
         : originalF0_(std::move(originalF0))
         , originalEnergy_(std::move(originalEnergy))
         , correctionSegments_(std::move(correctionSegments))
@@ -86,7 +110,9 @@ public:
     {}
 
     const std::vector<float>& getOriginalF0() const { return originalF0_; }
-    const std::vector<float>& getOriginalEnergy() const { return originalEnergy_; }
+    const std::vector<float>& getOriginalEnergy() const { return originalEnergy_->samples; }
+    const EnergyRef& getOriginalEnergyRef() const noexcept { return originalEnergy_; }
+    float getClipRefMag() const noexcept { return originalEnergy_->clipRefMag; }
     const std::vector<PitchCorrectionSegment>& getCorrectionSegments() const { return correctionSegments_; }
     const std::vector<F0FrameRange>& getErasedRanges() const { return erasedRanges_; }
     int getHopSize() const { return hopSize_; }
@@ -166,7 +192,7 @@ public:
 
 private:
     const std::vector<float> originalF0_;
-    const std::vector<float> originalEnergy_;
+    const EnergyRef originalEnergy_;
     const std::vector<PitchCorrectionSegment> correctionSegments_;
     const int hopSize_;
     const double sampleRate_;
@@ -206,11 +232,13 @@ public:
 
     void setOriginalF0(const std::vector<float>& f0) {
         auto oldSnapshot = getSnapshot();
+        // 长度相同共享原能量对象；长度改变按原逻辑发布同长全零能量。
+        EnergyRef energy = oldSnapshot->getOriginalEnergy().size() == f0.size()
+            ? oldSnapshot->getOriginalEnergyRef()
+            : std::make_shared<const OriginalEnergy>(std::vector<float>(f0.size(), 0.0f));
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             f0,
-            oldSnapshot->getOriginalEnergy().size() != f0.size() 
-                ? std::vector<float>(f0.size(), 0.0f) 
-                : oldSnapshot->getOriginalEnergy(),
+            std::move(energy),
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
@@ -221,17 +249,16 @@ public:
 
     void setOriginalEnergy(const std::vector<float>& energy) {
         auto oldSnapshot = getSnapshot();
+        const auto& originalF0 = oldSnapshot->getOriginalF0();
+        // 补零/截断到 F0 长度后发布一次新能量对象，峰值随之更新。
+        std::vector<float> adjusted = energy;
+        if (adjusted.size() < originalF0.size())
+            adjusted.resize(originalF0.size(), 0.0f);
+        else if (adjusted.size() > originalF0.size())
+            adjusted.resize(originalF0.size());
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
-            oldSnapshot->getOriginalF0(),
-            energy.size() < oldSnapshot->getOriginalF0().size()
-                ? [&]() {
-                    auto e = energy;
-                    e.resize(oldSnapshot->getOriginalF0().size(), 0.0f);
-                    return e;
-                }()
-                : energy.size() > oldSnapshot->getOriginalF0().size()
-                    ? std::vector<float>(energy.begin(), energy.begin() + oldSnapshot->getOriginalF0().size())
-                    : energy,
+            originalF0,
+            std::make_shared<const OriginalEnergy>(std::move(adjusted)),
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
@@ -251,15 +278,21 @@ public:
             originalF0.resize(endFrame, 0.0f);
         }
         std::copy(f0Fragment.begin(), f0Fragment.end(), originalF0.begin() + static_cast<std::ptrdiff_t>(startFrame));
-        
-        auto originalEnergy = oldSnapshot->getOriginalEnergy();
-        if (originalEnergy.size() < originalF0.size()) {
-            originalEnergy.resize(originalF0.size(), 0.0f);
+
+        // 原能量长度足够时共享；确需扩长按原逻辑补零并发布新能量。
+        const auto& oldEnergy = oldSnapshot->getOriginalEnergy();
+        EnergyRef energy;
+        if (oldEnergy.size() >= originalF0.size()) {
+            energy = oldSnapshot->getOriginalEnergyRef();
+        } else {
+            auto padded = oldEnergy;
+            padded.resize(originalF0.size(), 0.0f);
+            energy = std::make_shared<const OriginalEnergy>(std::move(padded));
         }
-        
+
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             std::move(originalF0),
-            std::move(originalEnergy),
+            std::move(energy),
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
@@ -299,7 +332,7 @@ public:
             else merged.push_back(range);
         }
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
-            oldSnapshot->getOriginalF0(), oldSnapshot->getOriginalEnergy(),
+            oldSnapshot->getOriginalF0(), oldSnapshot->getOriginalEnergyRef(),
             oldSnapshot->getCorrectionSegments(), oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(), incrementGeneration(), std::move(merged));
         std::atomic_store(&snapshot_, newSnapshot);
@@ -321,10 +354,10 @@ public:
         if (originalF0.size() < originalEnergy.size()) {
             originalF0.resize(originalEnergy.size(), 0.0f);
         }
-        
+
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             std::move(originalF0),
-            std::move(originalEnergy),
+            std::make_shared<const OriginalEnergy>(std::move(originalEnergy)),
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
@@ -369,7 +402,7 @@ public:
         uint64_t newGen = incrementGeneration();
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
-            oldSnapshot->getOriginalEnergy(),
+            oldSnapshot->getOriginalEnergyRef(),
             std::move(normalized),
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
@@ -406,7 +439,7 @@ public:
         uint64_t newGen = incrementGeneration();
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
-            oldSnapshot->getOriginalEnergy(),
+            oldSnapshot->getOriginalEnergyRef(),
             segments,
             oldSnapshot->getHopSize(),
             oldSnapshot->getSampleRate(),
@@ -432,7 +465,7 @@ public:
         auto oldSnapshot = getSnapshot();
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
-            oldSnapshot->getOriginalEnergy(),
+            oldSnapshot->getOriginalEnergyRef(),
             oldSnapshot->getCorrectionSegments(),
             hopSize,
             oldSnapshot->getSampleRate(),
@@ -445,7 +478,7 @@ public:
         auto oldSnapshot = getSnapshot();
         auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
             oldSnapshot->getOriginalF0(),
-            oldSnapshot->getOriginalEnergy(),
+            oldSnapshot->getOriginalEnergyRef(),
             oldSnapshot->getCorrectionSegments(),
             oldSnapshot->getHopSize(),
             sampleRate,
@@ -461,7 +494,7 @@ public:
 
         auto copiedCurve = std::make_shared<PitchCurve>();
         copiedCurve->snapshot_ = std::make_shared<const PitchCurveSnapshot>(
-            snapshot->getOriginalF0(), snapshot->getOriginalEnergy(), snapshot->getCorrectionSegments(),
+            snapshot->getOriginalF0(), snapshot->getOriginalEnergyRef(), snapshot->getCorrectionSegments(),
             snapshot->getHopSize(), snapshot->getSampleRate(), copiedCurve->incrementGeneration(),
             snapshot->getErasedRanges());
         return copiedCurve;

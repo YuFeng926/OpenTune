@@ -38,11 +38,11 @@ struct VisibleTimeWindow {
 // Core: project explicit X bounds through timeline → content → tauInverse(source).
 static VisibleTimeWindow computeTimeWindowFromXBounds(
     const PianoRollRenderer::RenderContext& ctx,
-    const PianoRollRenderer::ContentRenderItem& item,
+    PianoRollRenderer::PlacedContent item,
     int startX, int endX)
 {
     VisibleTimeWindow window;
-    if (!item.projection.isValid())
+    if (!item.placement.projection.isValid())
         return window;
 
     window.viewportStartX = startX;
@@ -58,16 +58,17 @@ static VisibleTimeWindow computeTimeWindowFromXBounds(
     // vocal-time-stretch §8.5 — projectTimelineTimeToContent returns OUTPUT time
     // inside the content, but Notes / PitchCurve / F0 timeline / WaveformMipmap
     // are all indexed by SOURCE time. Convert to source time via tauInverse.
-    jassert(item.timeGrid);
-    const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+    jassert(item.content.committedSnapshot->timeGrid);
+    const PianoRollTimeMap map(item.placement.projection,
+                               *item.content.committedSnapshot->timeGrid, ctx.coords);
     window.visibleContentStartTime = map.timelineToSource(window.visibleStartTime);
     window.visibleContentEndTime = map.timelineToSource(window.visibleEndTime);
     return window;
 }
 
-// Damage-aware window for waveform/notes/unvoiced/anchors.
+// Damage-aware window for waveform/notes/unvoiced/anchors/F0.
 VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContext& ctx,
-                                            const PianoRollRenderer::ContentRenderItem& item)
+                                            PianoRollRenderer::PlacedContent item)
 {
     const int startX = ctx.rasterBounds.isEmpty()
         ? ctx.contentStartX
@@ -78,9 +79,9 @@ VisibleTimeWindow computeVisibleTimeWindow(const PianoRollRenderer::RenderContex
     return computeTimeWindowFromXBounds(ctx, item, startX, endX);
 }
 
-// Full-viewport window for F0 (always [contentStartX, ctx.width]).
+// Full-viewport window for F0 着色参考/桶相位行走域与 F0 选择高亮。
 VisibleTimeWindow computeFullViewportTimeWindow(const PianoRollRenderer::RenderContext& ctx,
-                                                 const PianoRollRenderer::ContentRenderItem& item)
+                                                 PianoRollRenderer::PlacedContent item)
 {
     return computeTimeWindowFromXBounds(ctx, item, ctx.contentStartX, ctx.width);
 }
@@ -97,6 +98,10 @@ struct F0VisualSegment
 {
     std::vector<F0VisualPoint> points;
     bool useLinearPath = false;
+    // path 覆盖范围（points 内连续下标）：条带命中点段并前后各夹一个点，
+    // 使描边跨越条带边界、边缘辉光仍覆盖 rasterBounds；渐变继续使用全部点。
+    int pathFirst = 0;
+    int pathLast = -1;
 };
 
 struct F0VisualBuildOptions
@@ -104,6 +109,10 @@ struct F0VisualBuildOptions
     double pixelsPerSecond = 100.0;
     double secondsPerFrame = 0.01;
 };
+
+// 绘制条带（屏幕 X 域，含描边/辉光余量）：段级命中判定用。命中段保持全段
+// 桶相位与完整点列（渐变端点、色标口径与整绘一致），Y/log2 与 path 构造只
+// 覆盖条带周边；与条带无交集的段跳过全部逐帧几何。
 
 static float smootherStep(float value) noexcept
 {
@@ -182,19 +191,21 @@ static void appendLinearF0Path(juce::Path& path,
 // item's projection. Identity TimeGrid 鈫?degenerates to existing pipeline.
 inline int sourceTimeToScreenX(double sourceTime,
                                 const PianoRollRenderer::RenderContext& ctx,
-                                const PianoRollRenderer::ContentRenderItem& item)
+                                PianoRollRenderer::PlacedContent item)
 {
-    jassert(item.timeGrid);
-    const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+    jassert(item.content.committedSnapshot->timeGrid);
+    const PianoRollTimeMap map(item.placement.projection,
+                               *item.content.committedSnapshot->timeGrid, ctx.coords);
     return map.sourceToX(sourceTime);
 }
 
 // OpenDyne waveform blob：按 Note 的 F0Timeline 帧范围索引持久 originalEnergy，构建闭合波形 Path。
-// drawNotes 与选中高亮共用，保证 blob 几何完全一致。
+// 几何按投影后的实际像素列分组采样：同列帧合并为一组，每组保留首/最低/最高/末帧，
+// 点数随屏幕像素间隔自适应。drawNotes 与选中高亮共用，保证 blob 几何完全一致。
 static bool buildNoteBlobPath(
     const Note& note,
     const PianoRollRenderer::RenderContext& ctx,
-    const PianoRollRenderer::ContentRenderItem& item,
+    PianoRollRenderer::PlacedContent item,
     const std::vector<float>& energy,
     const F0Timeline& timeline,
     float clipRefMag,
@@ -209,42 +220,73 @@ static bool buildNoteBlobPath(
     if (range.isEmpty())
         return false;
 
+    // F0 与 energy 是两条独立发布的数组（ARA 恢复分别解码、分别发布）：
+    // 帧范围先与 energy 长度求交集，短 energy 不得越界采样。
+    if (range.startFrame >= static_cast<int>(energy.size()))
+        return false;
+    const int frameCount = std::min(range.endFrameExclusive,
+                                    static_cast<int>(energy.size())) - range.startFrame;
+
+    // 一次投影所有帧：X(f) 单调不减，同列帧构成连续区间。
+    std::vector<int> frameX(static_cast<size_t>(frameCount));
+    std::vector<float> frameAmp(static_cast<size_t>(frameCount));
+    for (int i = 0; i < frameCount; ++i)
+    {
+        const int frame = range.startFrame + i;
+        const double sourceTime = timeline.timeAtFrame(frame);
+        frameX[static_cast<size_t>(i)] = juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item));
+        const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
+        // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
+        const float gainFactor = juce::jlimit(0.2f, 2.5f, std::pow(10.0f, gainDb / 20.0f));
+        frameAmp[static_cast<size_t>(i)] = energy[static_cast<size_t>(frame)] / clipRefMag * gainFactor;
+    }
+
+    // 每列保留首帧、最低振幅帧、最高振幅帧、末帧（去重），顶边正序、底边逆序共用。
+    std::vector<std::pair<float, float>> samples;  // (px, amplitude)
+    for (int f = 0; f < frameCount;)
+    {
+        const int groupEnd = static_cast<int>(std::upper_bound(
+            frameX.begin() + f, frameX.end(), frameX[static_cast<size_t>(f)]) - frameX.begin());
+
+        int minIndex = f;
+        int maxIndex = f;
+        for (int i = f + 1; i < groupEnd; ++i)
+        {
+            if (frameAmp[static_cast<size_t>(i)] < frameAmp[static_cast<size_t>(minIndex)]) minIndex = i;
+            if (frameAmp[static_cast<size_t>(i)] > frameAmp[static_cast<size_t>(maxIndex)]) maxIndex = i;
+        }
+
+        std::array<int, 4> picks { f, minIndex, maxIndex, groupEnd - 1 };
+        std::sort(picks.begin(), picks.end());
+        const auto pickEnd = std::unique(picks.begin(), picks.end());
+        for (auto it = picks.begin(); it != pickEnd; ++it)
+            samples.emplace_back(static_cast<float>(frameX[static_cast<size_t>(*it)]),
+                                 frameAmp[static_cast<size_t>(*it)]);
+
+        f = groupEnd;
+    }
+
     juce::Path blob;
     blob.startNewSubPath(static_cast<float>(x1), centerY);
-
-    for (int frame = range.startFrame; frame < range.endFrameExclusive; ++frame)
-    {
-        const float normMag = energy[static_cast<size_t>(frame)] / clipRefMag;
-        const double sourceTime = timeline.timeAtFrame(frame);
-        const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-        const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
-        // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
-        const float gainFactor = juce::jlimit(0.2f, 2.5f, std::pow(10.0f, gainDb / 20.0f));
-        const float topY = centerY - halfH * normMag * gainFactor;
-        blob.lineTo(px, topY);
-    }
+    for (const auto& sample : samples)
+        blob.lineTo(sample.first, centerY - halfH * sample.second);
     blob.lineTo(static_cast<float>(x2), centerY);
-
-    for (int frame = range.endFrameExclusive; frame-- > range.startFrame;)
-    {
-        const float normMag = energy[static_cast<size_t>(frame)] / clipRefMag;
-        const double sourceTime = timeline.timeAtFrame(frame);
-        const float px = static_cast<float>(juce::jlimit(x1, x2, sourceTimeToScreenX(sourceTime, ctx, item)));
-        const float gainDb = volumeEnvelope ? volumeEnvelope->evalAt(sourceTime) : 0.0f;
-        // 视觉范围 -14dB ~ +8dB：0dB=1.0 原始大小，超出后饱和（防遮挡/防消失）
-        const float gainFactor = juce::jlimit(0.2f, 2.5f, std::pow(10.0f, gainDb / 20.0f));
-        const float bottomY = centerY + halfH * normMag * gainFactor;
-        blob.lineTo(px, bottomY);
-    }
+    for (auto it = samples.rbegin(); it != samples.rend(); ++it)
+        blob.lineTo(it->first, centerY + halfH * it->second);
     blob.closeSubPath();
 
     outPath = std::move(blob);
     return true;
 }
 
-/// Span-stream F0 visual builder: replays the span producer twice.
-/// Pass 1 computes energy min/max across valid F0 frequencies.
-/// Pass 2 builds visual segments with bucket min/max envelope for LOD, linear path for downsampled, Bézier for full-resolution.
+/// Reference traversal + bounded geometry: one producer scan over the viewport
+/// window computes the energy min/max reference（与整绘同源的着色参考，条带
+/// 补绘共用，保证同一像素颜色一致）and captures continuous voiced runs
+/// （帧范围 + 频率样本）。Only runs intersecting the draw band build geometry:
+/// per-frame X projection and bucket phase stay full-run（渐变端点为真实端点、
+/// 色标位置逐桶不变），while Y/log2 and path construction cover only the band
+/// neighbourhood（条带命中点段前后各夹一个点，描边跨越条带边界，边缘辉光仍
+/// 覆盖 rasterBounds）。
 /// Producer receives a sink(startFrame, data, length, gain).
 /// frameToColour maps globalFrame → colour (used for CorrectedF0 gradient tinting).
 template <typename SpanProducer, typename FX, typename FY, typename FC>
@@ -255,7 +297,8 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
     FX&& frameToX,
     FY&& frameToY,
     SpanProducer&& emitSpans,
-    FC&& frameToColour)
+    FC&& frameToColour,
+    float bandX0, float bandX1)
 {
     std::vector<F0VisualSegment> segments;
 
@@ -264,144 +307,138 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
 
     float minEnergy = std::numeric_limits<float>::max();
     float maxEnergy = std::numeric_limits<float>::lowest();
-    if (hasEnergy) {
-        emitSpans([&](int start, const float* data, int length, float gain) {
-            if (!data) return;
-            for (int i = 0; i < length; ++i) {
-                const float frequency = data[i] * gain;
-                if (frequency < 20.0f || frequency > 2000.0f) continue;
-                const int globalFrame = start + i;
+
+    const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
+
+    // ── 参考遍历（一次扫描）：能量 min/max 参考 + 连续有声段捕获 ──
+    struct F0VoicedRun
+    {
+        int firstFrame = 0;
+        int frameCount = 0;
+        std::size_t sampleBegin = 0;
+    };
+    std::vector<F0VoicedRun> runs;
+    std::vector<float> runFrequencies;
+    int runFirstFrame = 0;
+    int runFrameCount = 0;
+    std::size_t runSampleBegin = 0;
+
+    auto flushRun = [&]() {
+        if (runFrameCount == 0)
+            return;
+        runs.push_back({ runFirstFrame, runFrameCount, runSampleBegin });
+        runFrameCount = 0;
+    };
+
+    emitSpans([&](int start, const float* data, int length, float gain) {
+        if (!data) {
+            flushRun();
+            return;
+        }
+        for (int i = 0; i < length; ++i) {
+            const float frequency = data[i] * gain;
+            if (frequency < 20.0f || frequency > 2000.0f) {
+                flushRun();
+                continue;
+            }
+            const int globalFrame = start + i;
+            if (hasEnergy) {
                 const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
                 if (std::isfinite(energy)) {
                     minEnergy = std::min(minEnergy, energy);
                     maxEnergy = std::max(maxEnergy, energy);
                 }
             }
-        });
-    }
-
-    const float targetPointSpacing = f0VisualTargetPointSpacing(options.pixelsPerSecond * options.secondsPerFrame);
-
-    struct BucketAccumulator {
-        bool active = false;
-        float xAccum = 0.0f;
-        float yAccum = 0.0f;
-        float hotMixAccum = 0.0f;
-        int pointCount = 0;
-        juce::Colour noteColour; // 音符颜色（用于bucket平均）
-
-        void clear() noexcept {
-            active = false;
-            xAccum = 0.0f;
-            yAccum = 0.0f;
-            hotMixAccum = 0.0f;
-            pointCount = 0;
-            noteColour = juce::Colours::grey;
-        }
-    };
-
-    F0VisualSegment currentSegment;
-    BucketAccumulator bucket;
-    float bucketAnchorX = 0.0f;
-
-    auto flushBucket = [&]() {
-        if (!bucket.active) {
-            bucket.clear();
-            return;
-        }
-        const float n = static_cast<float>(bucket.pointCount);
-        const float avgX = bucket.xAccum / n;
-        const float avgY = bucket.yAccum / n;
-        const float avgHotMix = bucket.hotMixAccum / n;
-        currentSegment.points.push_back({ avgX, avgY, avgHotMix, bucket.noteColour });
-        bucket.clear();
-    };
-
-    auto flushSegment = [&]() {
-        flushBucket();
-        if (!currentSegment.points.empty()) {
-            currentSegment.useLinearPath = (targetPointSpacing > 0.0f);
-            segments.push_back(std::move(currentSegment));
-            currentSegment = {};
-        }
-    };
-
-    emitSpans([&](int start, const float* data, int length, float gain) {
-        if (!data) {
-            flushSegment();
-            return;
-        }
-        for (int i = 0; i < length; ++i) {
-            const float frequency = data[i] * gain;
-            if (frequency < 20.0f || frequency > 2000.0f) {
-                flushSegment();
-                continue;
+            if (runFrameCount == 0) {
+                runFirstFrame = globalFrame;
+                runSampleBegin = runFrequencies.size();
             }
-
-            const int globalFrame = start + i;
-            const float x = frameToX(globalFrame);
-
-            const float y = frameToY(globalFrame, frequency);
-            float levelHotMix = 0.0f;
-            if (hasEnergy) {
-                const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
-                const float normalizedEnergy = juce::jlimit(0.0f, 1.0f,
-                    (energy - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy));
-                static constexpr float kMaxHotMix = 0.34f;
-                levelHotMix = kMaxHotMix * smootherStep(normalizedEnergy);
-            }
-
-            const juce::Colour noteColour = frameToColour(globalFrame);
-
-            if (targetPointSpacing <= 0.0f) {
-                flushBucket();
-                currentSegment.points.push_back({ x, y, levelHotMix, noteColour });
-                continue;
-            }
-
-            if (!bucket.active) {
-                bucket.active = true;
-                bucketAnchorX = x;
-                bucket.xAccum = x;
-                bucket.yAccum = y;
-                bucket.hotMixAccum = levelHotMix;
-                bucket.pointCount = 1;
-                bucket.noteColour = noteColour;
-                continue;
-            }
-
-            if (std::abs(x - bucketAnchorX) < targetPointSpacing) {
-                if (noteColour != bucket.noteColour) {
-                    flushBucket();
-                    bucket.active = true;
-                    bucketAnchorX = x;
-                    bucket.xAccum = x;
-                    bucket.yAccum = y;
-                    bucket.hotMixAccum = levelHotMix;
-                    bucket.pointCount = 1;
-                    bucket.noteColour = noteColour;
-                    continue;
-                }
-                bucket.xAccum += x;
-                bucket.yAccum += y;
-                bucket.hotMixAccum += levelHotMix;
-                ++bucket.pointCount;
-                continue;
-            }
-
-            flushBucket();
-
-            bucket.active = true;
-            bucketAnchorX = x;
-            bucket.xAccum = x;
-            bucket.yAccum = y;
-            bucket.hotMixAccum = levelHotMix;
-            bucket.pointCount = 1;
-            bucket.noteColour = noteColour;
+            ++runFrameCount;
+            runFrequencies.push_back(frequency);
         }
     });
+    flushRun();
 
-    flushSegment();
+    struct BucketAccumulator {
+        int count = 0;
+        float anchorX = 0.0f;
+        float xSum = 0.0f;
+        float hotMixSum = 0.0f;
+        juce::Colour colour;
+    };
+
+    // 完整色标沿用有声段的端点和分桶。仅为条带与其相邻控制点求 Y 并构造路径。
+    for (const auto& run : runs) {
+        const float segX0 = frameToX(run.firstFrame);
+        const float segX1 = frameToX(run.firstFrame + run.frameCount - 1);
+        if (segX1 < bandX0 || segX0 > bandX1)
+            continue;
+
+        F0VisualSegment segment;
+        segment.useLinearPath = targetPointSpacing > 0.0f;
+        const auto sampleEnd = run.sampleBegin + static_cast<std::size_t>(run.frameCount);
+        std::vector<std::size_t> bucketEnds;
+        BucketAccumulator bucket;
+        const auto flushBucket = [&](std::size_t end) {
+            const float count = static_cast<float>(bucket.count);
+            segment.points.push_back({bucket.xSum / count, 0.0f, bucket.hotMixSum / count, bucket.colour});
+            bucketEnds.push_back(end);
+        };
+
+        for (auto i = run.sampleBegin; i < sampleEnd; ++i) {
+            const int frame = run.firstFrame + static_cast<int>(i - run.sampleBegin);
+            const float x = frameToX(frame);
+            float hotMix = 0.0f;
+            if (hasEnergy) {
+                const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
+                const float normalized = juce::jlimit(0.0f, 1.0f,
+                    (energy - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy));
+                hotMix = 0.34f * smootherStep(normalized);
+            }
+            const auto colour = frameToColour(frame);
+            if (!segment.useLinearPath) {
+                segment.points.push_back({x, 0.0f, hotMix, colour});
+                continue;
+            }
+            if (bucket.count > 0
+                && std::abs(x - bucket.anchorX) < targetPointSpacing && colour == bucket.colour) {
+                ++bucket.count;
+                bucket.xSum += x;
+                bucket.hotMixSum += hotMix;
+            } else {
+                if (bucket.count > 0)
+                    flushBucket(i);
+                bucket = {1, x, x, hotMix, colour};
+            }
+        }
+        if (bucket.count > 0)
+            flushBucket(sampleEnd);
+
+        const auto first = std::lower_bound(segment.points.begin(), segment.points.end(), bandX0,
+            [](const F0VisualPoint& point, float x) { return point.x < x; });
+        const auto last = std::upper_bound(segment.points.begin(), segment.points.end(), bandX1,
+            [](float x, const F0VisualPoint& point) { return x < point.x; });
+        const int neighbours = segment.useLinearPath ? 1 : 2;
+        segment.pathFirst = std::max(0, static_cast<int>(first - segment.points.begin()) - neighbours);
+        segment.pathLast = std::min(static_cast<int>(segment.points.size()) - 1,
+                                    static_cast<int>(last - segment.points.begin()) + neighbours - 1);
+        const auto endOfPoint = [&](int point) {
+            return segment.useLinearPath ? bucketEnds[static_cast<std::size_t>(point)]
+                                         : run.sampleBegin + static_cast<std::size_t>(point + 1);
+        };
+        auto sample = segment.pathFirst == 0 ? run.sampleBegin : endOfPoint(segment.pathFirst - 1);
+        for (int point = segment.pathFirst; point <= segment.pathLast; ++point) {
+            const auto end = endOfPoint(point);
+            const auto count = static_cast<float>(end - sample);
+            float ySum = 0.0f;
+            for (; sample < end; ++sample) {
+                const int frame = run.firstFrame + static_cast<int>(sample - run.sampleBegin);
+                ySum += frameToY(frame, runFrequencies[sample]);
+            }
+            segment.points[static_cast<std::size_t>(point)].y = ySum / count;
+        }
+        segments.push_back(std::move(segment));
+    }
 
     return segments;
 }
@@ -414,30 +451,32 @@ static std::vector<F0VisualSegment> buildF0VisualSegments(
     const F0VisualBuildOptions& options,
     FX&& frameToX,
     FY&& frameToY,
-    SpanProducer&& emitSpans)
+    SpanProducer&& emitSpans,
+    float bandX0, float bandX1)
 {
     return buildF0VisualSegments(originalEnergy, endFrameExclusive, options,
         std::forward<FX>(frameToX), std::forward<FY>(frameToY),
         std::forward<SpanProducer>(emitSpans),
-        [](int) { return juce::Colours::grey; });
+        [](int) { return juce::Colours::grey; }, bandX0, bandX1);
 }
 
 } // namespace
 
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
                                                const RenderContext& ctx,
-                                               const ContentRenderItem& item)
+                                               PlacedContent item)
 {
-    if (!ctx.showUnvoicedFrames || item.f0Timeline.isEmpty())
+    if (!ctx.showUnvoicedFrames || item.content.f0Timeline.isEmpty())
         return;
-    if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0)
+    const auto& pitchSnapshot = item.content.ownerSnapshot->pitchCurve;
+    if (!pitchSnapshot || pitchSnapshot->size() == 0)
         return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
     if (!visibleWindow.isValid())
         return;
 
-    const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+    const auto& originalF0 = pitchSnapshot->getOriginalF0();
     if (originalF0.empty())
         return;
 
@@ -449,7 +488,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
     // Scan only the visible F0 frame range for unvoiced intervals directly.
     int unvoicedStart = -1;
     const int totalFrames = static_cast<int>(originalF0.size());
-    const auto visibleFrames = item.f0Timeline.rangeForTimes(
+    const auto visibleFrames = item.content.f0Timeline.rangeForTimes(
         visibleWindow.visibleContentStartTime,
         visibleWindow.visibleContentEndTime);
     const int startFrame = visibleFrames.startFrame;
@@ -462,8 +501,8 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
         if (isVoiced) {
             if (unvoicedStart >= 0) {
                 // End unvoiced interval
-                const double intervalStartTime = item.f0Timeline.timeAtFrame(unvoicedStart);
-                const double intervalEndTime = item.f0Timeline.timeAtFrame(frame);
+                const double intervalStartTime = item.content.f0Timeline.timeAtFrame(unvoicedStart);
+                const double intervalEndTime = item.content.f0Timeline.timeAtFrame(frame);
 
                 if (intervalEndTime > visibleWindow.visibleContentStartTime &&
                     intervalStartTime < visibleWindow.visibleContentEndTime) {
@@ -489,8 +528,8 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
     }
     // Handle trailing unvoiced interval
     if (unvoicedStart >= 0) {
-        const double intervalStartTime = item.f0Timeline.timeAtFrame(unvoicedStart);
-        const double intervalEndTime = item.f0Timeline.timeAtFrame(endFrameExclusive);
+        const double intervalStartTime = item.content.f0Timeline.timeAtFrame(unvoicedStart);
+        const double intervalEndTime = item.content.f0Timeline.timeAtFrame(endFrameExclusive);
 
         if (intervalEndTime > visibleWindow.visibleContentStartTime &&
             intervalStartTime < visibleWindow.visibleContentEndTime) {
@@ -511,7 +550,7 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                       const RenderContext& ctx,
-                                      const ContentRenderItem& item,
+                                      PlacedContent item,
                                       const WaveformMipmap::Level& wfLevel,
                                       int wfLevelIndex)
 {
@@ -534,8 +573,8 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     // [timelineStartSeconds, timelineEndSeconds] get clamped by tauInverse to
     // boundary peaks, drawing a solid bar of waveform amplitude beyond the
     // segment edges (visible when T_start > 0, e.g. capture segments).
-    const int segStartX = ctx.coords.timeToX(item.projection.timelineStartSeconds);
-    const int segEndX = ctx.coords.timeToX(item.projection.timelineEndSeconds());
+    const int segStartX = ctx.coords.timeToX(item.placement.projection.timelineStartSeconds);
+    const int segEndX = ctx.coords.timeToX(item.placement.projection.timelineEndSeconds());
     const int drawStartX = std::max(startX, segStartX);
     const int drawEndX = std::min(endX, segEndX);
     if (drawEndX <= drawStartX) return;
@@ -545,7 +584,7 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const float amplitudeScale = ctx.height / 2.0f;
 
     const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[wfLevelIndex];
-    const double timePerPeak = waveformSecondsPerPeak(samplesPerPeak, item.audioSampleRate);
+    const double timePerPeak = waveformSecondsPerPeak(samplesPerPeak, item.content.committedSnapshot->audioSampleRate);
     const int64_t numPeaks = static_cast<int64_t>(wfLevel.peaks.size());
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
@@ -556,8 +595,9 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
 
     // Invert the output -> source mapping (tau_inverse) so the screen X axis
     // (output time) reads from the SOURCE peaks at the tau-inverted time.
-    jassert(item.timeGrid);
-    const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+    jassert(item.content.committedSnapshot->timeGrid);
+    const PianoRollTimeMap map(item.placement.projection,
+                               *item.content.committedSnapshot->timeGrid, ctx.coords);
 
     for (int x = drawStartX; x < drawEndX; ++x)
     {
@@ -976,26 +1016,27 @@ static NoteDisplayStyle vocoderShiftedColour(
 }
 
 // Compute the final display colour for a note, fully reusing drawNotes logic:
-// base = EQ active ? item.displayColour.darker(0.30f) : item.displayColour
+// base = EQ active ? placement.displayColour.darker(0.30f) : placement.displayColour
 // if vocoder-needed, shift via vocoderShiftedColour; otherwise return base.
 static NoteDisplayStyle computeNoteDisplayStyle(
-    const PianoRollRenderer::ContentRenderItem& item,
+    PianoRollRenderer::PlacedContent item,
     const Note& note)
 {
     const auto base = (note.eq.has_value() && note.eq->active)
-        ? item.displayColour.darker(0.30f)
-        : item.displayColour;
-    if (item.pitchSnapshot
-        && item.pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.f0Timeline))
-        return vocoderShiftedColour(base, note, *item.pitchSnapshot, item.f0Timeline);
+        ? item.placement.displayColour.darker(0.30f)
+        : item.placement.displayColour;
+    const auto& pitchSnapshot = item.content.ownerSnapshot->pitchCurve;
+    if (pitchSnapshot
+        && pitchSnapshot->noteNeedsVocoder(note.startTime, note.endTime, item.content.f0Timeline))
+        return vocoderShiftedColour(base, note, *pitchSnapshot, item.content.f0Timeline);
     return { base };
 }
 
 void PianoRollRenderer::drawNotes(juce::Graphics& g,
                                   const RenderContext& ctx,
-                                  const ContentRenderItem& item)
+                                  PlacedContent item)
 {
-    const auto& notes = *item.displayNotes;
+    const auto& notes = *item.content.displayNotes;
     if (notes.empty()) return;
 
     const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
@@ -1026,30 +1067,21 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
         });
 
     // ── OpenDyne waveform blob 模式 ──────────────────────────────
-    if (item.notesPrimaryScheme)
+    if (item.content.notesPrimaryScheme)
     {
+        const auto& pitchSnapshot = item.content.ownerSnapshot->pitchCurve;
         // blob 是主音符图形：只依赖持久 originalEnergy + F0Timeline，不依赖可选 PCM/mipmap
-        if (item.pitchSnapshot == nullptr
-            || item.pitchSnapshot->getOriginalEnergy().empty()
-            || item.f0Timeline.isEmpty())
+        if (!pitchSnapshot || item.content.f0Timeline.isEmpty())
             return;
 
-        const auto& energy = item.pitchSnapshot->getOriginalEnergy();
-
-        // blob 音量缩放：拖拽预览包络优先，否则回退到已提交音量包络
-        const AutomationLane* volumeEnvelope = nullptr;
-        if (item.ownerSnapshot != nullptr) {
-            volumeEnvelope = (item.active && volumePreviewEnvelope_ != nullptr)
-                ? volumePreviewEnvelope_ : &item.ownerSnapshot->volumeEnvelope;
-        }
-
-        // ── clip 级振幅参考值：扫描全部 energy 帧，取最大值 ──
-        float clipRefMag = 0.0f;
-        for (const float e : energy) {
-            if (e > clipRefMag) clipRefMag = e;
-        }
+        // clip 级振幅参考值随能量一起发布在快照内，绘制期不再扫描整段 energy
+        const float clipRefMag = pitchSnapshot->getClipRefMag();
         if (clipRefMag <= 0.0f)
-            return;  // 静音 clip，跳过 blob 绘制
+            return;  // 空能量/全静音 clip，跳过 blob 绘制
+        const auto& energy = pitchSnapshot->getOriginalEnergy();
+
+        // blob 音量包络由 owner 在构建 item 时决定（含拖拽预览）
+        const AutomationLane* volumeEnvelope = item.content.volumeEnvelope;
 
         for (auto noteIt = firstVisibleNote; noteIt != lastVisibleNote; ++noteIt)
         {
@@ -1072,11 +1104,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             // 顶边 + 底边闭合 Path：X 用 source-time→timeline→screen 投影
             juce::Path blob;
-            if (!buildNoteBlobPath(note, ctx, item, energy, item.f0Timeline,
+            if (!buildNoteBlobPath(note, ctx, item, energy, item.content.f0Timeline,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
-            // 能量自适应纵向渐变：列式渲染，过渡带亮度和宽窄均随局部 energy 缩放
+            // 能量自适应纵向渐变：像素列分组共享渐变，过渡带亮度和宽窄均随局部 energy 缩放
             {
                 const auto fillTop = drawColour.darker(0.22f).withAlpha(0.32f);
                 const auto fillBottom = drawColour.darker(0.22f).withAlpha(0.32f);
@@ -1087,42 +1119,70 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
                 g.saveState();
                 g.reduceClipRegion(blob);
 
-                constexpr float kStep = 2.0f;
-                for (float x = static_cast<float>(x1); x < static_cast<float>(x2); x += kStep)
+                // 原始列相位锚在音符端点 x(j)=x1+2j，damage 只裁填充范围；
+                // 相邻列取到同一能量帧时合并为一段渐变，不再每 2 逻辑像素重建渐变。
+                const int fillStart = std::max(x1, visibleWindow.viewportStartX);
+                const int fillEnd = std::min(x2, visibleWindow.viewportEndX);
+                if (fillEnd > fillStart)
                 {
-                    const float srcTime = static_cast<float>(note.startTime
-                        + (note.endTime - note.startTime)
-                          * ((x - static_cast<float>(x1))
-                             / static_cast<float>(x2 - x1)));
-                    const int frame = item.f0Timeline.frameAtOrBefore(srcTime);
-                    const float normEnergy = (frame >= 0
-                        && frame < static_cast<int>(energy.size()))
-                        ? juce::jlimit(0.0f, 1.0f,
-                            energy[static_cast<size_t>(frame)] / clipRefMag)
-                        : 0.0f;
+                    const int totalColumns = (x2 - x1 + 1) / 2;
+                    // 组尾搜索上界 = 最后一个待填充列（左边界 < fillEnd）；相位仍锚 x1。
+                    const int fillLimit = std::min(totalColumns, (fillEnd - x1 + 1) / 2);
+                    const auto baselineFrame = [&](int column) {
+                        const float x = static_cast<float>(x1 + 2 * column);
+                        const float srcTime = static_cast<float>(note.startTime
+                            + (note.endTime - note.startTime)
+                              * ((x - static_cast<float>(x1))
+                                 / static_cast<float>(x2 - x1)));
+                        return item.content.f0Timeline.frameAtOrBefore(srcTime);
+                    };
 
-                    const auto glowTrans = drawColour
-                        .interpolatedWith(juce::Colours::white, 0.35f * normEnergy)
-                        .withAlpha(0.65f + 0.05f * normEnergy);
+                    int column = (fillStart - x1) / 2;
+                    while (column < fillLimit)
+                    {
+                        const int frame = baselineFrame(column);
+                        const float normEnergy = (frame >= 0
+                            && frame < static_cast<int>(energy.size()))
+                            ? juce::jlimit(0.0f, 1.0f,
+                                energy[static_cast<size_t>(frame)] / clipRefMag)
+                            : 0.0f;
 
-                    // 过渡带宽窄自适应：normEnergy=0 → 亮带20%（窄），=1 → 亮带60%（宽）
-                    const float bw = 0.20f + 0.40f * normEnergy;
-                    const float tLo = 0.50f - bw * 0.5f;
-                    const float tHi = 0.50f + bw * 0.5f;
-                    const float trLo = tLo * 0.5f;
-                    const float trHi = tHi + (1.0f - tHi) * 0.5f;
+                        int nextColumn = column + 1;
+                        while (nextColumn < fillLimit && baselineFrame(nextColumn) == frame)
+                            ++nextColumn;
 
-                    const float rectH = halfH;
-                    juce::ColourGradient col(fillTop, x, centerY - rectH,
-                                             fillBottom, x, centerY + rectH, false);
-                    col.addColour(trLo, fillTop);
-                    col.addColour(tLo,  glowTrans);
-                    col.addColour(0.50f, glowCore);
-                    col.addColour(tHi,  glowTrans);
-                    col.addColour(trHi, fillBottom);
+                        const float segLeft = static_cast<float>(x1 + 2 * column);
+                        const float segRight = static_cast<float>(std::min(x2, x1 + 2 * nextColumn));
+                        const float drawLeft = std::max(segLeft, static_cast<float>(fillStart));
+                        const float drawRight = std::min(segRight, static_cast<float>(fillEnd));
+                        if (drawRight > drawLeft)
+                        {
+                            const auto glowTrans = drawColour
+                                .interpolatedWith(juce::Colours::white, 0.35f * normEnergy)
+                                .withAlpha(0.65f + 0.05f * normEnergy);
 
-                    g.setGradientFill(col);
-                    g.fillRect(x, centerY - rectH, kStep, rectH * 2.0f);
+                            // 过渡带宽窄自适应：normEnergy=0 → 亮带20%（窄），=1 → 亮带60%（宽）
+                            const float bw = 0.20f + 0.40f * normEnergy;
+                            const float tLo = 0.50f - bw * 0.5f;
+                            const float tHi = 0.50f + bw * 0.5f;
+                            const float trLo = tLo * 0.5f;
+                            const float trHi = tHi + (1.0f - tHi) * 0.5f;
+
+                            const float rectH = halfH;
+                            juce::ColourGradient col(fillTop, segLeft, centerY - rectH,
+                                                     fillBottom, segLeft, centerY + rectH, false);
+                            col.addColour(trLo, fillTop);
+                            col.addColour(tLo,  glowTrans);
+                            col.addColour(0.50f, glowCore);
+                            col.addColour(tHi,  glowTrans);
+                            col.addColour(trHi, fillBottom);
+
+                            g.setGradientFill(col);
+                            g.fillRect(drawLeft, centerY - rectH, drawRight - drawLeft, rectH * 2.0f);
+                        }
+
+                        column = nextColumn;
+                    }
                 }
 
                 g.restoreState();
@@ -1135,7 +1195,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             if (note.eq.has_value() && note.eq->active)
             {
-                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.setColour(item.placement.displayColour.withAlpha(0.85f));
                 g.strokePath(blob, juce::PathStrokeType(2.0f,
                                                         juce::PathStrokeType::curved,
                                                         juce::PathStrokeType::rounded));
@@ -1192,7 +1252,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             if (note.eq.has_value() && note.eq->active)
             {
-                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.setColour(item.placement.displayColour.withAlpha(0.85f));
                 g.drawRect(noteBounds.expanded(1.0f), 2.0f);
             }
 
@@ -1227,7 +1287,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             if (note.eq.has_value() && note.eq->active)
             {
-                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.setColour(item.placement.displayColour.withAlpha(0.85f));
                 g.drawRect(noteBounds.expanded(1.5f), 2.0f);
             }
         }
@@ -1241,7 +1301,7 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
             if (note.eq.has_value() && note.eq->active)
             {
-                g.setColour(item.displayColour.withAlpha(0.85f));
+                g.setColour(item.placement.displayColour.withAlpha(0.85f));
                 g.drawRect(noteBounds.expanded(1.0f), 2.0f);
             }
         }
@@ -1251,11 +1311,11 @@ void PianoRollRenderer::drawNotes(juce::Graphics& g,
 
 void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
                                                     const RenderContext& ctx,
-                                                    const std::vector<Note>& notes,
+                                                    PlacedContent item,
                                                     const std::vector<int>& selectedNoteIndices,
-                                                    const ContentRenderItem& item,
-                                                    bool playheadHighlight)
+                                                    bool asPlayheadHighlight)
 {
+    const auto& notes = *item.content.displayNotes;
     if (notes.empty() || selectedNoteIndices.empty())
         return;
 
@@ -1267,30 +1327,22 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
     const bool isAurora = themeId == ThemeId::Aurora;
 
     // ── OpenDyne：选中高亮直接叠加在波形 blob 上（blob 几何与 drawNotes 完全一致） ──
-    if (item.notesPrimaryScheme)
+    if (item.content.notesPrimaryScheme)
     {
+        const auto& pitchSnapshot = item.content.ownerSnapshot->pitchCurve;
         // blob 是主音符图形：只依赖持久 originalEnergy + F0Timeline，不依赖可选 PCM/mipmap
-        if (item.pitchSnapshot == nullptr
-            || item.pitchSnapshot->getOriginalEnergy().empty()
-            || item.f0Timeline.isEmpty())
+        if (!pitchSnapshot || item.content.f0Timeline.isEmpty())
             return;
 
-        const auto& energy = item.pitchSnapshot->getOriginalEnergy();
+        const auto& energy = pitchSnapshot->getOriginalEnergy();
 
-        // blob 音量缩放：与 drawNotes 一致——拖拽预览包络优先，否则回退到已提交音量包络
-        const AutomationLane* volumeEnvelope = nullptr;
-        if (item.ownerSnapshot != nullptr) {
-            volumeEnvelope = (item.active && volumePreviewEnvelope_ != nullptr)
-                ? volumePreviewEnvelope_ : &item.ownerSnapshot->volumeEnvelope;
-        }
+        // blob 音量包络由 owner 在构建 item 时决定（含拖拽预览），与 drawNotes 一致
+        const AutomationLane* volumeEnvelope = item.content.volumeEnvelope;
 
-        // clip 级振幅参考值：与 drawNotes 一致
-        float clipRefMag = 0.0f;
-        for (const float e : energy) {
-            if (e > clipRefMag) clipRefMag = e;
-        }
+        // clip 级振幅参考值：与 drawNotes 一致，读取快照参考值
+        const float clipRefMag = pitchSnapshot->getClipRefMag();
         if (clipRefMag <= 0.0f)
-            return;  // 静音 clip，无 blob 可高亮
+            return;  // 空能量/全静音 clip，无 blob 可高亮
 
         constexpr float kBlobHalfKeys = 1.5f;
         const float halfH = ctx.pixelsPerSemitone * kBlobHalfKeys;
@@ -1318,23 +1370,23 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
             x2 = juce::jmin(x2, visibleWindow.viewportEndX);
 
             juce::Path blob;
-            if (!buildNoteBlobPath(note, ctx, item, energy, item.f0Timeline,
+            if (!buildNoteBlobPath(note, ctx, item, energy, item.content.f0Timeline,
                                    clipRefMag, volumeEnvelope, centerY, halfH, x1, x2, blob))
                 continue;
 
             // 播放头高亮采用主题强调色，与真实选中态的轨道色描边区分。
-            const auto highlightColour = playheadHighlight
+            const auto highlightColour = asPlayheadHighlight
                 ? UIColors::accent
-                : item.displayColour;
-            g.setColour(playheadHighlight
+                : item.placement.displayColour;
+            g.setColour(asPlayheadHighlight
                 ? highlightColour.withAlpha(0.16f)
                 : highlightColour.brighter(0.55f).withAlpha(0.45f));
             g.fillPath(blob);
 
-            g.setColour(playheadHighlight
+            g.setColour(asPlayheadHighlight
                 ? highlightColour.withAlpha(0.95f)
                 : highlightColour.brighter(0.75f).withAlpha(0.90f));
-            g.strokePath(blob, juce::PathStrokeType(playheadHighlight ? 1.4f : 1.8f,
+            g.strokePath(blob, juce::PathStrokeType(asPlayheadHighlight ? 1.4f : 1.8f,
                                                     juce::PathStrokeType::curved,
                                                     juce::PathStrokeType::rounded));
         }
@@ -1368,33 +1420,34 @@ void PianoRollRenderer::drawSelectedNoteHighlights(juce::Graphics& g,
         auto noteBounds = juce::Rectangle<float>(static_cast<float>(x1), y, w, h);
 
         // 播放头高亮用主题强调色，真实选中态继续使用轨道色。
-        const auto highlightColour = playheadHighlight
+        const auto highlightColour = asPlayheadHighlight
             ? UIColors::accent
-            : item.displayColour;
-        g.setColour(playheadHighlight
+            : item.placement.displayColour;
+        g.setColour(asPlayheadHighlight
             ? highlightColour.withAlpha(0.16f)
             : highlightColour.brighter(0.55f).withAlpha(isAurora ? 0.30f : 0.25f));
         g.fillRect(noteBounds);
 
-        g.setColour(playheadHighlight
+        g.setColour(asPlayheadHighlight
             ? highlightColour.withAlpha(0.95f)
             : highlightColour.brighter(0.75f).withAlpha(isAurora ? 0.90f : 0.85f));
-        g.drawRect(noteBounds, playheadHighlight ? 1.4f : (isAurora ? 1.5f : 1.2f));
+        g.drawRect(noteBounds, asPlayheadHighlight ? 1.4f : (isAurora ? 1.5f : 1.2f));
     }
 }
 // ============================================================================
 // TimeGrid Anchors (cached slot — neutral lines, no interaction)
 // ============================================================================
-void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item)
+void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, PlacedContent item)
 {
-    jassert(item.timeGrid);
+    jassert(item.content.committedSnapshot->timeGrid);
 
     const int contentTop    = ctx.rulerHeight;
     const int contentBottom = ctx.height;
     if (contentBottom <= contentTop) return;
 
-    for (const auto& h : item.timeGrid->handles()) {
-        const double timelineTime = item.projection.projectContentTimeToTimeline(h.output_seconds);
+    const auto& grid = *item.content.committedSnapshot->timeGrid;
+    for (const auto& h : grid.handles()) {
+        const double timelineTime = item.placement.projection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.contentStartX || x >= ctx.width) continue;
 
@@ -1411,9 +1464,10 @@ void PianoRollRenderer::drawTimeGridAnchors(juce::Graphics& g, const RenderConte
 // ============================================================================
 // TimeGrid Handles (overlay — hover/selected/drag affordances)
 // ============================================================================
-void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item)
+void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx,
+                                            const ContentTimelineProjection& projection,
+                                            const TimeGridSnapshot& grid)
 {
-    jassert(item.timeGrid);
     if (!ctx.isTimeView()) return;
 
     const int contentTop    = ctx.rulerHeight;
@@ -1435,13 +1489,13 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
 
     const juce::Colour kHighConfidenceColour = juce::Colour::fromRGB(0xE0, 0xB0, 0x40);
 
-    for (const auto& h : item.timeGrid->handles()) {
+    for (const auto& h : grid.handles()) {
         const bool selected = (ctx.timeGridSelectedHandleId == h.id);
         const bool hovered  = (ctx.timeGridHoveredHandleId  == h.id);
         const bool isAdditional = std::find(ctx.additionalSelectedHandleIds.begin(), ctx.additionalSelectedHandleIds.end(), h.id) != ctx.additionalSelectedHandleIds.end();
         if (!selected && !hovered && !isAdditional) continue;
 
-        const double timelineTime = item.projection.projectContentTimeToTimeline(h.output_seconds);
+        const double timelineTime = projection.projectContentTimeToTimeline(h.output_seconds);
         const int x = ctx.coords.timeToX(timelineTime);
         if (x < ctx.contentStartX || x >= ctx.width) continue;
 
@@ -1480,11 +1534,12 @@ void PianoRollRenderer::drawTimeGridHandles(juce::Graphics& g, const RenderConte
 
 void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
                                                   const RenderContext& ctx,
-                                                  const ContentRenderItem& item)
+                                                  PlacedContent item)
 {
-    if (item.f0Timeline.isEmpty()) return;
-    if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0) return;
-    if (item.notesPrimaryScheme) return;   // OpenDyne：notes-primary 无 F0 框选
+    if (item.content.f0Timeline.isEmpty()) return;
+    const auto& pitchSnapshot = item.content.ownerSnapshot->pitchCurve;
+    if (!pitchSnapshot || pitchSnapshot->size() == 0) return;
+    if (item.content.notesPrimaryScheme) return;   // OpenDyne：notes-primary 无 F0 框选
     if (!ctx.showOriginalF0) return;
     if (!ctx.hasF0Selection || ctx.f0SelectionRanges.empty()) return;
 
@@ -1492,31 +1547,31 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
     if (!visibleWindow.isValid()) return;
 
     const int marginFrames = 10;
-    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(
+    const auto visibleFrames = item.content.f0Timeline.rangeForTimesWithMargin(
         visibleWindow.visibleContentStartTime,
         visibleWindow.visibleContentEndTime,
         marginFrames);
     const int startFrame = static_cast<int>(std::min(static_cast<std::size_t>(visibleFrames.startFrame),
-                                                     item.pitchSnapshot->size()));
+                                                     pitchSnapshot->size()));
     const int endFrame = static_cast<int>(std::min(static_cast<std::size_t>(
         std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
-        item.pitchSnapshot->size()));
+        pitchSnapshot->size()));
 
     double secondsPerFrame = 0.01;
-    if (item.f0Timeline.endFrameExclusive() > 1) {
-        secondsPerFrame = item.f0Timeline.timeAtFrame(1) - item.f0Timeline.timeAtFrame(0);
+    if (item.content.f0Timeline.endFrameExclusive() > 1) {
+        secondsPerFrame = item.content.f0Timeline.timeAtFrame(1) - item.content.f0Timeline.timeAtFrame(0);
     }
 
     F0VisualBuildOptions visualOptions;
     visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
     visualOptions.secondsPerFrame = secondsPerFrame;
 
-    const std::vector<float>* originalEnergy = &item.pitchSnapshot->getOriginalEnergy();
+    const std::vector<float>* originalEnergy = &pitchSnapshot->getOriginalEnergy();
     if (originalEnergy->empty()) originalEnergy = nullptr;
 
     auto makeFrameToX = [&](int frame) -> float {
         return static_cast<float>(sourceTimeToScreenX(
-            item.f0Timeline.timeAtFrame(frame), ctx, item));
+            item.content.f0Timeline.timeAtFrame(frame), ctx, item));
     };
 
     auto makeFrameToY = [&](int, float frequency) -> float {
@@ -1542,7 +1597,7 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
         const int selEnd = std::min(selEndFrame, endFrame);
         if (selEnd <= selStart) continue;
 
-        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+        const auto& originalF0 = pitchSnapshot->getOriginalF0();
         const int origEnd = std::min(selEnd, static_cast<int>(originalF0.size()));
         if (origEnd <= selStart) continue;
 
@@ -1550,8 +1605,10 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
             sink(selStart, originalF0.data() + selStart, origEnd - selStart, 1.0f);
         };
 
+        // 条带 = 全域：行走域全被覆盖，所有段命中，行为与基线一致。
         const auto visualSegments = buildF0VisualSegments(
-            originalEnergy, origEnd, visualOptions, makeFrameToX, makeFrameToY, selectionProducer);
+            originalEnergy, origEnd, visualOptions, makeFrameToX, makeFrameToY, selectionProducer,
+            std::numeric_limits<float>::lowest(), std::numeric_limits<float>::max());
 
         for (const auto& segment : visualSegments) {
             if (segment.points.empty()) continue;
@@ -1580,9 +1637,9 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
 
             juce::Path runPath;
             if (segment.useLinearPath) {
-                appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+                appendLinearF0Path(runPath, segment.points, segment.pathFirst, segment.pathLast);
             } else {
-                appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+                appendSmoothedF0Path(runPath, segment.points, segment.pathFirst, segment.pathLast);
             }
 
             if (isAurora) {
@@ -1605,47 +1662,58 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
 
 void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      const RenderContext& ctx,
-                                     const ContentRenderItem& item)
+                                     PlacedContent item)
 {
-    if (item.f0Timeline.isEmpty())
+    if (item.content.f0Timeline.isEmpty())
         return;
 
-    if (!item.pitchSnapshot || item.pitchSnapshot->size() == 0)
+    const auto& pitchSnapshot = item.content.ownerSnapshot->pitchCurve;
+    if (!pitchSnapshot || pitchSnapshot->size() == 0)
         return;
 
     if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
         return;
 
-    const auto visibleWindow = computeFullViewportTimeWindow(ctx, item);
-    if (!visibleWindow.isValid())
-        return;
+    // 绘制条带（屏幕 X 域，扩描边/辉光余量）决定段级命中域；全视口窗口固定
+    // 着色参考与桶相位，命中段渐变使用真实端点，折线只覆盖条带周边且条带内
+    // 与整绘一致。X 域扩边先于时间映射——TimeGrid 压缩下按帧数换算会低估
+    // 帧到条带边界的跨屏距离。
+    constexpr float kStrokeGlowPx = 3.0f;  // Aurora 修正曲线 glow 半宽 2.475px 为全部 F0 线宽上界
+    // 不钳到视口：中心在视口外半段的 glow 仍覆盖视口边缘列，段命中判定允许越界
+    const float bandX0 = static_cast<float>(
+        (ctx.rasterBounds.isEmpty() ? ctx.contentStartX : ctx.rasterBounds.getX())
+            - static_cast<int>(kStrokeGlowPx));
+    const float bandX1 = static_cast<float>(
+        (ctx.rasterBounds.isEmpty() ? ctx.width : std::min(ctx.rasterBounds.getRight(), ctx.width))
+            + static_cast<int>(kStrokeGlowPx));
 
+    const auto refViewport = computeFullViewportTimeWindow(ctx, item);
     const int marginFrames = 10;
-    const auto visibleFrames = item.f0Timeline.rangeForTimesWithMargin(
-        visibleWindow.visibleContentStartTime,
-        visibleWindow.visibleContentEndTime,
+    const auto refFrames = item.content.f0Timeline.rangeForTimesWithMargin(
+        refViewport.visibleContentStartTime,
+        refViewport.visibleContentEndTime,
         marginFrames);
-    const int startFrame = static_cast<int>(std::min(static_cast<std::size_t>(visibleFrames.startFrame),
-                                                     item.pitchSnapshot->size()));
+    const int startFrame = static_cast<int>(std::min(static_cast<std::size_t>(refFrames.startFrame),
+                                                     pitchSnapshot->size()));
     const int endFrame = static_cast<int>(std::min(static_cast<std::size_t>(
-        std::max(visibleFrames.startFrame, visibleFrames.endFrameExclusive)),
-        item.pitchSnapshot->size()));
+        std::max(refFrames.startFrame, refFrames.endFrameExclusive)),
+        pitchSnapshot->size()));
 
     double secondsPerFrame = 0.01;
-    if (item.f0Timeline.endFrameExclusive() > 1) {
-        secondsPerFrame = item.f0Timeline.timeAtFrame(1) - item.f0Timeline.timeAtFrame(0);
+    if (item.content.f0Timeline.endFrameExclusive() > 1) {
+        secondsPerFrame = item.content.f0Timeline.timeAtFrame(1) - item.content.f0Timeline.timeAtFrame(0);
     }
 
     F0VisualBuildOptions visualOptions;
     visualOptions.pixelsPerSecond = ctx.pixelsPerSecond;
     visualOptions.secondsPerFrame = secondsPerFrame;
 
-    const std::vector<float>* originalEnergy = &item.pitchSnapshot->getOriginalEnergy();
+    const std::vector<float>* originalEnergy = &pitchSnapshot->getOriginalEnergy();
     if (originalEnergy->empty()) originalEnergy = nullptr;
 
     auto makeFrameToX = [&](int frame) -> float {
         return static_cast<float>(sourceTimeToScreenX(
-            item.f0Timeline.timeAtFrame(frame), ctx, item));
+            item.content.f0Timeline.timeAtFrame(frame), ctx, item));
     };
 
     auto makeFrameToY = [&](int, float frequency) -> float {
@@ -1658,10 +1726,10 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const bool isOverdose = themeId == ThemeId::Overdose;
 
     const auto makeFrameToColour = [&]() {
-        const auto& notes = *item.displayNotes;
+        const auto& notes = *item.content.displayNotes;
         return [&, noteIt = notes.begin(), noteEnd = notes.end(), hasNoteColour = false,
-                currentNoteColour = item.displayColour](int globalFrame) mutable -> juce::Colour {
-            const double timeSec = item.f0Timeline.timeAtFrame(globalFrame);
+                currentNoteColour = item.placement.displayColour](int globalFrame) mutable -> juce::Colour {
+            const double timeSec = item.content.f0Timeline.timeAtFrame(globalFrame);
             while (noteIt != noteEnd && noteIt->endTime <= timeSec) {
                 ++noteIt;
                 hasNoteColour = false;
@@ -1673,7 +1741,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 }
                 return currentNoteColour;
             }
-            return item.displayColour;
+            return item.placement.displayColour;
         };
     };
 
@@ -1731,8 +1799,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     };
 
     // Draw original F0 (thin) — single contiguous span producer
-    if (ctx.showOriginalF0 && !item.notesPrimaryScheme) {
-        const auto& originalF0 = item.pitchSnapshot->getOriginalF0();
+    if (ctx.showOriginalF0 && !item.content.notesPrimaryScheme) {
+        const auto& originalF0 = pitchSnapshot->getOriginalF0();
         const int origStart = startFrame;
         const int origEnd = std::min(endFrame, static_cast<int>(originalF0.size()));
 
@@ -1744,7 +1812,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
         auto originalFrameToColour = makeFrameToColour();
         const auto visualSegments = buildF0VisualSegments(
             originalEnergy, origEnd, visualOptions, makeFrameToX, makeFrameToY, originalProducer,
-            originalFrameToColour);
+            originalFrameToColour, bandX0, bandX1);
 
         const juce::Colour colour = ctx.originalF0Colour;
         const float alpha = 1.0f;
@@ -1788,9 +1856,9 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
             juce::Path runPath;
             if (segment.useLinearPath) {
-                appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+                appendLinearF0Path(runPath, segment.points, segment.pathFirst, segment.pathLast);
             } else {
-                appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+                appendSmoothedF0Path(runPath, segment.points, segment.pathFirst, segment.pathLast);
             }
 
             if (isAurora) {
@@ -1829,16 +1897,16 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     // OpenDyne（notesPrimaryScheme）：显示有效F0（修正段+回退OriginalF0）；
     // OpenTune：仅 correction segment 覆盖的区域（绘制的音符范围）派生CorrectedF0，
     // 其余区域只显示OriginalF0红色细线。
-    if (ctx.showCorrectedF0 && item.ownerSnapshot) {
-        const bool shouldDrawCorrected = item.notesPrimaryScheme
-            ? item.pitchSnapshot->hasOriginalF0Data()
-            : item.pitchSnapshot->hasCorrectionLayer();
+    if (ctx.showCorrectedF0) {
+        const bool shouldDrawCorrected = item.content.notesPrimaryScheme
+            ? pitchSnapshot->hasOriginalF0Data()
+            : pitchSnapshot->hasCorrectionLayer();
         if (shouldDrawCorrected) {
         auto correctedProducer = [&](auto&& sink) {
-            if (item.notesPrimaryScheme)
-                item.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
+            if (item.content.notesPrimaryScheme)
+                item.content.ownerSnapshot->forEachEffectiveF0Span(startFrame, endFrame, sink);
             else
-                item.pitchSnapshot->forEachCorrectionF0Span(startFrame, endFrame,
+                pitchSnapshot->forEachCorrectionF0Span(startFrame, endFrame,
                     [&](int spanStartFrame, const float* values, int count) {
                         sink(spanStartFrame, values, count, 1.0f);
                     });
@@ -1848,7 +1916,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
         const auto visualSegments = buildF0VisualSegments(
             originalEnergy, endFrame, visualOptions, makeFrameToX, makeFrameToY, correctedProducer,
-            frameToColour);
+            frameToColour, bandX0, bandX1);
 
         const float alpha = 1.0f;
 
@@ -1895,9 +1963,9 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
             juce::Path runPath;
             if (segment.useLinearPath) {
-                appendLinearF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+                appendLinearF0Path(runPath, segment.points, segment.pathFirst, segment.pathLast);
             } else {
-                appendSmoothedF0Path(runPath, segment.points, 0, segment.points.size() - 1);
+                appendSmoothedF0Path(runPath, segment.points, segment.pathFirst, segment.pathLast);
             }
 
             if (isAurora) {
@@ -1982,7 +2050,7 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                 g.strokePath(runPath, strokeType);
 
                 // OpenDyne：极细橘红描边叠加在 corrected F0 上
-                if (item.notesPrimaryScheme) {
+                if (item.content.notesPrimaryScheme) {
                     static const juce::Colour kOpenDyneAccentStroke { 0xFFE85D2A }; // 橘红
                     g.setColour(kOpenDyneAccentStroke.withAlpha(0.65f));
                     g.strokePath(runPath, juce::PathStrokeType(0.55f,

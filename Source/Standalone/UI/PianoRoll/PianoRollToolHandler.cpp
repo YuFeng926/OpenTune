@@ -3718,19 +3718,20 @@ void PianoRollToolHandler::collectF0StretchesInRange(double startTime, double en
 {
     const auto f0tl = ctx_.getF0Timeline();
     if (f0tl.isEmpty()) return;
+    // 鼠标框选入口取得一次 committed
+    auto contentSnapshot = ctx_.getEditableContentSnapshot();
+    if (!contentSnapshot) return;
     // 与 F0Timeline::rangeForTimes 一致的端点语义
-    collectF0StretchesInFrames(f0tl.frameAtOrBefore(startTime),
+    collectF0StretchesInFrames(*contentSnapshot, f0tl.frameAtOrBefore(startTime),
                                f0tl.exclusiveFrameAt(endTime), out);
 }
 
-void PianoRollToolHandler::collectF0StretchesInFrames(int startFrame, int endFrameExclusive, FrameSelection& out) const
+void PianoRollToolHandler::collectF0StretchesInFrames(const EditableContentSnapshot& contentSnapshot,
+                                                      int startFrame, int endFrameExclusive, FrameSelection& out)
 {
     if (endFrameExclusive <= startFrame) return;
 
-    auto contentSnapshot = ctx_.getEditableContentSnapshot();
-    if (!contentSnapshot) return;
-
-    contentSnapshot->forEachEffectiveF0Span(startFrame, endFrameExclusive,
+    contentSnapshot.forEachEffectiveF0Span(startFrame, endFrameExclusive,
         [&](int spanStart, const float* data, int length, float gain) {
             for (int i = 0; i < length; ++i) {
                 if (data[i] * gain > 0.0f)
@@ -3739,23 +3740,30 @@ void PianoRollToolHandler::collectF0StretchesInFrames(int startFrame, int endFra
         });
 }
 
-FrameSelection PianoRollToolHandler::buildFrameSelectionForNotes(const std::vector<Note>& notes) const
+FrameSelection PianoRollToolHandler::collectSelectedFrameRanges(const EditableContentSnapshot* committed) const
 {
-    FrameSelection out;
+    // 音符派生 + 显式帧选择合并的唯一出口（原 buildFrameSelectionForNotes 并入此处）；
+    // F0 时间轴从传入 committed 快照自身构造，不混用 ctx_ 成员来源
+    FrameSelection result;
     const auto& selectedIndices = ctx_.getState().noteSelection.selectedIndices;
-    if (selectedIndices.empty()) return out;
-
-    const auto f0tl = ctx_.getF0Timeline();
-    if (f0tl.isEmpty()) return out;
-
-    constexpr int kGapMarginFrames = 10;   // 音符前后间隙上下文（帧）
-    for (int idx : selectedIndices) {
-        if (idx < 0 || idx >= static_cast<int>(notes.size())) continue;
-        const auto& note = notes[static_cast<size_t>(idx)];
-        const auto range = f0tl.rangeForTimesWithMargin(note.startTime, note.endTime, kGapMarginFrames);
-        collectF0StretchesInFrames(range.startFrame, range.endFrameExclusive, out);
+    if (committed != nullptr && !selectedIndices.empty()
+        && committed->pitchCurve != nullptr && committed->pitchCurve->size() > 0) {
+        const F0Timeline f0tl{ committed->pitchCurve->getHopSize(),
+                               committed->pitchCurve->getSampleRate(),
+                               static_cast<int>(committed->pitchCurve->size()) };
+        if (!f0tl.isEmpty()) {
+            constexpr int kGapMarginFrames = 10;   // 音符前后间隙上下文（帧）
+            const auto& notes = committed->notes;
+            for (int idx : selectedIndices) {
+                if (idx < 0 || idx >= static_cast<int>(notes.size())) continue;
+                const auto& note = notes[static_cast<size_t>(idx)];
+                const auto range = f0tl.rangeForTimesWithMargin(note.startTime, note.endTime, kGapMarginFrames);
+                collectF0StretchesInFrames(*committed, range.startFrame, range.endFrameExclusive, result);
+            }
+        }
     }
-    return out;
+    result.merge(ctx_.getState().frameSelection);
+    return result;
 }
 
 bool PianoRollToolHandler::findF0ContiguousStretch(int frame, int& outStart, int& outEndExclusive) const
@@ -3785,13 +3793,6 @@ bool PianoRollToolHandler::findF0ContiguousStretch(int frame, int& outStart, int
     while (outStart > 0 && effective[static_cast<size_t>(outStart - 1)]) --outStart;
     while (outEndExclusive < n && effective[static_cast<size_t>(outEndExclusive)]) ++outEndExclusive;
     return true;
-}
-
-FrameSelection PianoRollToolHandler::collectSelectedFrameRanges() const
-{
-    FrameSelection result = buildFrameSelectionForNotes(ctx_.getCommittedNotes());
-    result.merge(ctx_.getState().frameSelection);
-    return result;
 }
 
 // ============================================================================

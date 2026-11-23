@@ -290,9 +290,10 @@ public:
     // 删除键命令入口（Delete/Backspace/'1'/Cut 共用）：删除选中音符与选区内容
     void handleDeleteKey();
 
-    // 收集当前完整 F0 选择范围（音符派生 + 显式帧选择，排序归并）。
-    // 唯一派生路径：渲染高亮、参数操作、auto-tune 都从这里取范围。
-    FrameSelection collectSelectedFrameRanges() const;
+    // 收集完整 F0 选择范围（音符派生 + 显式帧选择，排序归并）。
+    // 唯一派生路径：渲染高亮、参数操作、auto-tune 都从这里取范围；
+    // committed 由调用方取得一次传入，空内容只贡献显式帧选择。
+    FrameSelection collectSelectedFrameRanges(const EditableContentSnapshot* committed) const;
 
 private:
     struct ParameterTargetSelection
@@ -417,11 +418,10 @@ private:
     void selectAllNotes(const std::vector<Note>& notes);
     int findLastSelectedNoteIndex(const std::vector<Note>& notes);
     void selectNotesBetween(const std::vector<Note>& notes, int startIndex, int endIndex);
-    // 收集指定时间范围内所有有效 F0 帧的连续段
+    // 收集指定时间范围内所有有效 F0 帧的连续段（committed 由调用方取得一次传入）
     void collectF0StretchesInRange(double startTime, double endTime, FrameSelection& out) const;
-    void collectF0StretchesInFrames(int startFrame, int endFrameExclusive, FrameSelection& out) const;
-    // 为选中音符构建帧选择（含前后间隙）
-    FrameSelection buildFrameSelectionForNotes(const std::vector<Note>& notes) const;
+    static void collectF0StretchesInFrames(const EditableContentSnapshot& committed,
+                                           int startFrame, int endFrameExclusive, FrameSelection& out);
     // 找到指定帧所在的连续 F0 段
     bool findF0ContiguousStretch(int frame, int& outStart, int& outEndExclusive) const;
 

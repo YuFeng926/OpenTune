@@ -114,6 +114,9 @@ void PianoRollComponent::initializeUIComponents() {
     addAndMakeVisible(verticalScrollBar_);
     verticalScrollBar_.addListener(this);
     verticalScrollBar_.setAutoHide(false);
+    // 滚动条像素由 owner paint 在原层位手动绘制（paintEntireComponent）；
+    // 零 alpha 让 JUCE 跳过子组件自身的绘制，bounds/输入/listener 不变
+    verticalScrollBar_.setAlpha(0.0f);
 
     // OpenDyne：双击滚动条 = 缩放到全部音符
     fitToAllNotesOnDoubleClick_ = std::make_unique<FitToAllNotesOnDoubleClick>(*this);
@@ -280,7 +283,6 @@ void PianoRollComponent::handleVolumeEnvelopeRegionEditResult(
     // Drag preview was rasterized during mouseDrag. Rebuild after every result so
     // NoChange/Failed also remove it from the retained content surface.
     requestContentRedraw();
-    overlay_->repaint();
     if (applied) {
         listeners_.call([](Listener& listener) { listener.contentEdited(); });
     }
@@ -328,9 +330,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             } else {
                 interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
             }
-            invalidateLiveNotes(beforeNotes, cachedNotes_);
             requestContentRedraw();
-            overlay_->repaint();
             if (result.pitchCurveEdited) {
                 const int startFrame = result.affectedRange.startFrame;
                 const int endFrame = result.affectedRange.endFrameExclusive - 1;
@@ -354,7 +354,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (result.status == DrawNoteCommitStatus::StaleRevision)
             closeEqPopup();
         requestContentRedraw();
-        overlay_->repaint();
     };
     toolCtx.commitNoteCorrectionDraft = [this](uint64_t expectedNotesRevision,
                                                 const std::vector<Note>& notes,
@@ -392,7 +391,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         }
 
         requestContentRedraw();
-        overlay_->repaint();
         return result.status == Status::Applied || result.status == Status::NoChange;
     };
     toolCtx.commitNoteResize = [this](uint64_t expectedNotesRevision,
@@ -406,7 +404,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (processor_ == nullptr || !editedContentKey_.isValid())
             return false;
 
-        const auto beforeNotes = cachedNotes_;
         const auto result = processor_->resizePianoRollNote(
             editedContentKey_, noteIndex, edge, clampedTime, minDuration,
             expectedNotesRevision, segments, affectedRange, std::move(description));
@@ -432,9 +429,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         if (result.status != OpenTuneAudioProcessor::NoteResizeCommitStatus::Applied)
             interactionState_.noteDraft.clear();
 
-        invalidateLiveNotes(beforeNotes, cachedNotes_);
         requestContentRedraw();
-        overlay_->repaint();
         return result.status == OpenTuneAudioProcessor::NoteResizeCommitStatus::Applied;
     };
     // ── OpenDyne 契约回调（Pitch/Scissors/Gain 域） ──
@@ -558,7 +553,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
             }
             parameterTargetDidChange();
             requestContentRedraw();
-            overlay_->repaint();
             return result;
         }
         if (result.status != EraserStrokeEditStatus::Applied)
@@ -571,7 +565,6 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         applyEditedContentCurve(result.contentSnapshot->pitchCurve);
         pendingUndoDescription_ = {};
         requestContentRedraw();
-        overlay_->repaint();
         return result;
     };
     toolCtx.deleteSelectedPianoRollNotes = [this](
@@ -725,7 +718,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         pendingSeekHostTimeAtGesture_ = hostTime;
         pendingSeekHostWasPlaying_ = playHeadState_.isPlaying.load(std::memory_order_acquire);
         playheadTimeForPaint_ = time;
-        overlay_->repaint();
+        repaint();
         if (!hostAccepted)
             userScrollHold_ = true;
     };
@@ -790,7 +783,7 @@ PianoRollToolHandler::Context PianoRollComponent::buildToolHandlerContext() {
         return true;
     };
     toolCtx.repaintTimeGridHandles = [this]() {
-        overlay_->repaint();
+        repaint();
     };
 
     return toolCtx;
@@ -1250,11 +1243,6 @@ PianoRollComponent::PianoRollComponent(const PlayHeadState& playHeadState,
     initializeUIComponents();
     initializeRenderer();
     initializeToolHandler();
-    overlay_ = std::make_unique<PianoRollOverlayComponent>(*this);
-    addAndMakeVisible(*overlay_);
-    overlay_->setInterceptsMouseClicks(false, false);
-    // The overlay only paints on top of the notes; screen readers do not need it.
-    overlay_->setAccessible(false);
     // The vertical scroll bar is mouse-only; NVDA read it as "scroll bar 0".
     verticalScrollBar_.setAccessible(false);
 }
@@ -1381,7 +1369,6 @@ bool PianoRollComponent::commitNoteDraft()
         return true;
     }
 
-    const auto previewNotes = interactionState_.noteDraft.workingNotes;
     OpenTuneAudioProcessor::NoteDraftCommitResult result;
     if (processor_ != nullptr && editedContentKey_.isValid()) {
         result = processor_->commitNoteDraft(
@@ -1407,9 +1394,7 @@ bool PianoRollComponent::commitNoteDraft()
     else
         interactionState_.noteSelection.trimToNoteCount(static_cast<int>(cachedNotes_.size()));
 
-    invalidateLiveNotes(previewNotes, cachedNotes_);
     requestContentRedraw();
-    overlay_->repaint();
     if (result.status == Status::Applied)
         listeners_.call([](Listener& listener) { listener.contentEdited(); });
     parameterTargetDidChange();
@@ -1675,7 +1660,7 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
         interactionState_.selection.f0SelectionCurrentFrame = -1;
         if (targetChanged)
             parameterTargetDidChange();
-        overlay_->repaint();
+        repaint();
         return false;
     }
 
@@ -1707,7 +1692,7 @@ bool PianoRollComponent::selectNotesOverlappingFrames(int startFrame, int endFra
     // 帧选择由 collectSelectedFrameRanges 从 noteSelection 按需派生
     if (targetChanged)
         parameterTargetDidChange();
-    overlay_->repaint();
+    repaint();
 
     return anyOverlap;
 }
@@ -1753,34 +1738,6 @@ juce::Rectangle<int> PianoRollComponent::getNotesBounds(const std::vector<Note>&
     }
 
     return hasBounds ? bounds : juce::Rectangle<int>();
-}
-
-juce::Rectangle<int> PianoRollComponent::getSelectionBounds() const
-{
-    // 框选矩形仅在拖拽中绘制
-    if (!interactionState_.selection.isSelectingArea) {
-        return {};
-    }
-
-    const double startTime = std::min(interactionState_.selection.selectionStartTime,
-                                      interactionState_.selection.selectionEndTime);
-    const double endTime = std::max(interactionState_.selection.selectionStartTime,
-                                    interactionState_.selection.selectionEndTime);
-    const float minMidi = std::min(interactionState_.selection.selectionStartMidi,
-                                   interactionState_.selection.selectionEndMidi);
-    const float maxMidi = std::max(interactionState_.selection.selectionStartMidi,
-                                   interactionState_.selection.selectionEndMidi);
-
-    const int x1 = sourceTimeToX(startTime);
-    const int x2 = sourceTimeToX(endTime);
-    const int y1 = static_cast<int>(std::floor(makeViewMapper().midiToY(maxMidi)));
-    const int y2 = static_cast<int>(std::ceil(makeViewMapper().midiToY(minMidi)));
-    return juce::Rectangle<int>(std::min(x1, x2),
-                                std::min(y1, y2),
-                                std::max(1, std::abs(x2 - x1)),
-                                std::max(1, std::abs(y2 - y1)))
-        .expanded(4)
-        .getIntersection(getTimelineViewportBounds());
 }
 
 juce::Rectangle<int> PianoRollComponent::getHandDrawPreviewBounds() const
@@ -1830,40 +1787,90 @@ juce::Rectangle<int> PianoRollComponent::getLineAnchorPreviewBounds() const
 
 void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes)
 {
-    auto beforeBounds = getNotesBounds(beforeNotes);
-    auto afterBounds = getNotesBounds(afterNotes);
-    auto dirty = beforeBounds.getUnion(afterBounds);
-    // 拖拽预览曲线与 OpenDyne energy blob 的视觉范围可能远超 note 高度
-    // （曲线斜率 / gainFactor 最大 2.5 倍），拖拽进行中（含 mouseUp 时刻
-    // previewSnapshot 已 reset 但必须全高抹除上一帧曲线的场景）dirty 必须
-    // 扩展为全视口高度，两种 scheme 共用，否则旧预览曲线像素残留在 content
-    // 缓存中。以拖拽状态驱动，不依赖 previewSnapshot 非空。
-    if (interactionState_.noteDrag.isDraggingNotes
-        || interactionState_.isModDriftDragging
-        || interactionState_.isVolumeDragging) {
+    // 一次活动读取：旧/新音符矩形经各活动 placement 自己的映射投影（同 key 多
+    // placement 逐一覆盖），端点裁剪与 F0 选区派生共用同一 committed 快照
+    const double buildT0 = juce::Time::getMillisecondCounterHiRes();
+    auto active = buildContentRenderItem(editedContentKey_);
+    if (active.has_value())
+        recordRenderProbe(RenderProbePoint::SnapshotBuild,
+                          juce::Time::getMillisecondCounterHiRes() - buildT0, 1);
+
+    juce::Rectangle<int> dirty;
+    if (active.has_value())
+    {
+        const auto srcRange = SourceEditRange::fromTimeGrid(*active->committedSnapshot->timeGrid, 0.0);
+        // 待补矩形命中表面陈旧像素：按来源几何 surfaceView_ 投影（相机增量
+        // 尚未提交时，live 投影会错开陈旧像素位置）
+        const auto mapper = makeViewMapperForView(surfaceView_);
+        const float viewPpsSem = surfaceView_.pixelsPerSemitone;
+        auto noteDamage = [&](const PianoRollTimeMap& map, const Note& note) -> juce::Rectangle<int> {
+            const float adjustedPitch = note.getAdjustedPitch();
+            if (adjustedPitch <= 0.0f) return {};
+            if (note.endTime <= srcRange.startSeconds || note.startTime >= srcRange.endSeconds) return {};
+            const int x1 = map.sourceToX(note.startTime);
+            const int x2 = map.sourceToX(note.endTime);
+            const int width = std::max(1, x2 - x1);
+            const float midi = mapper.freqToMidi(adjustedPitch);
+            const float y = mapper.midiToY(midi) - (viewPpsSem * 0.5f);
+            const int top = static_cast<int>(std::floor(y));
+            const int height = std::max(1, static_cast<int>(std::ceil(viewPpsSem)));
+            return juce::Rectangle<int>(x1, top, width, height)
+                .expanded(4)
+                .translated(0, rulerHeight_);
+        };
+
+        // 拖拽预览曲线与 OpenDyne energy blob 的视觉范围可能远超 note 高度
+        // （曲线斜率 / gainFactor 最大 2.5 倍）：拖拽中逐音符先赋内容区全高、
+        // 裁视口（保住中心越界音符仍可见的 blob 边缘 X 区间），再合并。
+        // 以拖拽状态驱动，不依赖 previewSnapshot 非空。
+        const bool fullHeightPerNote = interactionState_.noteDrag.isDraggingNotes
+            || interactionState_.isModDriftDragging
+            || interactionState_.isVolumeDragging
+            || (isOpenDyne() && interactionState_.noteResize.isResizing);
         const auto viewport = getTimelineViewportBounds();
-        dirty = dirty.withY(viewport.getY()).withHeight(viewport.getHeight());
+
+        for (const auto& placement : timelineContentPlacements_)
+        {
+            if (!placement.isValid() || placement.contentKey != editedContentKey_)
+                continue;
+            const PianoRollTimeMap map(placement.projection, *active->committedSnapshot->timeGrid, mapper);
+            for (const auto& note : beforeNotes) {
+                const auto damage = noteDamage(map, note);
+                dirty = dirty.getUnion(fullHeightPerNote
+                    ? damage.withY(viewport.getY()).withHeight(viewport.getHeight())
+                          .getIntersection(viewport)
+                    : damage.getIntersection(viewport));
+            }
+            for (const auto& note : afterNotes) {
+                const auto damage = noteDamage(map, note);
+                dirty = dirty.getUnion(fullHeightPerNote
+                    ? damage.withY(viewport.getY()).withHeight(viewport.getHeight())
+                          .getIntersection(viewport)
+                    : damage.getIntersection(viewport));
+            }
+        }
     }
     if (!dirty.isEmpty()) {
         if (zoomPreviewActive_) {
             // 缩放事务期间冻结 Image，仅标记脏，由 endZoomPreview 最终重建
             contentDirty_ = true;
         } else {
-            rasterizeContent(dirty);
-            repaint(dirty.getX(), dirty.getY(), dirty.getWidth(), dirty.getHeight());
+            // 局部重绘登记待补矩形（物理像素），paint 构建一次集合并消费
+            pendingContentRaster_.add(
+                (dirty.toFloat() * renderScale_).getSmallestIntegerContainer());
         }
-        overlay_->repaint(dirty.getX(), dirty.getY(), dirty.getWidth(), dirty.getHeight());
+        repaint(dirty.getX(), dirty.getY(), dirty.getWidth(), dirty.getHeight());
     }
 }
 
 void PianoRollComponent::invalidateSelectionFeedback()
 {
-    overlay_->repaint();
+    repaint();
 }
 
 void PianoRollComponent::invalidateInteractionPreview(const juce::Rectangle<int>& bounds)
 {
-    overlay_->repaint(bounds);
+    repaint(bounds);
 }
 
 // ============================================================================
@@ -1913,10 +1920,14 @@ void PianoRollComponent::drawPlayheadOverlay(juce::Graphics& g)
     g.fillPath(kPlayheadTriangle, juce::AffineTransform::translation(anchorX, 0.0f));
 }
 
-void PianoRollComponent::drawPlayheadNoteHighlight(juce::Graphics& g)
+void PianoRollComponent::drawPlayheadNoteHighlight(juce::Graphics& g, OverlayPassItems& pass)
 {
     const bool playing = playHeadState_.isPlaying.load(std::memory_order_relaxed);
     if (!playing || playheadTimeForPaint_ <= 0.0) return;
+
+    const auto placed = activeContent(pass);
+    if (!placed.has_value() || placed->content.displayNotes == nullptr) return;
+    const auto& item = placed->content;
 
     juce::Graphics::ScopedSaveState ss(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
@@ -1931,23 +1942,23 @@ void PianoRollComponent::drawPlayheadNoteHighlight(juce::Graphics& g)
     ctx.minMidi = minMidi_;
     ctx.maxMidi = maxMidi_;
     ctx.coords = makeViewMapper();
-    ctx.contents = buildContentRenderItems();
 
-    for (const auto& item : ctx.contents) {
-        if (!item.active || item.displayNotes == nullptr) continue;
+    for (const auto& placement : timelineContentPlacements_) {
+        if (!placement.isValid() || placement.contentKey != editedContentKey_) continue;
         // playheadTimeForPaint_ 是 timeline；Note start/end 是 source。
-        // 必须按 item 自己的 projection + timeGrid 逆映射后再比较。
-        const PianoRollTimeMap map(item.projection, *item.timeGrid, ctx.coords);
+        // 必须按 placement 自己的 projection + committed timeGrid 逆映射后再比较。
+        const PianoRollTimeMap map(placement.projection, *item.committedSnapshot->timeGrid, ctx.coords);
         const double sourcePlayhead = map.timelineToSource(playheadTimeForPaint_);
         std::vector<int> hitIndices;
         const auto* notes = item.displayNotes;
         for (int i = 0; i < static_cast<int>(notes->size()); ++i) {
-            const auto& n = (*notes)[i];
+            const auto& n = (*notes)[static_cast<size_t>(i)];
             if (sourcePlayhead >= n.startTime && sourcePlayhead < n.endTime)
                 hitIndices.push_back(i);
         }
         if (!hitIndices.empty())
-            renderer_->drawSelectedNoteHighlights(g, ctx, *notes, hitIndices, item, true);
+            renderer_->drawSelectedNoteHighlights(g, ctx, PianoRollRenderer::PlacedContent{placement, item},
+                                                  hitIndices, true);
     }
 }
 
@@ -1955,31 +1966,59 @@ void PianoRollComponent::drawPlayheadNoteHighlight(juce::Graphics& g)
 // drawTransientOverlay 鈥?paint transient interaction previews
 // ============================================================================
 
-void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
+void PianoRollComponent::drawTransientOverlay(juce::Graphics& g, OverlayPassItems& pass)
 {
     juce::Graphics::ScopedSaveState overlaySave(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
 
+    // 活动内容唯一时间映射：本函数内全部映射依赖预览共用（堵住各预览的嵌套快照读取）；
+    // 谓词与各消费者既有绘制条件一致——橡皮圆、琴键、tooltip、无几何的 DrawNote 首帧零构建零复制
+    const double drawNoteSpanEnd = std::max(interactionState_.drawing.drawingNoteStartTime,
+                                            interactionState_.drawing.drawingNoteEndTime);
+    const double drawNoteSpanStart = std::min(interactionState_.drawing.drawingNoteStartTime,
+                                              interactionState_.drawing.drawingNoteEndTime);
+    const bool needsContentMap =
+        (!isOpenDyne()
+         && ((interactionState_.drawing.isDrawingF0 && currentTool_ == ToolId::HandDraw
+              && !interactionState_.drawing.handDrawBuffer.empty())
+             || (interactionState_.drawing.isPlacingAnchors && currentTool_ == ToolId::LineAnchor
+                 && !interactionState_.drawing.pendingAnchors.empty())))
+        || (isOpenDyne() && currentTool_ == ToolId::Scissors
+            && interactionState_.scissorsPreviewTime >= 0.0)
+        || (interactionState_.drawing.isDrawingNote && currentTool_ == ToolId::DrawNote
+            && interactionState_.drawing.drawingNotePitch > 0.0f
+            && drawNoteSpanEnd > drawNoteSpanStart)
+        || interactionState_.selection.isSelectingArea;
+
+    std::optional<PianoRollTimeMap> timeMap;
+    // PlacedContent 含引用成员：optional 仅可构造不可赋值，统一走初始化
+    const std::optional<PianoRollRenderer::PlacedContent> placed =
+        needsContentMap ? activeContent(pass) : std::nullopt;
+    if (placed.has_value())
+        timeMap.emplace(placed->placement.projection, *placed->content.committedSnapshot->timeGrid,
+                        makeViewMapper());
+
     // note-drag Corrected F0 预览已收敛为 noteDrag.previewSnapshot（renderer 消费），
-    // HandDraw/LineAnchor 预览仅 OpenTune
-    if (!isOpenDyne()) {
-        drawHandDrawPreview(g);
-        drawLineAnchorPreview(g);
+    // HandDraw 预览消费本轮 item 的 ownerSnapshot 曲线与 f0Timeline；LineAnchor 预览仅 OpenTune
+    if (!isOpenDyne() && timeMap.has_value()) {
+        drawHandDrawPreview(g, *timeMap, placed->content);
+        drawLineAnchorPreview(g, *timeMap);
     }
 
     drawEraserPreview(g);
 
     // ── OpenDyne transient previews（Scissors 预览线、Mod/Drift tooltip、Volume dB tooltip） ──
     if (isOpenDyne()) {
-        drawScissorsPreview(g);
+        if (timeMap.has_value())
+            drawScissorsPreview(g, *timeMap);
         drawModDriftDragPreview(g);
         drawVolumeDragPreview(g);
     }
 
     // ⚡️ Cursor preview (豁免路径): DrawNote tool 的绘制中 note preview
-    // 杩欐槸浜や簰 cursor preview锛屼笉锟?committed/draft note body
     // The committed/draft note body is drawn by the direct content pass.
-    if (interactionState_.drawing.isDrawingNote
+    if (timeMap.has_value()
+        && interactionState_.drawing.isDrawingNote
         && currentTool_ == ToolId::DrawNote) {
         juce::Graphics::ScopedSaveState previewSave(g);
         double startTime = std::min(interactionState_.drawing.drawingNoteStartTime,
@@ -1989,8 +2028,9 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         float pitch = interactionState_.drawing.drawingNotePitch;
 
         if (pitch > 0.0f && endTime > startTime) {
-            int x1 = sourceTimeToX(startTime);
-            int x2 = sourceTimeToX(endTime);
+            // DrawNote 预览直接用 map.sourceToX
+            int x1 = timeMap->sourceToX(startTime);
+            int x2 = timeMap->sourceToX(endTime);
             const auto mapper = makeViewMapper();
             const float y = mapper.freqToY(pitch) - (pixelsPerSemitone_ * 0.5f);
             float noteHeight = pixelsPerSemitone_;
@@ -2007,7 +2047,8 @@ void PianoRollComponent::drawTransientOverlay(juce::Graphics& g)
         }
     }
 
-    drawSelectionBox(g, UIColors::currentThemeId());
+    if (timeMap.has_value())
+        drawSelectionBox(g, *timeMap, UIColors::currentThemeId());
 }
 
 void PianoRollComponent::drawEraserPreview(juce::Graphics& g)
@@ -2035,7 +2076,7 @@ void PianoRollComponent::drawEraserPreview(juce::Graphics& g)
 // drawScissorsPreview — OpenDyne Scissors Tool 切割预览线
 // 只绘制在目标 blob 内，不贯穿背景波形（避免表达 PCM 被切开）
 // ============================================================================
-void PianoRollComponent::drawScissorsPreview(juce::Graphics& g)
+void PianoRollComponent::drawScissorsPreview(juce::Graphics& g, const PianoRollTimeMap& map)
 {
     if (currentTool_ != ToolId::Scissors)
         return;
@@ -2058,9 +2099,9 @@ void PianoRollComponent::drawScissorsPreview(juce::Graphics& g)
         const float midi = mapper.freqToMidi(adjustedPitch);
         const float centerY = mapper.midiToY(midi);
         const float halfH = pixelsPerSemitone_ * 0.5f;
-        const int px = sourceTimeToX(previewTime);
-        const int x1 = sourceTimeToX(note.startTime);
-        const int x2 = sourceTimeToX(note.endTime);
+        const int px = map.sourceToX(previewTime);
+        const int x1 = map.sourceToX(note.startTime);
+        const int x2 = map.sourceToX(note.endTime);
         if (px < x1 || px > x2)
             continue;
 
@@ -2134,12 +2175,15 @@ void PianoRollComponent::drawVolumeDragPreview(juce::Graphics& g)
                juce::Justification::centredLeft);
 }
 
-void PianoRollComponent::drawTimeGridHandles(juce::Graphics& g)
+void PianoRollComponent::drawTimeGridHandles(juce::Graphics& g, OverlayPassItems& pass)
 {
     if (!isTimeView()) return;
     if (interactionState_.timeTool.selectedHandleId == 0
         && interactionState_.timeTool.hoveredHandleId == 0
         && interactionState_.timeTool.additionalSelectedIds.empty()) return;
+
+    const auto placed = activeContent(pass);
+    if (!placed.has_value()) return;
 
     juce::Graphics::ScopedSaveState ss(g);
     const auto contentBounds = juce::Rectangle<int>(
@@ -2163,25 +2207,26 @@ void PianoRollComponent::drawTimeGridHandles(juce::Graphics& g)
     ctx.timeGridSelectedHandleId = interactionState_.timeTool.selectedHandleId;
     ctx.additionalSelectedHandleIds = interactionState_.timeTool.additionalSelectedIds;
     ctx.currentTool = currentTool_;
-    ctx.contents = buildContentRenderItems();
-    // 拖拽中的 working TimeGrid snapshot 仅应用于 Overlay 把手绘制
-    if (interactionState_.timeTool.isDraggingHandle
-        && interactionState_.timeTool.dragWorkingSnapshot != nullptr) {
-        for (auto& item : ctx.contents) {
-            if (item.active)
-                item.timeGrid = interactionState_.timeTool.dragWorkingSnapshot;
-        }
-    }
 
-    for (const auto& item : ctx.contents) {
-        if (item.active)
-            renderer_->drawTimeGridHandles(g, ctx, item);
+    const auto& item = placed->content;
+
+    for (const auto& placement : timelineContentPlacements_) {
+        if (!placement.isValid() || placement.contentKey != editedContentKey_) continue;
+        // 拖拽中的 working TimeGrid snapshot 仅应用于 Overlay 把手绘制
+        const auto& grid = (interactionState_.timeTool.isDraggingHandle
+                            && interactionState_.timeTool.dragWorkingSnapshot != nullptr)
+            ? *interactionState_.timeTool.dragWorkingSnapshot
+            : *item.committedSnapshot->timeGrid;
+        renderer_->drawTimeGridHandles(g, ctx, placement.projection, grid);
     }
 }
 
-void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g)
+void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g, OverlayPassItems& pass)
 {
     if (interactionState_.noteSelection.selectedIndices.empty()) return;
+
+    const auto placed = activeContent(pass);
+    if (!placed.has_value()) return;
 
     juce::Graphics::ScopedSaveState ss(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
@@ -2197,21 +2242,35 @@ void PianoRollComponent::drawSelectedNoteHighlights(juce::Graphics& g)
     ctx.minMidi = minMidi_;
     ctx.maxMidi = maxMidi_;
     ctx.coords = makeViewMapper();
-    ctx.contents = buildContentRenderItems();
 
-    for (const auto& item : ctx.contents) {
-        if (!item.active) continue;
+    const auto& item = placed->content;
+
+    for (const auto& placement : timelineContentPlacements_) {
+        if (!placement.isValid() || placement.contentKey != editedContentKey_) continue;
         renderer_->drawSelectedNoteHighlights(
-            g, ctx, *item.displayNotes,
-            interactionState_.noteSelection.selectedIndices, item);
+            g, ctx, PianoRollRenderer::PlacedContent{placement, item},
+            interactionState_.noteSelection.selectedIndices);
     }
 }
 
-void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
+void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g, OverlayPassItems& pass)
 {
-    // 高亮 = 完整 F0 选择集合（音符派生 + 显式帧选择），多区间精确渲染
-    const auto frameSel = toolHandler_->collectSelectedFrameRanges();
+    // 高亮 = 完整 F0 选择集合（音符派生 + 显式帧选择），多区间精确渲染；
+    // 音符派生消费活动 item 的 committed 快照。零选区时只贡献显式帧选择（零构建），
+    // 显式选区存在时才惰性取得 item 用于绘制
+    std::shared_ptr<const EditableContentSnapshot> selectionCommitted;
+    if (!interactionState_.noteSelection.selectedIndices.empty())
+    {
+        const auto placed = activeContent(pass);
+        if (!placed.has_value()) return;
+        selectionCommitted = placed->content.committedSnapshot;
+    }
+    const auto frameSel = toolHandler_->collectSelectedFrameRanges(selectionCommitted.get());
     if (frameSel.empty()) return;
+
+    const auto placed = activeContent(pass);
+    if (!placed.has_value()) return;
+    const auto& item = placed->content;
 
     juce::Graphics::ScopedSaveState ss(g);
     g.addTransform(juce::AffineTransform::translation(0.0f, static_cast<float>(rulerHeight_)));
@@ -2231,11 +2290,10 @@ void PianoRollComponent::drawF0SelectionHighlight(juce::Graphics& g)
     ctx.coords = makeViewMapper();
     ctx.hasF0Selection = true;
     ctx.f0SelectionRanges = frameSel.ranges;
-    ctx.contents = buildContentRenderItems();
 
-    for (const auto& item : ctx.contents) {
-        if (!item.active) continue;
-        renderer_->drawF0SelectionHighlight(g, ctx, item);
+    for (const auto& placement : timelineContentPlacements_) {
+        if (!placement.isValid() || placement.contentKey != editedContentKey_) continue;
+        renderer_->drawF0SelectionHighlight(g, ctx, PianoRollRenderer::PlacedContent{placement, item});
     }
 }
 
@@ -2257,13 +2315,17 @@ void PianoRollComponent::drawPianoKeysPressed(juce::Graphics& g)
     g.fillRect(0.0f, noteY, static_cast<float>(pianoKeyWidth_), noteH);
 }
 
-void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
-    if (!interactionState_.drawing.isDrawingF0 || currentTool_ != ToolId::HandDraw || interactionState_.drawing.handDrawBuffer.empty() || !currentCurve_) return;
+void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g, const PianoRollTimeMap& map,
+                                             const PianoRollRenderer::ContentRenderItem& item) {
+    if (!interactionState_.drawing.isDrawingF0 || currentTool_ != ToolId::HandDraw
+        || interactionState_.drawing.handDrawBuffer.empty()
+        || item.ownerSnapshot == nullptr || item.ownerSnapshot->pitchCurve == nullptr) return;
 
-    const auto& originalF0 = currentCurve_->getOriginalF0();
+    // 唯一 F0 来源：本轮 item 的 ownerSnapshot 曲线与其 f0Timeline
+    const auto& originalF0 = item.ownerSnapshot->pitchCurve->getOriginalF0();
     if (originalF0.empty() || interactionState_.drawing.handDrawBuffer.size() != originalF0.size()) return;
 
-    const auto f0tl = currentF0Timeline();
+    const auto& f0tl = item.f0Timeline;
     if (f0tl.isEmpty()) return;
     juce::Colour previewColour = correctedF0Colour_;
     juce::Path previewPath;
@@ -2274,7 +2336,7 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
         if (f0 > 0.0f) {
             float y = makeViewMapper().freqToY(f0);
             double timePos = f0tl.timeAtFrame(i);
-            float x = static_cast<float>(sourceTimeToX(timePos));
+            float x = static_cast<float>(map.sourceToX(timePos));
 
             if (!pathStarted) {
                 previewPath.startNewSubPath(x, y);
@@ -2299,14 +2361,14 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g) {
     }
 }
 
-void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
+void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g, const PianoRollTimeMap& map) {
     if (!interactionState_.drawing.isPlacingAnchors || currentTool_ != ToolId::LineAnchor || interactionState_.drawing.pendingAnchors.empty()) return;
 
     juce::Colour anchorColour = correctedF0Colour_;
 
     for (size_t i = 0; i < interactionState_.drawing.pendingAnchors.size(); ++i) {
         const auto& anchor = interactionState_.drawing.pendingAnchors[i];
-        float x = static_cast<float>(sourceTimeToX(anchor.time));
+        float x = static_cast<float>(map.sourceToX(anchor.time));
         float y = makeViewMapper().freqToY(anchor.freq);
 
         g.setColour(anchorColour);
@@ -2314,7 +2376,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
 
         if (i > 0) {
             const auto& prev = interactionState_.drawing.pendingAnchors[i - 1];
-            float prevX = static_cast<float>(sourceTimeToX(prev.time));
+            float prevX = static_cast<float>(map.sourceToX(prev.time));
             float prevY = makeViewMapper().freqToY(prev.freq);
             g.setColour(anchorColour.withAlpha(0.7f));
             g.drawLine(prevX, prevY, x, y, 2.0f);
@@ -2323,7 +2385,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
 
     if (!interactionState_.drawing.pendingAnchors.empty()) {
         const auto& last = interactionState_.drawing.pendingAnchors.back();
-        float lastX = static_cast<float>(sourceTimeToX(last.time));
+        float lastX = static_cast<float>(map.sourceToX(last.time));
         float lastY = makeViewMapper().freqToY(last.freq);
         g.setColour(anchorColour.withAlpha(0.4f));
         g.drawLine(lastX, lastY,
@@ -2333,7 +2395,7 @@ void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g) {
     }
 }
 
-void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
+void PianoRollComponent::drawSelectionBox(juce::Graphics& g, const PianoRollTimeMap& map, ThemeId themeId) {
     // 框选矩形仅在拖拽中绘制
     if (!interactionState_.selection.isSelectingArea) return;
     if (!toolHandler_) return;
@@ -2343,8 +2405,8 @@ void PianoRollComponent::drawSelectionBox(juce::Graphics& g, ThemeId themeId) {
     float minMidi = std::min(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
     float maxMidi = std::max(interactionState_.selection.selectionStartMidi, interactionState_.selection.selectionEndMidi);
 
-    int x1 = sourceTimeToX(startTime);
-    int x2 = sourceTimeToX(endTime);
+    int x1 = map.sourceToX(startTime);
+    int x2 = map.sourceToX(endTime);
     float y1 = makeViewMapper().midiToY(maxMidi);
     float y2 = makeViewMapper().midiToY(minMidi);
 
@@ -2387,50 +2449,107 @@ void PianoRollComponent::paint(juce::Graphics& g)
     const int vpH = getTimelineViewportBounds().getHeight();
     if (vpW <= 0 || vpH <= 0) return;
 
-    // 有效倍率真值只在 paint 捕获；变化 → 旧表面失效并按同一倍率重建
+    const auto damage = g.getClipBounds().getIntersection(getLocalBounds());
+
+    // 有效倍率真值只在 paint 捕获；变化 → 旧表面失效，本帧按同一倍率重建
     const float effectiveScale = UiAssets::getEffectiveScaleFactor(g);
     if (! juce::approximatelyEqual(effectiveScale, renderScale_))
     {
         renderScale_ = effectiveScale;
         staticDirty_ = true;
         contentDirty_ = true;
-        rasterizeDirtySurfaces();
     }
 
-    if (zoomPreviewActive_) {
-        const double t0 = juce::Time::getMillisecondCounterHiRes();
-        const auto fullBounds = getLocalBounds();
-        const ViewportState liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_};
-        drawFixedChrome(g, fullBounds);
-        drawRuler(g, liveView, fullBounds);
-        drawPitchBackground(g, liveView, fullBounds);
-        drawPianoKeyboard(g, liveView, fullBounds);
-        drawContent(g, liveView, fullBounds);
-        recordRenderProbe(RenderProbePoint::ZoomPreviewPaint, juce::Time::getMillisecondCounterHiRes() - t0);
-    } else {
-        if (staticSurface_.isValid()) {
-            g.drawImage(staticSurface_, 0, 0, getWidth(), getHeight(),
-                        0, 0, staticSurface_.getWidth(), staticSurface_.getHeight(), false);
+    // 同一次 paint 提交保留表面，并把快照集合交给 overlay。
+    std::optional<Items> paintItems;
+    if (!zoomPreviewActive_)
+    {
+        const double commitT0 = zoomCommitPending_ ? juce::Time::getMillisecondCounterHiRes() : 0.0;
+        ensureSurfaceSizes();
+        const auto waveformDamage = commitCameraDelta();
+        if (staticDirty_) {
+            rasterizeStatic();
+            rasterizeLabels();
         }
-        // 波形是时间参考，画在音高网格之上、音符之下，不参与垂直滚动。
-        if (waveformSurface_.isValid()) {
-            g.drawImage(waveformSurface_, 0, 0, vpW, vpH,
-                        0, 0, waveformSurface_.getWidth(), waveformSurface_.getHeight(), false);
+        if (contentDirty_) {
+            paintItems.emplace(buildContentRenderItems());
+            rasterizeContentSurfaces(*paintItems);
+            pendingContentRaster_.clear();
+            if (zoomCommitPending_) {
+                recordRenderProbe(RenderProbePoint::ZoomCommitRaster,
+                                  juce::Time::getMillisecondCounterHiRes() - commitT0);
+                zoomCommitPending_ = false;
+            }
+        } else if (!pendingContentRaster_.isEmpty() || !waveformDamage.isEmpty()) {
+            paintItems.emplace(buildContentRenderItems());
+            const auto logicalBounds = [this](juce::Rectangle<int> physical) {
+                return (physical.toFloat() / renderScale_).getSmallestIntegerContainer();
+            };
+            if (!waveformDamage.isEmpty())
+                rasterizeWaveform(*paintItems, logicalBounds(waveformDamage), waveformDamage);
+            pendingContentRaster_.consolidate();
+            for (const auto& strip : pendingContentRaster_)
+                rasterizeContent(*paintItems, logicalBounds(strip), strip);
+            pendingContentRaster_.clear();
         }
-        if (contentSurface_.isValid()) {
-            g.drawImage(contentSurface_, 0, 0, vpW, vpH,
-                        0, 0, contentSurface_.getWidth(), contentSurface_.getHeight(), false);
+    }
+
+    const ViewportState liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_};
+    {
+        // 底图层：正常路径 blit 保留表面；缩放预览期 chrome/标尺/键盘 live、内容层变换冻结 Image
+        juce::Graphics::ScopedSaveState baseSave(g);
+        if (zoomPreviewActive_) {
+            const double t0 = juce::Time::getMillisecondCounterHiRes();
+            drawZoomPreview(g, liveView, damage);
+            recordRenderProbe(RenderProbePoint::ZoomPreviewPaint, juce::Time::getMillisecondCounterHiRes() - t0);
+        } else {
+            if (staticSurface_.isValid()) {
+                g.drawImage(staticSurface_, 0, 0, getWidth(), getHeight(),
+                            0, 0, staticSurface_.getWidth(), staticSurface_.getHeight(), false);
+            }
+            // 波形是时间参考，画在音高网格之上、音符之下，不参与垂直滚动。
+            if (waveformSurface_.isValid()) {
+                g.drawImage(waveformSurface_, 0, 0, vpW, vpH,
+                            0, 0, waveformSurface_.getWidth(), waveformSurface_.getHeight(), false);
+            }
+            if (contentSurface_.isValid()) {
+                g.drawImage(contentSurface_, 0, 0, vpW, vpH,
+                            0, 0, contentSurface_.getWidth(), contentSurface_.getHeight(), false);
+            }
         }
+
         if (trackCaptureTint_) {
             g.setColour(juce::Colour(0x55E07A2F));
             g.fillRect(getTimelineContentStartX(), rulerHeight_,
                        getTimelineContentViewportWidth(), getTimelineContentViewportHeight());
         }
-        if (!shouldShowPianoKeys() && labelsSurface_.isValid()) {
-            g.drawImage(labelsSurface_, 0, 0, pianoKeyWidth_, getHeight(),
-                        0, 0, labelsSurface_.getWidth(), labelsSurface_.getHeight(), false);
+        // 隐藏键盘的音名只画一次：预览期 live 逻辑坐标（内容与 tint 之后），
+        // 正常路径 blit 冻结的 labels 表面
+        if (!shouldShowPianoKeys()) {
+            if (zoomPreviewActive_)
+                drawPianoKeyboard(g, liveView, damage);
+            else if (labelsSurface_.isValid())
+                g.drawImage(labelsSurface_, 0, 0, pianoKeyWidth_, getHeight(),
+                            0, 0, labelsSurface_.getWidth(), labelsSurface_.getHeight(), false);
         }
     }
+
+    // 滚动条：组件 alpha=0 已从 JUCE 子组件绘制路径跳过，owner 在原层位（底图之后、overlay 之前）手动绘制
+    {
+        juce::Graphics::ScopedSaveState scrollbarSave(g);
+        if (g.reduceClipRegion(verticalScrollBar_.getBounds()))
+        {
+            g.setOrigin(verticalScrollBar_.getPosition());
+            verticalScrollBar_.paintEntireComponent(g, true);
+        }
+    }
+
+    // overlay 七项：本轮确曾构建集合时共享之（含合法空集合）；
+    // 干净 blit 路径 shared 为空，activeContent 惰性按需构建
+    OverlayPassItems overlayPass;
+    if (paintItems)
+        overlayPass.shared = &*paintItems;
+    drawOverlay(g, overlayPass);
 
     const double paintEndMs = juce::Time::getMillisecondCounterHiRes();
     recordRenderProbe(RenderProbePoint::RootPaint, paintEndMs - paintStartMs);
@@ -2438,11 +2557,82 @@ void PianoRollComponent::paint(juce::Graphics& g)
         recordRenderProbe(RenderProbePoint::VBlankToRootPaint, paintStartMs - lastVBlankMs_);
 }
 
+// ============================================================================
+// drawOverlay — owner paint 收尾层（原 PianoRollOverlayComponent::paint 次序）
+// ============================================================================
+
+void PianoRollComponent::drawOverlay(juce::Graphics& g, OverlayPassItems& pass)
+{
+    const double t0 = juce::Time::getMillisecondCounterHiRes();
+    juce::Graphics::ScopedSaveState overlaySave(g);
+
+    // 1. 播放头
+    drawPlayheadOverlay(g);
+
+    // 2. 交互 Overlay（选中高亮、框选、绘制预览、ghost 把手等）
+    drawTransientOverlay(g, pass);
+
+    // 3. TimeGrid 把手
+    drawTimeGridHandles(g, pass);
+
+    // 4. 选中音符高亮
+    drawSelectedNoteHighlights(g, pass);
+
+    // 播放头音符高亮覆盖真实选中高亮，保持两种状态可区分。
+    drawPlayheadNoteHighlight(g, pass);
+
+    // 5. F0 曲线选中高亮
+    drawF0SelectionHighlight(g, pass);
+
+    // 6. Ghost content (已在内容表面绘制，此处跳过)
+
+    // 7. 按下琴键高亮
+    drawPianoKeysPressed(g);
+
+    recordRenderProbe(RenderProbePoint::OverlayPresent,
+                      juce::Time::getMillisecondCounterHiRes() - t0, 1);
+}
+
+std::optional<PianoRollRenderer::PlacedContent> PianoRollComponent::activeContent(OverlayPassItems& pass)
+{
+    if (!pass.activeBuilt)
+    {
+        pass.activeBuilt = true;
+        pass.activePlacement = findEditedPlacement();
+        if (pass.activePlacement != nullptr)
+        {
+            if (pass.shared != nullptr)
+            {
+                // 本轮集合已构建：命中即缓存引用；缺 key 视为本轮无该项（不重试）
+                const auto it = pass.shared->find(pass.activePlacement->contentKey);
+                if (it != pass.shared->end())
+                    pass.sharedItem = &it->second;
+            }
+            else
+            {
+                // 干净 blit + overlay 路径：惰性构建一次，失败缓存空不重试
+                const double buildT0 = juce::Time::getMillisecondCounterHiRes();
+                pass.activeItem = buildContentRenderItem(pass.activePlacement->contentKey);
+                if (pass.activeItem.has_value())
+                    recordRenderProbe(RenderProbePoint::SnapshotBuild,
+                                      juce::Time::getMillisecondCounterHiRes() - buildT0, 1);
+            }
+        }
+    }
+    if (pass.activePlacement == nullptr)
+        return std::nullopt;
+    if (pass.sharedItem != nullptr)
+        return PianoRollRenderer::PlacedContent{*pass.activePlacement, *pass.sharedItem};
+    if (pass.activeItem.has_value())
+        return PianoRollRenderer::PlacedContent{*pass.activePlacement, *pass.activeItem};
+    return std::nullopt;
+}
+
 void PianoRollComponent::invalidateTimeAxisStaticSurface()
 {
-    // 非缩放预览状态：标脏 → 同步栅格化 → repaint，构成原子展示提交
-    if (!zoomPreviewActive_ && staticSurface_.isValid()) {
-        staticDirty_ = true;
+    // 全局静态失效已在队列 → paint 全量栅格覆盖时间轴，不重复局部栅格；
+    // 表面干净有效 → 局部即时栅格（原子提交）；预览期/表面无效 → 交给 paint
+    if (!staticDirty_ && !zoomPreviewActive_ && staticSurface_.isValid()) {
         rasterizeStatic(timeAxisRect());
     } else {
         staticDirty_ = true;
@@ -2450,15 +2640,10 @@ void PianoRollComponent::invalidateTimeAxisStaticSurface()
     repaint(timeAxisRect());
 }
 
-void PianoRollComponent::rasterizeDirtySurfaces()
+void PianoRollComponent::ensureSurfaceSizes()
 {
-    if (zoomPreviewActive_) return;  // 缩放预览期间保留 dirty，不栅格
-    if (renderScale_ <= 0.0f) return;  // 有效倍率尚未从 paint 捕获
-
     const int vpW = getTimelineViewportBounds().getWidth();
     const int vpH = getTimelineViewportBounds().getHeight();
-    if (vpW <= 0 || vpH <= 0) return;
-
     const int fullW = getWidth();
     const int fullH = getHeight();
 
@@ -2481,24 +2666,6 @@ void PianoRollComponent::rasterizeDirtySurfaces()
     if (!waveformSurface_.isValid() || waveformSurface_.getWidth() != physVpW || waveformSurface_.getHeight() != physVpH) {
         waveformSurface_ = juce::Image(juce::Image::ARGB, physVpW, physVpH, true);
         contentDirty_ = true;
-    }
-
-    // 全量双表面重建时一次性同步 surfaceView_ 为 live 状态
-    if (staticDirty_ && contentDirty_) {
-        surfaceView_.camera = camera_;
-        surfaceView_.pixelsPerSemitone = pixelsPerSemitone_;
-        surfaceView_.verticalScrollOffset = verticalScrollOffset_;
-    }
-
-    // 仅栅格脏表面
-    if (staticDirty_) {
-        rasterizeStatic();
-        if (!shouldShowPianoKeys())
-            rasterizeLabels();
-    }
-    if (contentDirty_) {
-        rasterizeContent();
-        rasterizeWaveform();
     }
 }
 
@@ -2731,7 +2898,10 @@ void PianoRollComponent::rasterizeStatic(
     if (shouldShowPianoKeys())
         drawPianoKeyboard(g, surfaceView_, rasterBounds);
 
-    staticDirty_ = false;
+    // 全局脏标志只由完整静态栅格清除：局部条带（标尺带/时间轴）不得吞掉
+    // 先前的全局失效（音名模式→BPM 同帧序列下隐藏键盘音名依赖该标志存活）
+    if (!dirtyRect.has_value())
+        staticDirty_ = false;
 
     recordRenderProbe(RenderProbePoint::StaticRaster, juce::Time::getMillisecondCounterHiRes() - t0);
 }
@@ -2757,7 +2927,7 @@ void PianoRollComponent::rasterizeLabels()
 }
 
 void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage,
-                                      ContentLayer layer)
+                                     ContentLayer layer, const Items& items)
 {
     const int w = getTimelineViewportBounds().getWidth();
     const int cw = getTimelineContentViewportWidth();
@@ -2793,51 +2963,132 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.coords = mapper;
     renderCtx.rasterBounds = clipArea;
 
-    // VolumeEnvelope 拖拽：blob 大小反馈使用预览包络
-    renderer_->setVolumePreviewEnvelope(interactionState_.isVolumeDragging
-        ? &interactionState_.volumePreviewEnvelope : nullptr);
-
-    renderCtx.contents = buildContentRenderItems();
-
     const double pps = view.camera.pixelsPerSecond;
-
     const bool notesPrimary = isOpenDyne();
 
     // 背景波形：OpenDyne 模式下 blob 即波形表达，不叠加背景 PCM。
     // 垂直位置由视口高度决定，不读取 verticalScrollOffset。
-    if (layer != ContentLayer::Notes && showWaveform_ && !notesPrimary) {
-        for (const auto& item : renderCtx.contents) {
-            const auto* mipmap = waveformMipmapCache_.get(item.contentKey);
+    if (layer == ContentLayer::Waveform) {
+        if (!showWaveform_ || notesPrimary) return;
+        for (const auto& placement : timelineContentPlacements_) {
+            if (!placement.isValid()) continue;
+            const auto it = items.find(placement.contentKey);
+            if (it == items.end()) continue;
+            const auto* mipmap = waveformMipmapCache_.get(placement.contentKey);
             if (mipmap == nullptr || !mipmap->hasSource())
                 continue;
             const int bestLevel = mipmap->selectBestLevelIndex(pps);
             if (bestLevel < 0)
                 continue;
             const auto& level = mipmap->getLevel(bestLevel);
-            renderer_->drawWaveform(g, renderCtx, item, level, bestLevel);
+            renderer_->drawWaveform(g, renderCtx, PianoRollRenderer::PlacedContent{placement, it->second},
+                                    level, bestLevel);
         }
+        return;
     }
 
-    if (layer == ContentLayer::Waveform)
-        return;
+    // Notes 层按 placements 原顺序绘制；同 key 多 placement 共享同一 item
+    std::vector<PianoRollRenderer::PlacedContent> placed;
+    placed.reserve(timelineContentPlacements_.size());
+    for (const auto& placement : timelineContentPlacements_) {
+        if (!placement.isValid()) continue;
+        const auto it = items.find(placement.contentKey);
+        if (it == items.end()) continue;
+        placed.push_back({placement, it->second});
+    }
 
     // unvoiced bands 与 F0 curve 由 RenderContext 显示开关
     // （showUnvoicedFrames_/showOriginalF0_/showCorrectedF0_）决定，与 scheme 无关
-    for (const auto& item : renderCtx.contents)
-        renderer_->drawUnvoicedFrameBands(g, renderCtx, item);
+    for (const auto& placedContent : placed)
+        renderer_->drawUnvoicedFrameBands(g, renderCtx, placedContent);
 
-    for (const auto& item : renderCtx.contents)
-        renderer_->drawNotes(g, renderCtx, item);
+    for (const auto& placedContent : placed)
+        renderer_->drawNotes(g, renderCtx, placedContent);
 
-    for (const auto& item : renderCtx.contents)
-        renderer_->drawF0Curve(g, renderCtx, item);
+    for (const auto& placedContent : placed)
+        renderer_->drawF0Curve(g, renderCtx, placedContent);
 
-    for (const auto& item : renderCtx.contents)
-        renderer_->drawTimeGridAnchors(g, renderCtx, item);
+    for (const auto& placedContent : placed)
+        renderer_->drawTimeGridAnchors(g, renderCtx, placedContent);
+}
 
+void PianoRollComponent::rasterizeContentSurfaces(const Items& items)
+{
+    rasterizeContent(items);
+    rasterizeWaveform(items);
+}
+
+// ============================================================================
+// drawZoomPreview — 缩放预览（冻结表面 AffineTransform 预览）
+// ============================================================================
+
+void PianoRollComponent::drawZoomPreview(juce::Graphics& g, const ViewportState& liveView,
+                                         juce::Rectangle<int> damage)
+{
+    // 固定 chrome、标尺、音高道、键盘沿用 live 逻辑坐标绘制
+    drawFixedChrome(g, damage);
+    drawRuler(g, liveView, damage);
+    drawPitchBackground(g, liveView, damage);
+    // 键盘可见时键床画在内容前；隐藏时音名由 paint 在内容与 tint 之后绘制
+    if (shouldShowPianoKeys())
+        drawPianoKeyboard(g, liveView, damage);
+
+    const auto liveContentBounds = juce::Rectangle<int>(
+        getTimelineContentStartX(), rulerHeight_,
+        getTimelineContentViewportWidth(), getTimelineContentViewportHeight());
+    // 冻结表面与内容区有效时才做图像变换（来源几何由全量 raster 记录）
+    if (!waveformSurface_.isValid() || !contentSurface_.isValid()
+        || surfaceContentBounds_.isEmpty() || liveContentBounds.isEmpty())
+        return;
+
+    // 逻辑变换（0=surfaceView_，1=live）：x1 = r·x0 + dx，y1 = s·y0 + dy
+    const double c0 = surfaceContentBounds_.getX();
+    const double R0 = surfaceContentBounds_.getY();
+    const double c1 = liveContentBounds.getX();
+    const double R1 = liveContentBounds.getY();
+    const double p0 = surfaceView_.camera.pixelsPerSecond;
+    const double p1 = liveView.camera.pixelsPerSecond;
+    const double t0 = surfaceView_.camera.visibleStartSeconds;
+    const double t1 = liveView.camera.visibleStartSeconds;
+    const double h0 = surfaceView_.pixelsPerSemitone;
+    const double h1 = liveView.pixelsPerSemitone;
+    const double v0 = surfaceView_.verticalScrollOffset;
+    const double v1 = liveView.verticalScrollOffset;
+
+    const double r = p1 / p0;
+    const double dx = c1 - r * c0 + (t0 - t1) * p1;
+
+    // 物理图像 → 来源逻辑（getRight/getBottom = 全量 raster 时的视口宽/高）
+    const double bx = static_cast<double>(surfaceContentBounds_.getRight()) / waveformSurface_.getWidth();
+    const double by = static_cast<double>(surfaceContentBounds_.getBottom()) / waveformSurface_.getHeight();
+
+    const auto imageToLive = [&bx, &by](double sx, double sy, double tx, double ty) {
+        return juce::AffineTransform::scale(static_cast<float>(bx), static_cast<float>(by))
+            .followedBy(juce::AffineTransform::scale(static_cast<float>(sx), static_cast<float>(sy)))
+            .translated(static_cast<float>(tx), static_cast<float>(ty));
+    };
+
+    // 波形层：纵向只随视口高度缩放，不随音高缩放与纵向偏移
+    const double wy = static_cast<double>(liveContentBounds.getHeight()) / surfaceContentBounds_.getHeight();
+    const double wdy = R1 - wy * R0;
+    {
+        juce::Graphics::ScopedSaveState ws(g);
+        if (g.reduceClipRegion(damage.getIntersection(liveContentBounds)))
+            g.drawImageTransformed(waveformSurface_, imageToLive(r, wy, dx, wdy), false);
+    }
+
+    // 内容层：音高缩放 + 纵向偏移
+    const double s = h1 / h0;
+    const double dy = R1 - s * R0 + s * v0 - v1;
+    {
+        juce::Graphics::ScopedSaveState cs(g);
+        if (g.reduceClipRegion(damage.getIntersection(liveContentBounds)))
+            g.drawImageTransformed(contentSurface_, imageToLive(r, s, dx, dy), false);
+    }
 }
 
 void PianoRollComponent::rasterizeContent(
+    const Items& items,
     std::optional<juce::Rectangle<int>> dirtyRect,
     std::optional<juce::Rectangle<int>> physicalDirtyRect)
 {
@@ -2862,16 +3113,21 @@ void PianoRollComponent::rasterizeContent(
         g.reduceClipRegion(physicalBounds);
     g.addTransform(juce::AffineTransform::scale(renderScale_));
 
-    drawContent(g, surfaceView_, rasterBounds, ContentLayer::Notes);
+    drawContent(g, surfaceView_, rasterBounds, ContentLayer::Notes, items);
 
     if (fullRaster) {
         contentDirty_ = false;
+        // 记录来源几何，缩放预览冻结期变换用
+        surfaceContentBounds_ = juce::Rectangle<int>(getTimelineContentStartX(), rulerHeight_,
+                                                     getTimelineContentViewportWidth(),
+                                                     getTimelineContentViewportHeight());
     }
 
     recordRenderProbe(RenderProbePoint::ContentRaster, juce::Time::getMillisecondCounterHiRes() - t0);
 }
 
 void PianoRollComponent::rasterizeWaveform(
+    const Items& items,
     std::optional<juce::Rectangle<int>> dirtyRect,
     std::optional<juce::Rectangle<int>> physicalDirtyRect)
 {
@@ -2894,201 +3150,107 @@ void PianoRollComponent::rasterizeWaveform(
     g.addTransform(juce::AffineTransform::scale(renderScale_));
 
     // 水平相机与音符相同；垂直方向固定在视口中线，不吃 verticalScrollOffset。
-    drawContent(g, surfaceView_, rasterBounds, ContentLayer::Waveform);
+    drawContent(g, surfaceView_, rasterBounds, ContentLayer::Waveform, items);
 }
 
-void PianoRollComponent::applyRasterCamera(const TimelineViewportCamera& newCamera)
+juce::Rectangle<int> PianoRollComponent::commitCameraDelta()
 {
-    // 表面无效或脏 → 全量重建
-    if (!staticSurface_.isValid() || !waveformSurface_.isValid() || staticDirty_) {
+    const bool panPending = cameraPanPending_;
+    cameraPanPending_ = false;
+    const auto view = viewportState();
+    const auto oldPps = surfaceView_.camera.pixelsPerSecond;
+    const auto dx = panPending && view.camera.pixelsPerSecond == oldPps
+        ? std::llround((view.camera.visibleStartSeconds - surfaceView_.camera.visibleStartSeconds) * oldPps)
+        : 0;
+    const int dy = panPending ? juce::roundToInt(view.verticalScrollOffset - surfaceView_.verticalScrollOffset) : 0;
+    const int contentW = getTimelineContentViewportWidth();
+    const int contentH = getTimelineContentViewportHeight();
+
+    // 决定是否全量提交，再移动任意表面。位图和来源几何在同一 paint 更新。
+    if ((staticDirty_ && contentDirty_)
+        || view.camera.pixelsPerSecond != oldPps
+        || view.pixelsPerSemitone != surfaceView_.pixelsPerSemitone
+        || (dx != 0 && std::abs(dx) >= contentW)
+        || (dy != 0 && std::abs(dy) >= contentH)
+        || ((dx != 0 || dy != 0) && (staticDirty_ || contentDirty_))) {
+        surfaceView_ = view;
         staticDirty_ = true;
         contentDirty_ = true;
-        rasterizeDirtySurfaces();
-        repaint();
-        return;
+        return {};
     }
 
-    // PPS 变化 → 全量重建
-    if (newCamera.pixelsPerSecond != surfaceView_.camera.pixelsPerSecond) {
-        staticDirty_ = true;
-        contentDirty_ = true;
-        rasterizeDirtySurfaces();
-        repaint();
-        return;
+    if (dx == 0 && dy == 0)
+        return {};
+
+    const auto viewport = getTimelineViewportBounds();
+    const auto pitchArea = (viewport.withTop(rulerHeight_).toFloat() * renderScale_).getSmallestIntegerContainer();
+    const auto timeline = (juce::Rectangle<int>(getTimelineContentStartX(), rulerHeight_, contentW, contentH)
+                            .toFloat() * renderScale_).getSmallestIntegerContainer();
+    const auto physicalDelta = [this](double origin, double delta) {
+        return static_cast<int>(std::llround((origin + delta) * renderScale_)
+                                - std::llround(origin * renderScale_));
+    };
+    const auto rasterizeStrip = [this](juce::Rectangle<int> physical) {
+        rasterizeStatic((physical.toFloat() / renderScale_).getSmallestIntegerContainer(), physical);
+    };
+
+    juce::Rectangle<int> waveformDamage;
+    if (const int shift = physicalDelta(surfaceView_.camera.visibleStartSeconds * oldPps, static_cast<double>(dx)); shift != 0) {
+        surfaceView_.camera.visibleStartSeconds += static_cast<double>(dx) / oldPps;
+        const int src = timeline.getX() + std::max(0, shift);
+        const int dst = timeline.getX() + std::max(0, -shift);
+        const int width = timeline.getWidth() - std::abs(shift);
+        if (width > 0) {
+            const double started = juce::Time::getMillisecondCounterHiRes();
+            staticSurface_.moveImageSection(dst, timeline.getY(), src, timeline.getY(), width, timeline.getHeight());
+            waveformSurface_.moveImageSection(dst, timeline.getY(), src, timeline.getY(), width, timeline.getHeight());
+            contentSurface_.moveImageSection(dst, timeline.getY(), src, timeline.getY(), width, timeline.getHeight());
+            recordRenderProbe(RenderProbePoint::MoveImageSection,
+                              juce::Time::getMillisecondCounterHiRes() - started, 3);
+        }
+
+        const int exposed = std::min(std::abs(shift), timeline.getWidth());
+        waveformDamage = shift > 0 ? timeline.withLeft(timeline.getRight() - exposed)
+                                   : timeline.withWidth(exposed);
+        rasterizeStrip(waveformDamage);
+        rasterizeStatic({juce::Rectangle<int>(getTimelineContentStartX(), 0, contentW, rulerHeight_)},
+                        {juce::Rectangle<int>(timeline.getX(), 0, timeline.getWidth(), timeline.getY())});
+        pendingContentRaster_.offsetAll(-shift, 0);
+        pendingContentRaster_.clipTo(timeline);
+        pendingContentRaster_.add(waveformDamage);
     }
 
-    // dPixels 由连续 surfaceView_.camera 投影，不含任何量化时间
-    const int dPixels = static_cast<int>(std::llround(
-        (newCamera.visibleStartSeconds - surfaceView_.camera.visibleStartSeconds) * surfaceView_.camera.pixelsPerSecond));
+    if (const int shift = physicalDelta(surfaceView_.verticalScrollOffset, dy); shift != 0) {
+        surfaceView_.verticalScrollOffset += static_cast<float>(dy);
+        const int src = pitchArea.getY() + std::max(0, shift);
+        const int dst = pitchArea.getY() + std::max(0, -shift);
+        const int height = pitchArea.getHeight() - std::abs(shift);
+        if (height > 0) {
+            const double started = juce::Time::getMillisecondCounterHiRes();
+            staticSurface_.moveImageSection(0, dst, 0, src, pitchArea.getWidth(), height);
+            contentSurface_.moveImageSection(0, dst, 0, src, pitchArea.getWidth(), height);
+            // 波形以视口为参考，纵向保持原位。
+            recordRenderProbe(RenderProbePoint::MoveImageSection,
+                              juce::Time::getMillisecondCounterHiRes() - started, 2);
+        }
 
-    // 大幅跳转（超过视口宽度）→ 全量重建
-    if (std::abs(dPixels) >= getTimelineContentViewportWidth()) {
-        staticDirty_ = true;
-        contentDirty_ = true;
-        rasterizeDirtySurfaces();
-        repaint();
-        return;
+        const int exposed = std::min(std::abs(shift), pitchArea.getHeight());
+        const auto strip = shift > 0 ? pitchArea.withTop(pitchArea.getBottom() - exposed)
+                                     : pitchArea.withHeight(exposed);
+        rasterizeStrip(strip);
+        rasterizeLabels();
+        pendingContentRaster_.offsetAll(0, -shift);
+        pendingContentRaster_.clipTo(pitchArea);
+        pendingContentRaster_.add(strip);
     }
-
-    // 无整数像素差 → 不移动、不栅格、不写 surfaceView_.camera
-    if (dPixels == 0) {
-        return;
-    }
-
-    // ── 同 PPS 横向滚动：标尺带完整重栅格 + 静态/内容带moveImageSection ──
-    const int viewportW = getTimelineViewportBounds().getWidth();
-    const int viewportH = getTimelineViewportBounds().getHeight();
-    const int timelineLeft = getTimelineContentStartX();
-    const int timelineW = viewportW - timelineLeft;
-
-    // surfaceView_.camera 描述 retained pixels 的实际来源；
-    // 仅推进 moveImageSection 已执行的整数位移；连续语义继续由 camera_ 保持。
-    // 位移量按物理像素网格新旧原点之差计算（含分数倍率相位），避免累计漂移。
-    const double oldPhysOrigin = surfaceView_.camera.visibleStartSeconds
-        * surfaceView_.camera.pixelsPerSecond * renderScale_;
-    const double newPhysOrigin = oldPhysOrigin + static_cast<double>(dPixels) * renderScale_;
-    const int physDelta = juce::roundToInt(newPhysOrigin) - juce::roundToInt(oldPhysOrigin);
-    surfaceView_.camera.visibleStartSeconds += static_cast<double>(dPixels) / surfaceView_.camera.pixelsPerSecond;
-
-    // 标尺重栅格、内容平移和曝光条带共用同一物理边界。
-    const int physTimelineLeft = static_cast<int>(
-        std::floor(static_cast<float>(timelineLeft) * renderScale_));
-    const int physTimelineRight = static_cast<int>(
-        std::ceil(static_cast<float>(timelineLeft + timelineW) * renderScale_));
-    const int physTimelineW = physTimelineRight - physTimelineLeft;
-    const int physRulerHeight = static_cast<int>(
-        std::floor(static_cast<float>(rulerHeight_) * renderScale_));
-    const int physContentBottom = static_cast<int>(
-        std::ceil(static_cast<float>(viewportH) * renderScale_));
-    const int physContentH = physContentBottom - physRulerHeight;
-
-    // 标尺带：完整重栅格（文本像素不能安全平移）。
-    const juce::Rectangle<int> rulerRect(timelineLeft, 0, timelineW, rulerHeight_);
-    const juce::Rectangle<int> physicalRulerRect(
-        physTimelineLeft, 0, physTimelineW, physRulerHeight);
-    rasterizeStatic(rulerRect, physicalRulerRect);
-
-    // 内容带：staticSurface_ + contentSurface_ 同步平移。
-
-    const int srcX = physTimelineLeft + (physDelta > 0 ? physDelta : 0);
-    const int dstX = physTimelineLeft + (physDelta > 0 ? 0 : -physDelta);
-    const int moveW = physTimelineW - std::abs(physDelta);
-
-    if (moveW > 0) {
-        const double moveT0 = juce::Time::getMillisecondCounterHiRes();
-        staticSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
-        waveformSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
-        contentSurface_.moveImageSection(dstX, physRulerHeight, srcX, physRulerHeight, moveW, physContentH);
-        recordRenderProbe(RenderProbePoint::MoveImageSection,
-                          juce::Time::getMillisecondCounterHiRes() - moveT0, 3);
-    }
-
-    // 补绘露出条带（以物理像素区域反推回逻辑坐标，与 move/clear 区域一致）
-    int stripXPhys, stripWPhys;
-    if (physDelta > 0) {
-        stripXPhys = physTimelineLeft + physTimelineW - physDelta;
-        stripWPhys = physDelta;
-    } else {
-        stripXPhys = physTimelineLeft;
-        stripWPhys = -physDelta;
-    }
-    stripXPhys = juce::jmax(physTimelineLeft, stripXPhys);
-    stripWPhys = juce::jmin(stripWPhys, physTimelineW);
-
-    if (stripWPhys > 0) {
-        const juce::Rectangle<int> physicalStrip(
-            stripXPhys, physRulerHeight, stripWPhys, physContentH);
-        const juce::Rectangle<float> strip(
-            static_cast<float>(stripXPhys) / renderScale_,
-            static_cast<float>(rulerHeight_),
-            static_cast<float>(stripWPhys) / renderScale_,
-            static_cast<float>(viewportH - rulerHeight_));
-        const auto stripLogical = strip.getSmallestIntegerContainer();
-        rasterizeStatic(stripLogical, physicalStrip);
-        rasterizeWaveform(stripLogical, physicalStrip);
-        rasterizeContent(stripLogical, physicalStrip);
-    }
-
-    // Normal scroll: only repaint timeAxisRect, not full component
-    repaint(timeAxisRect());
+    return waveformDamage;
 }
 
 void PianoRollComponent::applyVerticalPan()
 {
-    if (zoomPreviewActive_) {
-        repaint();
-        overlay_->repaint();
-        return;
-    }
-    if (!staticSurface_.isValid() || !contentSurface_.isValid() || !waveformSurface_.isValid()
-        || staticDirty_ || contentDirty_ || renderScale_ <= 0.0f) {
-        staticDirty_ = true;
-        contentDirty_ = true;
-        rasterizeDirtySurfaces();
-        updateScrollBars();
-        repaint();
-        return;
-    }
-
-    const int contentH = getTimelineContentViewportHeight();
-    const int dPixels = juce::roundToInt(verticalScrollOffset_ - surfaceView_.verticalScrollOffset);
-    if (contentH <= 0 || std::abs(dPixels) >= contentH) {
-        staticDirty_ = true;
-        contentDirty_ = true;
-        rasterizeDirtySurfaces();
-        updateScrollBars();
-        repaint();
-        return;
-    }
-    if (dPixels == 0) {
-        updateScrollBars();
-        return;
-    }
-
-    const int physDelta = juce::roundToInt(static_cast<double>(dPixels) * static_cast<double>(renderScale_));
-    if (physDelta == 0) {
-        updateScrollBars();
-        return;
-    }
-
-    surfaceView_.verticalScrollOffset += static_cast<float>(dPixels);
-
-    const int viewportW = getTimelineViewportBounds().getWidth();
-    const int viewportH = getTimelineViewportBounds().getHeight();
-    const int physWidth = static_cast<int>(std::ceil(static_cast<float>(viewportW) * renderScale_));
-    const int physRulerHeight = static_cast<int>(std::floor(static_cast<float>(rulerHeight_) * renderScale_));
-    const int physContentBottom = static_cast<int>(std::ceil(static_cast<float>(viewportH) * renderScale_));
-    const int physContentH = physContentBottom - physRulerHeight;
-    const int travel = std::abs(physDelta);
-    const int srcY = physRulerHeight + (physDelta > 0 ? physDelta : 0);
-    const int dstY = physRulerHeight + (physDelta > 0 ? 0 : -physDelta);
-    const int moveH = physContentH - travel;
-    // 波形层留在原地：垂直滚动只移动音高网格和音符。
-    if (moveH > 0 && physWidth > 0) {
-        const double moveT0 = juce::Time::getMillisecondCounterHiRes();
-        staticSurface_.moveImageSection(0, dstY, 0, srcY, physWidth, moveH);
-        contentSurface_.moveImageSection(0, dstY, 0, srcY, physWidth, moveH);
-        recordRenderProbe(RenderProbePoint::MoveImageSection,
-                          juce::Time::getMillisecondCounterHiRes() - moveT0, 2);
-    }
-
-    int stripY = physRulerHeight;
-    int stripH = travel;
-    if (physDelta > 0)
-        stripY = physRulerHeight + physContentH - physDelta;
-    stripY = juce::jmax(physRulerHeight, stripY);
-    stripH = juce::jmin(stripH, physContentH);
-    if (stripH > 0 && physWidth > 0) {
-        const juce::Rectangle<int> physicalStrip(0, stripY, physWidth, stripH);
-        const juce::Rectangle<float> strip(0.0f,
-                                           static_cast<float>(stripY) / renderScale_,
-                                           static_cast<float>(viewportW),
-                                           static_cast<float>(stripH) / renderScale_);
-        const auto stripLogical = strip.getSmallestIntegerContainer();
-        rasterizeStatic(stripLogical, physicalStrip);
-        rasterizeContent(stripLogical, physicalStrip);
-    }
-
+    cameraPanPending_ = true;
+    // 纵向滚动事件收口：offset 已由调用方更新并钳位；
+    // 表面提交（移动/条带/来源推进）由 paint 的 commitCameraDelta 原子完成
     updateScrollBars();
     repaint();
 }
@@ -3121,21 +3283,29 @@ void PianoRollComponent::handleVerticalScrollPixels(double pixelDelta)
     applyVerticalPan();
 }
 
-std::vector<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildContentRenderItems()
+PianoRollComponent::Items PianoRollComponent::buildContentRenderItems()
 {
     const double buildT0 = juce::Time::getMillisecondCounterHiRes();
-    std::vector<PianoRollRenderer::ContentRenderItem> items;
-    items.reserve(timelineContentPlacements_.size());
-    for (const auto& placement : timelineContentPlacements_) {
-        if (!placement.isValid()) continue;
-        if (auto item = buildContentRenderItem(placement)) {
-            // 内容表面始终使用已提交的 TimeGrid；拖拽中的 working snapshot 仅由 Overlay 应用
-            items.push_back(std::move(*item));
+    Items items;
+    // 先按有效 placement 占位唯一 key，再逐 key 填 item，读取为空的条目删除
+    for (const auto& placement : timelineContentPlacements_)
+        if (placement.isValid())
+            items.try_emplace(placement.contentKey);
+    for (auto it = items.begin(); it != items.end();) {
+        if (auto item = buildContentRenderItem(it->first)) {
+            it->second = std::move(*item);
+            ++it;
+        } else {
+            it = items.erase(it);
         }
     }
-    recordRenderProbe(RenderProbePoint::SnapshotBuild,
-                      juce::Time::getMillisecondCounterHiRes() - buildT0,
-                      static_cast<int>(items.size()));
+
+    // 集合构建入口统一结算（集合内部对 buildContentRenderItem 的调用不单独记录）；
+    // 空集零样本零耗时
+    if (!items.empty())
+        recordRenderProbe(RenderProbePoint::SnapshotBuild,
+                          juce::Time::getMillisecondCounterHiRes() - buildT0,
+                          static_cast<int>(items.size()));
     return items;
 }
 
@@ -3212,11 +3382,13 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
     }
 
     const bool hasSelectedNotes = !interactionState_.noteSelection.empty();
-    const auto frameSel = toolHandler_->collectSelectedFrameRanges();
-
+    // SelectedNotes 目标短路优先（resolveParameterTarget）：有音符选区时无需帧选区
+    // 参与目标解析，跳过快照读取与选区扫描；无选区时显式帧选区直接读现有归并状态
     AudioEditingScheme::ParameterTargetContext context;
     context.hasSelectedNotes = hasSelectedNotes;
-    context.hasFrameSelection = !frameSel.empty();
+    context.hasFrameSelection = hasSelectedNotes
+        ? false
+        : !interactionState_.frameSelection.ranges.empty();
 
     const auto target = AudioEditingScheme::resolveParameterTarget(context);
 
@@ -3257,8 +3429,10 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             }
             if (selEndTime > selStartTime)
                 requestedRange = f0tl.rangeForTimes(selStartTime, selEndTime);
-        } else if (!frameSel.ranges.empty()) {
-            requestedRange = { frameSel.ranges.front().first, frameSel.ranges.back().second };
+        } else if (target == AudioEditingScheme::ParameterTarget::FrameSelection
+                   && !interactionState_.frameSelection.ranges.empty()) {
+            requestedRange = { interactionState_.frameSelection.ranges.front().first,
+                               interactionState_.frameSelection.ranges.back().second };
         }
 
         if (requestedRange.endFrameExclusive <= requestedRange.startFrame) {
@@ -3339,7 +3513,10 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
         return result;
     }
 
-    const auto contentSnapshot = readEditedSnapshot();
+    // FrameSelection 目标（SelectedNotes 已短路，此处必为无音符选区）：
+    // 显式帧选区直接读现有归并状态，committed 在实际消费时读取一次
+    const auto& frameSel = interactionState_.frameSelection;
+    const auto& contentSnapshot = readEditedSnapshot();
     if (contentSnapshot == nullptr) {
         result.status = AudioEditingScheme::ParameterEditStatus::Failed;
         return result;
@@ -3520,13 +3697,12 @@ void PianoRollComponent::resized() {
     staticDirty_ = true;
     contentDirty_ = true;
 
-    overlay_->setBounds(getLocalBounds());
     layoutZoomControls();
 
-    // tryConsumeInitialF0View 成功时 activateTimelineCamera 完成一次最终 full raster（含 updateScrollBars）
+    // 初始 F0 定位更新视口，保留表面由下一次 paint 提交
     if (!tryConsumeInitialF0View(editedContentKey_)) {
         updateScrollBars();
-        rasterizeDirtySurfaces();
+
         repaint();
     }
 
@@ -3852,7 +4028,7 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
         requestContentRedraw();
     else {
         contentDirty_ = true;
-        rasterizeDirtySurfaces();
+
         repaint();
     }
 
@@ -3960,7 +4136,6 @@ bool PianoRollComponent::centerNoteNearestPlayhead(double pixelsPerSecond)
         pps));
     updateScrollBars();
     repaint();
-    overlay_->repaint();
     return true;
 }
 
@@ -4001,7 +4176,6 @@ void PianoRollComponent::onPitchRevisionChanged()
 void PianoRollComponent::requestContentRedraw() {
     syncNoteAccessibilityItems();
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
     repaint();
 }
 
@@ -4009,7 +4183,6 @@ void PianoRollComponent::requestThemeRedraw() {
     updateZoomControlColours();
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
     repaint();
 }
 
@@ -4168,7 +4341,7 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     }
     verticalScrollOffset_ = std::clamp(verticalScrollOffset_, 0.0f, juce::jmax(0.0f, getTotalHeight() - static_cast<float>(contentHeight)));
 
-    // 纵向变化 + 相机定位 → 标记脏让 applyRasterCamera 全量重建
+    // 纵向变化 + 相机定位 → 标记两层全量失效
     staticDirty_ = true;
     contentDirty_ = true;
     activateTimelineCamera(resolvedCamera);
@@ -4188,15 +4361,10 @@ void PianoRollComponent::onHeartbeatTick()
     if (showWaveform_ || isOpenDyne()) {
         const bool progressed = waveformMipmapCache_.buildIncremental(0.75);
 
-        // 先持久化构建进度，再按可见性决定是否立即提交 surface。
         if (progressed) {
             contentDirty_ = true;
-        }
-
-        // 隐藏期间完成构建后，第一次显示后的心跳消费 contentDirty_。
-        if (isShowing() && contentDirty_) {
-            rasterizeDirtySurfaces();
-            repaint();
+            if (isShowing() && !zoomPreviewActive_)
+                repaint();
         }
     }
 
@@ -4224,10 +4392,11 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     bool playStateChanged = (playingNow != lastObservedPlayHeadPlaying_);
 
     // ── Playhead hit bookkeeping ──
-    // 命中判定在 source 域完成，但每个 render item 有各自的 projection + timeGrid，
-    // 因此命中结果必须携带来源 item 的映射，damage bounds 才能用同一映射还原。
+    // 命中判定在 source 域完成，但各活动 placement 有各自的 projection + committed
+    // timeGrid，因此命中结果必须携带来源 placement 的映射，damage bounds 才能用
+    // 同一映射还原。
     struct HitNote {
-        ContentKey contentKey;
+        int placementIndex = 0;
         int noteIndex = 0;
         Note note;
         ContentTimelineProjection projection;
@@ -4245,7 +4414,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         if (adjustedPitch <= 0.0f)
             return {};
 
-        const SourceEditRange srcRange = sourceEditRange();
+        const SourceEditRange srcRange = SourceEditRange::fromTimeGrid(*hit.timeGrid, 0.0);
         if (n.endTime <= srcRange.startSeconds || n.startTime >= srcRange.endSeconds)
             return {};
 
@@ -4281,22 +4450,25 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     };
 
     // ── Helper: collect hit notes (same display items and condition as drawPlayheadNoteHighlight) ──
-    // timelineTime 先按每个 item 自己的映射逆到 source，再比较 note.startTime/endTime。
-    // Condition: playing && time > 0 && note.startTime ≤ sourceTime < note.endTime
-    auto collectHitNotes = [this](double timelineTime, bool playing) -> std::vector<HitNote> {
-        if (!playing || timelineTime <= 0.0)
+    // timelineTime 先按各活动 placement 自己的映射逆到 source，再比较
+    // note.startTime ≤ sourceTime < note.endTime。消费调用方取得的活动 item。
+    auto collectHitNotes = [this](const std::optional<Item>& item, double timelineTime, bool playing) -> std::vector<HitNote> {
+        if (!playing || timelineTime <= 0.0 || !item.has_value() || item->displayNotes == nullptr)
             return {};
         std::vector<HitNote> hits;
-        for (const auto& item : buildContentRenderItems()) {
-            if (!item.active || item.displayNotes == nullptr)
+        const auto& notes = *item->displayNotes;
+        for (int placementIndex = 0;
+             placementIndex < static_cast<int>(timelineContentPlacements_.size()); ++placementIndex) {
+            const auto& placement = timelineContentPlacements_[static_cast<size_t>(placementIndex)];
+            if (!placement.isValid() || placement.contentKey != editedContentKey_)
                 continue;
-
-            const PianoRollTimeMap map(item.projection, *item.timeGrid, makeViewMapper());
+            const PianoRollTimeMap map(placement.projection, *item->committedSnapshot->timeGrid, makeViewMapper());
             const double sourceTime = map.timelineToSource(timelineTime);
-            const auto& notes = *item.displayNotes;
             for (int i = 0; i < static_cast<int>(notes.size()); ++i) {
-                if (sourceTime >= notes[i].startTime && sourceTime < notes[i].endTime) {
-                    hits.push_back({ item.contentKey, i, notes[i], item.projection, item.timeGrid });
+                if (notes[static_cast<size_t>(i)].startTime <= sourceTime
+                    && sourceTime < notes[static_cast<size_t>(i)].endTime) {
+                    hits.push_back({ placementIndex, i, notes[static_cast<size_t>(i)],
+                                     placement.projection, item->committedSnapshot->timeGrid });
                 }
             }
         }
@@ -4323,11 +4495,9 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     const double oldCameraStart = oldCamera.visibleStartSeconds;
     const bool oldIsContFollow = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
     const bool oldPlaying = lastObservedPlayHeadPlaying_;
+    const double oldPlayheadTime = playheadTimeForPaint_;
 
-    // ── Collect OLD hit notes (before any state update) ──
-    const auto oldHits = collectHitNotes(playheadTimeForPaint_, oldPlaying);
-
-    const auto oldPH = playheadBoundsAt(playheadTimeForPaint_, oldPlaying, oldIsContFollow);
+    const auto oldPH = playheadBoundsAt(oldPlayheadTime, oldPlaying, oldIsContFollow);
 
     // 播放状态切换
     if (playStateChanged) {
@@ -4374,7 +4544,8 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
             : TimelineViewportRequest::Kind::Page;
         const auto resolved = TimelineViewportPolicy::resolve(
             makeViewportRequest(kind, playheadTime, 0.0, pps));
-        activateTimelineCamera(resolved);
+        if (resolved != camera_)
+            activateTimelineCamera(resolved);
     }
 
     // 唯一 playheadTimeForPaint_ 写入
@@ -4385,8 +4556,18 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     const bool newIsContFollow = scrollMode_ == ScrollMode::Continuous && !userScrollHold_;
     const auto newPH = playheadBoundsAt(playheadTime, playingNow, newIsContFollow);
 
-    // ── Collect NEW hit notes (after camera/playhead update) ──
-    const auto newHits = collectHitNotes(playheadTime, playingNow);
+    // ── 一次活动读取供 old/new 使用：至少一侧满足 playing && timelineTime > 0 ──
+    std::optional<Item> activeItem;
+    if (editedContentKey_.isValid()
+        && ((oldPlaying && oldPlayheadTime > 0.0) || (playingNow && playheadTime > 0.0))) {
+        const double buildT0 = juce::Time::getMillisecondCounterHiRes();
+        activeItem = buildContentRenderItem(editedContentKey_);
+        if (activeItem.has_value())
+            recordRenderProbe(RenderProbePoint::SnapshotBuild,
+                              juce::Time::getMillisecondCounterHiRes() - buildT0, 1);
+    }
+    const auto oldHits = collectHitNotes(activeItem, oldPlayheadTime, oldPlaying);
+    const auto newHits = collectHitNotes(activeItem, playheadTime, playingNow);
 
     // ── Compute repaint damage ──
     juce::Rectangle<int> damage;
@@ -4402,7 +4583,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
         if (a.size() != b.size())
             return false;
         for (size_t i = 0; i < a.size(); ++i) {
-            if (a[i].contentKey != b[i].contentKey || a[i].noteIndex != b[i].noteIndex)
+            if (a[i].placementIndex != b[i].placementIndex || a[i].noteIndex != b[i].noteIndex)
                 return false;
         }
         return true;
@@ -4415,7 +4596,7 @@ void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
     }
 
     if (!damage.isEmpty())
-        overlay_->repaint(damage);
+        repaint(damage);
 }
 
 void PianoRollComponent::commitViewportRequest(TimelineViewportRequest req)
@@ -4431,14 +4612,10 @@ void PianoRollComponent::navigateFromOverview(TimelineViewportRequest req)
 
 void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
 {
+    cameraPanPending_ |= camera != camera_;
     camera_ = camera;
     updateScrollBars();
-    if (!zoomPreviewActive_)
-        applyRasterCamera(camera);
-    else {
-        repaint();
-        overlay_->repaint();
-    }
+    repaint();
 }
 
 PianoRollComponent::ViewportState PianoRollComponent::viewportState() const noexcept
@@ -4461,10 +4638,9 @@ void PianoRollComponent::restoreViewportState(const ViewportState& state)
 
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     updateScrollBars();
     repaint();
-    overlay_->repaint();
 }
 
 // ── OpenDyne scheme 切换原子重置（计划 §二.3） ──
@@ -4501,8 +4677,7 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
 
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
-    overlay_->repaint();
+
 
     // Scheme changed → relayout to show/hide the horizontal scrollbar.
     if (wasOpenDyne != nowOpenDyne)
@@ -4578,7 +4753,7 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
     }
     if (hadTransientPreview) {
         contentDirty_ = true;
-        rasterizeDirtySurfaces();
+
     }
 
     switch (tool) {
@@ -4629,10 +4804,10 @@ void PianoRollComponent::setCurrentTool(ToolId tool) {
             layoutZoomControls();
             staticDirty_ = true;
             contentDirty_ = true;
-            rasterizeDirtySurfaces();
-            repaint();
+
         }
-        overlay_->repaint();
+        // 工具切换共同出口一次 repaint（overlay 已并入 owner paint）
+        repaint();
     }
 }
 
@@ -4656,7 +4831,7 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
     if (showWaveform_ == shouldShow) return;
     showWaveform_ = shouldShow;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4674,7 +4849,7 @@ void PianoRollComponent::setShowPianoKeyboard(bool shouldShow) {
     staticDirty_ = true;
     if (oldContentStartX != getTimelineContentStartX())
         contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4682,7 +4857,7 @@ void PianoRollComponent::setScaleAssistEnabled(bool enabled) {
     if (scaleAssistEnabled_ == enabled) return;
     scaleAssistEnabled_ = enabled;
     staticDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4692,7 +4867,7 @@ void PianoRollComponent::setGridStyle(PianoGridStyle gridStyle)
     gridStyle_ = gridStyle;
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4700,7 +4875,7 @@ void PianoRollComponent::setNoteNameMode(NoteNameMode noteNameMode) {
     if (noteNameMode_ == noteNameMode) return;
     noteNameMode_ = noteNameMode;
     staticDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4708,7 +4883,7 @@ void PianoRollComponent::setShowUnvoicedFrames(bool shouldShow) {
     if (showUnvoicedFrames_ == shouldShow) return;
     showUnvoicedFrames_ = shouldShow;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4718,7 +4893,7 @@ void PianoRollComponent::setBackgroundBrightness(float brightness)
     if (backgroundBrightness_ == clamped) return;
     backgroundBrightness_ = clamped;
     staticDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4736,7 +4911,7 @@ void PianoRollComponent::setCorrectedF0Colour(juce::Colour colour)
     if (correctedF0Colour_ == colour) return;
     correctedF0Colour_ = colour;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -4746,7 +4921,7 @@ void PianoRollComponent::setOriginalF0Colour(juce::Colour colour)
     if (originalF0Colour_ == colour) return;
     originalF0Colour_ = colour;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -5046,6 +5221,8 @@ void PianoRollComponent::updateFingerPinch() {
         - static_cast<double>(mid.x - static_cast<float>(getTimelineContentStartX())) / pps;
     const float scrollY = (maxMidi_ - g.pinchAnchorMidi) * pixelsPerSemitone_
         - (mid.y - static_cast<float>(rulerHeight_));
+    if (g.pinchZoomsTime || g.pinchZoomsPitch)
+        extendZoomPreview();
     applyViewportFromGesture(visibleStart, pps, scrollY);
 }
 
@@ -5053,19 +5230,13 @@ void PianoRollComponent::applyViewportFromGesture(double visibleStartSeconds, do
     const float maxScroll = getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight());
     verticalScrollOffset_ = juce::jlimit(0.0f, std::max(0.0f, maxScroll), scrollY);
 
+    cameraPanPending_ = true;
     userScrollHold_ = true;
     commitViewportRequest(makeViewportRequest(
         TimelineViewportRequest::Kind::Manual,
         visibleStartSeconds,
         0.0,
         pps));
-
-    staticDirty_ = true;
-    contentDirty_ = true;
-    rasterizeDirtySurfaces();
-    updateScrollBars();
-    repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::dispatchMouseDown(const juce::MouseEvent& e) {
@@ -5130,7 +5301,7 @@ void PianoRollComponent::dispatchMouseDown(const juce::MouseEvent& e) {
         pressedPianoKey_ = midiNote;
         if (pianoKeyAudition_ != nullptr)
             pianoKeyAudition_->noteOn(midiNote);
-        overlay_->repaint();
+        repaint();
         return;
     }
 
@@ -5161,8 +5332,7 @@ void PianoRollComponent::dispatchMouseDrag(const juce::MouseEvent& e) {
             newScrollY = juce::jlimit(0.0f, std::max(0.0f, maxScroll), newScrollY);
             if (newScrollY != verticalScrollOffset_) {
                 verticalScrollOffset_ = newScrollY;
-                staticDirty_ = true;
-                contentDirty_ = true;
+                applyVerticalPan();
             }
         } else {
             const double newVisibleStart = dragStartVisibleStartSeconds_ - deltaX / pps;
@@ -5188,7 +5358,7 @@ void PianoRollComponent::dispatchMouseDrag(const juce::MouseEvent& e) {
                 pianoKeyAudition_->noteOn(midiNote);
             }
             pressedPianoKey_ = midiNote;
-            overlay_->repaint();
+            repaint();
         }
         return;
     }
@@ -5216,7 +5386,7 @@ void PianoRollComponent::dispatchMouseUp(const juce::MouseEvent& e) {
         if (pianoKeyAudition_ != nullptr)
             pianoKeyAudition_->noteOff(pressedPianoKey_);
         pressedPianoKey_ = -1;
-        overlay_->repaint();
+        repaint();
         return;
     }
 
@@ -5238,7 +5408,7 @@ void PianoRollComponent::handleVerticalZoomAt(float zoomFactor, float contentY) 
 
     float targetY = (maxMidi_ - mouseMidi) * pixelsPerSemitone_;
     verticalScrollOffset_ = targetY - contentY;
-    
+
     float totalHeight = getTotalHeight();
     float visibleHeight = static_cast<float>(getTimelineContentViewportHeight());
     float maxScroll = totalHeight - visibleHeight;
@@ -5248,13 +5418,12 @@ void PianoRollComponent::handleVerticalZoomAt(float zoomFactor, float contentY) 
         verticalScrollOffset_ = 0.0f;
     }
 
-    // 进入缩放预览事务，冻结表面，到达截止时间后统一重建
-    zoomPreviewActive_ = true;
-    zoomDeadlineTicks_ = kZoomDeadlineTicks;
+    // 进入缩放预览事务，冻结表面，到达截止时间后统一重建；
+    // 冻结图 = 上次 paint 的完整提交，未提交的相机增量由预览状态对变换精确吸收
+    extendZoomPreview();
 
     updateScrollBars();
     repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::handleHorizontalScrollWheel(float deltaX, float deltaY) {
@@ -5365,6 +5534,7 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
     if (axis == AxisLockState::Axis::None)
         return;
 
+    extendZoomPreview();
     if (axis == AxisLockState::Axis::Horizontal) {
         // 时间轴：保持锚点时间在鼠标 X 下
         const double zoomFactorH = std::exp(dx * 0.005);
@@ -5395,14 +5565,9 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
             verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, verticalScrollOffset_);
         else
             verticalScrollOffset_ = 0.0f;
+        updateScrollBars();
+        repaint();
     }
-
-    staticDirty_ = true;
-    contentDirty_ = true;
-    rasterizeDirtySurfaces();
-    updateScrollBars();
-    repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::endOpenDyneZoomPan() {
@@ -5426,10 +5591,9 @@ void PianoRollComponent::restoreOpenDyneZoomState() {
     savedOpenDyneZoomState_.reset();
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     updateScrollBars();
     repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::fitToNote(const Note& note) {
@@ -5485,10 +5649,9 @@ void PianoRollComponent::fitToNote(const Note& note) {
 
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     updateScrollBars();
     repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::fitToAllNotes() {
@@ -5558,10 +5721,9 @@ void PianoRollComponent::fitToAllNotes() {
 
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     updateScrollBars();
     repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::fitToSelectedNotes()
@@ -5637,23 +5799,22 @@ void PianoRollComponent::fitToSelectedNotes()
 
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+
     updateScrollBars();
     repaint();
-    overlay_->repaint();
 }
 
 void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFactor) {
+    // 冻结图 = 上次 paint 的完整提交；未提交的相机增量由预览状态对变换精确吸收
     const double oldPps = camera_.pixelsPerSecond;
     const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
         oldPps * zoomFactor,
         TimelineViewportRequest::ViewKind::PianoRoll);
     const double anchorTime = camera_.visibleStartSeconds + anchorViewportX / oldPps;
 
-    zoomPreviewActive_ = true;
+    extendZoomPreview();
     zoomAnchorTime_ = anchorTime;
     zoomAnchorViewportX_ = anchorViewportX;
-    zoomDeadlineTicks_ = kZoomDeadlineTicks;
 
     userHasManuallyZoomed_ = true;
     commitViewportRequest(makeViewportRequest(
@@ -5663,25 +5824,22 @@ void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFact
         newPps));
 }
 
+void PianoRollComponent::extendZoomPreview()
+{
+    zoomPreviewActive_ = true;
+    zoomDeadlineTicks_ = kZoomDeadlineTicks;
+}
+
 void PianoRollComponent::endZoomPreview() {
     zoomPreviewActive_ = false;
     zoomDeadlineTicks_ = 0;
     zoomAnchorTime_ = -1.0;
 
-    const double t0 = juce::Time::getMillisecondCounterHiRes();
-
-    // 从当前 live 状态一次性赋值 surfaceView_，保证 preview 最后一帧与恢复 blit 首帧使用同一状态
-    surfaceView_.camera = camera_;
-    surfaceView_.pixelsPerSemitone = pixelsPerSemitone_;
-    surfaceView_.verticalScrollOffset = verticalScrollOffset_;
-
-    // 恰好一次重建两张表面
+    // 下一次 paint 用当前相机一次重建保留表面。
     staticDirty_ = true;
     contentDirty_ = true;
-    rasterizeDirtySurfaces();
+    zoomCommitPending_ = true;
     repaint();
-
-    recordRenderProbe(RenderProbePoint::ZoomCommitRaster, juce::Time::getMillisecondCounterHiRes() - t0);
 }
 
 // ============================================================================
@@ -5833,7 +5991,6 @@ void PianoRollComponent::pasteNotes()
 
     parameterTargetDidChange();
     requestContentRedraw();
-    overlay_->repaint();
     listeners_.call([](Listener& listener) { listener.contentEdited(); });
 
     // Paste lands at the plugin's playhead, which goes stale while the host is stopped,
@@ -5982,23 +6139,19 @@ bool PianoRollComponent::keyPressed(const juce::KeyPress& key) {
 }
 
 std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildContentRenderItem(
-    const TimelineContentPlacement& placement) const
+    ContentKey key) const
 {
-    auto snap = readSnapshotFor(placement.contentKey);
-    if (!snap)
+    // 每 key 唯一构建语句：active content 不再二次读取
+    // （旧路径 placement snapshot + readEditedSnapshot 各建一次外层快照并复制 notes）
+    const auto committed = readSnapshotFor(key);
+    if (!committed)
         return std::nullopt;
 
     PianoRollRenderer::ContentRenderItem item;
-    item.contentKey = placement.contentKey;
-    item.projection = placement.projection;
-    item.timeGrid = snap->timeGrid;
-    item.audioSampleRate = snap->audioSampleRate;
-    item.active = placement.contentKey == editedContentKey_;
-    item.displayColour = placement.displayColour;
+    item.committedSnapshot = committed;
 
-    std::shared_ptr<const PitchCurveSnapshot> curve;
-    if (item.active) {
-        // 拖拽预览：active item 直接消费 noteDrag.previewSnapshot（已含 scratch 后
+    if (key == editedContentKey_) {
+        // 拖拽预览：ownerSnapshot 直接消费 noteDrag.previewSnapshot（已含 scratch 后
         // 经 applyCorrectionToRange 烘焙的 pitchCurve 与 working notes），
         // curve 与 displayNotes 均取自该 snapshot，renderer 无需任何覆盖注入。
         // 非预览：ownerSnapshot 为 committed snapshot，displayNotes 保留
@@ -6008,26 +6161,23 @@ std::optional<PianoRollRenderer::ContentRenderItem> PianoRollComponent::buildCon
             item.ownerSnapshot = previewSnap;
             item.displayNotes = &item.ownerSnapshot->notes;
         } else {
-            item.ownerSnapshot = readEditedSnapshot();
+            item.ownerSnapshot = committed;
             item.displayNotes = &getDisplayedNotes();  // includes live note draft when active
         }
-        // 唯一 F0 来源：ownerSnapshot 的 pitchCurve（预览 = 烘焙 scratch，否则 = committed）
-        curve = item.ownerSnapshot != nullptr ? item.ownerSnapshot->pitchCurve : nullptr;
-        item.audioBuffer = audioBuffer_;
+        // VolumeEnvelope 拖拽：blob 大小反馈使用预览包络
+        item.volumeEnvelope = interactionState_.isVolumeDragging
+            ? &interactionState_.volumePreviewEnvelope
+            : &item.ownerSnapshot->volumeEnvelope;
     } else {
-        curve = snap->pitchCurve;
-        item.audioBuffer = snap->audioBuffer;
-        item.ownerSnapshot = snap;
-        item.displayNotes = &item.ownerSnapshot->notes;
+        item.ownerSnapshot = committed;
+        item.displayNotes = &committed->notes;
+        item.volumeEnvelope = &committed->volumeEnvelope;
     }
 
-    if (curve != nullptr) {
-        item.pitchSnapshot = curve;
-        if (item.pitchSnapshot != nullptr && item.pitchSnapshot->size() > 0)
-            item.f0Timeline = { item.pitchSnapshot->getHopSize(),
-                                item.pitchSnapshot->getSampleRate(),
-                                static_cast<int>(item.pitchSnapshot->size()) };
-    }
+    // 唯一 F0 来源：ownerSnapshot 的 pitchCurve（预览 = 烘焙 scratch，否则 = committed）
+    if (const auto& curve = item.ownerSnapshot->pitchCurve; curve != nullptr && curve->size() > 0)
+        item.f0Timeline = { curve->getHopSize(), curve->getSampleRate(),
+                            static_cast<int>(curve->size()) };
 
     // OpenDyne blob 主音符图形由 Renderer 从持久 originalEnergy 构建，
     // 不注入可选 PCM/mipmap；背景波形（非 OpenDyne）由 drawContent 直接读缓存。
@@ -6081,7 +6231,7 @@ void PianoRollComponent::setScale(int rootNote, int scaleType)
     scaleRootNote_ = clampedRoot;
     scaleType_ = clampedType;
     staticDirty_ = true;
-    rasterizeDirtySurfaces();
+
     repaint();
 }
 
@@ -6099,12 +6249,12 @@ void PianoRollComponent::fitToScreen() {
     float range = maxMidi_ - minMidi_ + 1.0f;
     if (range > 0 && contentViewportHeight > 0) {
         pixelsPerSemitone_ = static_cast<float>(contentViewportHeight) / range;
-        
+
         // Reset scroll to show top
         verticalScrollOffset_ = 0; 
         staticDirty_ = true;
         contentDirty_ = true;
-        // 不在此分支栅格；最终 commitViewportRequest 通过 applyRasterCamera 一次性完整重建
+        // 不在此分支栅格；最终 commitViewportRequest 由下一次 paint 完整提交
     }
 
     // 2. Horizontal Fit: 精确覆盖 activeContentProjection 的
@@ -6122,7 +6272,7 @@ void PianoRollComponent::fitToScreen() {
     if (!hasProjectedClipTimeline && audioBuffer_ && audioBufferSampleRate_ > 0.0) {
         duration = static_cast<double>(audioBuffer_->getNumSamples()) / audioBufferSampleRate_;
     }
-    
+
     // Available width: current timeline content viewport width
     int viewWidth = getTimelineContentViewportWidth();
     if (viewWidth > 0 && duration > 0) {
@@ -6233,7 +6383,7 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoTuneToSelec
     // ── OpenTune：选区解析 + autoTuneContentRange 逻辑 ──
     // auto-tune 是连续吸附操作：作用于选中范围的并集（包围区间）。
     // 无任何选择时保持既有行为：整段吸附（WholeClip）。
-    const auto sel = toolHandler_->collectSelectedFrameRanges();
+    const auto sel = toolHandler_->collectSelectedFrameRanges(snap.get());
     F0FrameRange requestedRange;
     if (!sel.empty()) {
         requestedRange = { sel.ranges.front().first, sel.ranges.back().second };
@@ -6301,11 +6451,9 @@ PianoRollComponent::AutoTuneApplyResult PianoRollComponent::applyAutoSnapToAllNo
 void PianoRollComponent::scrollBarMoved(juce::ScrollBar* scrollBar, double newRangeStart) {
     if (scrollBar == &verticalScrollBar_) {
         verticalScrollOffset_ = static_cast<float>(newRangeStart);
-        staticDirty_ = true;
-        contentDirty_ = true;
-        rasterizeDirtySurfaces();
-        updateScrollBars();
-        repaint();
+        // 与滚轮竖移共用增量平移路径（moveImageSection + 条带补绘），
+        // 移除回调内专属的全量标脏与重建
+        applyVerticalPan();
     }
 }
 

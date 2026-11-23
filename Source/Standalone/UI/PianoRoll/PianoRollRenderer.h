@@ -3,6 +3,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <memory>
+#include <map>
 #include "UI/UIColors.h"
 #include "UI/WaveformMipmap.h"
 #include "Utils/F0Timeline.h"
@@ -44,35 +45,28 @@ class PianoRollRenderer
 public:
     PianoRollRenderer() = default;
 
-    // OpenDyne blob 音量预览：拖拽期间由组件注入（指向 InteractionState::volumePreviewEnvelope）。
-    // 非拖拽时为 nullptr，drawNotes 回退到 ownerSnapshot->volumeEnvelope。
-    const AutomationLane* volumePreviewEnvelope_ = nullptr;
-    void setVolumePreviewEnvelope(const AutomationLane* env) noexcept { volumePreviewEnvelope_ = env; }
-
     /**
-     * 渲染上下文结构体
-     * 包含渲染所需的所有参数
+     * 每个 contentKey 一次 owner render pass 构建一份；owner/committed 快照
+     * 身份由构建方决定，Renderer 只读消费。
      */
     struct ContentRenderItem
     {
-        ContentKey contentKey;
-        ContentTimelineProjection projection;
-        std::shared_ptr<const TimeGridSnapshot> timeGrid;
-        std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer;
-        double audioSampleRate = 0.0;
-        std::shared_ptr<const PitchCurveSnapshot> pitchSnapshot;
-        F0Timeline f0Timeline;
+        std::shared_ptr<const EditableContentSnapshot> committedSnapshot;
         std::shared_ptr<const EditableContentSnapshot> ownerSnapshot;
         const std::vector<Note>* displayNotes = nullptr;
-        bool active = false;
-        juce::Colour displayColour{0xFF4A90D9}; // 从 placement 注入，Renderer 不查 owner
-        bool notesPrimaryScheme = false;        // OpenDyne：波形 blob 模式
-
-        bool isValid() const noexcept
-        {
-            return contentKey.isValid() && projection.isValid() && static_cast<bool>(timeGrid);
-        }
+        F0Timeline f0Timeline;
+        const AutomationLane* volumeEnvelope = nullptr; // OpenDyne blob 音量包络（含拖拽预览），构建时由 owner 决定
+        bool notesPrimaryScheme = false;                // OpenDyne：波形 blob 模式
     };
+
+    /// placement（投影 + 显示色，多个 placement 可指向同一 content）与共享只读 content 的配对。
+    struct PlacedContent
+    {
+        const TimelineContentPlacement& placement;
+        const ContentRenderItem& content;
+    };
+
+    using ContentRenderItems = std::map<ContentKey, ContentRenderItem>;
 
     /// Render context — includes stable content state and transient UI fields.
     struct RenderContext
@@ -87,7 +81,6 @@ public:
         float pixelsPerSemitone = 15.0f;
         float minMidi = 24.0f;
         float maxMidi = 108.0f;
-        std::vector<ContentRenderItem> contents;
         int scaleRootNote = 0;
         int scaleType = 1;
         NoteNameMode noteNameMode = NoteNameMode::COnly;
@@ -110,27 +103,29 @@ public:
         std::vector<uint64_t> additionalSelectedHandleIds;
     };
 
-    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
-    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item,
+    void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
+    void drawWaveform(juce::Graphics& g, const RenderContext& ctx, PlacedContent item,
                       const WaveformMipmap::Level& wfLevel, int wfLevelIndex);
 
     /// Draw published TimeGrid anchors as cache-friendly neutral lines.
     /// No hover/selected/drag affordances — those are painted by drawTimeGridHandles in overlay.
-    void drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
 
     void drawPianoKeys(juce::Graphics& g, const RenderContext& ctx);
-    void drawNotes(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    void drawNotes(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
     void drawSelectedNoteHighlights(juce::Graphics& g,
                                     const RenderContext& ctx,
-                                    const std::vector<Note>& notes,
+                                    PlacedContent item,
                                     const std::vector<int>& selectedNoteIndices,
-                                    const ContentRenderItem& item,
-                                    bool playheadHighlight = false);
-    void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
-    void drawF0SelectionHighlight(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+                                    bool asPlayheadHighlight = false);
+    void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
+    void drawF0SelectionHighlight(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
-    void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx, const ContentRenderItem& item);
+    // TimeGrid 拖拽的 working grid 由调用方传入，共享 item 保持只读。
+    void drawTimeGridHandles(juce::Graphics& g, const RenderContext& ctx,
+                             const ContentTimelineProjection& projection,
+                             const TimeGridSnapshot& grid);
 
 
 };
