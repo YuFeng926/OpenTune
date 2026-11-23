@@ -1,5 +1,5 @@
 #include "PianoRollRenderer.h"
-#include "../../../Utils/WaveformTime.h"
+#include "../../../Utils/TimeCoordinate.h"
 #include "PianoRollTimeMap.h"
 #include "../UiAssets.h"
 #include "../UIColors.h"
@@ -551,13 +551,16 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                       const RenderContext& ctx,
                                       PlacedContent item,
-                                      const WaveformMipmap::Level& wfLevel,
-                                      int wfLevelIndex)
+                                      const WaveformMipmap& waveform)
 {
-    if (wfLevel.peaks.empty())
+    const double sampleRate = item.content.committedSnapshot->audioSampleRate;
+    if (sampleRate <= 0.0)
         return;
 
-    const auto visibleWindow = computeVisibleTimeWindow(ctx, item);
+    auto damageContext = ctx;
+    if (!ctx.rasterBounds.isEmpty())
+        damageContext.rasterBounds = ctx.rasterBounds.expanded(2, 0);
+    const auto visibleWindow = computeVisibleTimeWindow(damageContext, item);
     if (!visibleWindow.isValid())
         return;
 
@@ -583,9 +586,6 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const float centerY = ctx.height / 2.0f;
     const float amplitudeScale = ctx.height / 2.0f;
 
-    const int samplesPerPeak = WaveformMipmap::kSamplesPerPeak[wfLevelIndex];
-    const double timePerPeak = waveformSecondsPerPeak(samplesPerPeak, item.content.committedSnapshot->audioSampleRate);
-    const int64_t numPeaks = static_cast<int64_t>(wfLevel.peaks.size());
     const auto themeId = UIColors::currentThemeId();
     const bool isAurora = themeId == ThemeId::Aurora;
     const bool isBlueBreeze = themeId == ThemeId::BlueBreeze;
@@ -599,49 +599,24 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     const PianoRollTimeMap map(item.placement.projection,
                                *item.content.committedSnapshot->timeGrid, ctx.coords);
 
+    double sourceStart = map.xToSource(drawStartX);
     for (int x = drawStartX; x < drawEndX; ++x)
     {
-        const double matTime = map.xToSource(x);
-
-        // Aggregate all peaks covered by this pixel's time span
-        const double matTimeNext = map.xToSource(x + 1);
-
-        int64_t idxStart = static_cast<int64_t>(matTime / timePerPeak);
-        int64_t idxEnd = static_cast<int64_t>(matTimeNext / timePerPeak);
-        if (idxEnd <= idxStart)
-            idxEnd = idxStart + 1;
-
-        if (idxStart >= numPeaks || idxStart < 0)
+        const double sourceEnd = map.xToSource(x + 1);
+        const auto peak = waveform.queryExactPeak(
+            TimeCoordinate::secondsToSamplesFloor(sourceStart, sampleRate),
+            TimeCoordinate::secondsToSamplesCeil(sourceEnd, sampleRate));
+        sourceStart = sourceEnd;
+        if (!peak || peak->isZero())
             continue;
 
-        float aggMin = 0.0f;
-        float aggMax = 0.0f;
-        bool hasData = false;
-
-        for (int64_t i = idxStart; i < idxEnd && i < numPeaks; ++i)
-        {
-            if (i < 0) continue;
-            const auto& peak = wfLevel.peaks[static_cast<std::size_t>(i)];
-            if (peak.isZero()) continue;
-            if (!hasData) {
-                aggMin = peak.getMin();
-                aggMax = peak.getMax();
-                hasData = true;
-            } else {
-                aggMin = std::min(aggMin, peak.getMin());
-                aggMax = std::max(aggMax, peak.getMax());
-            }
-        }
-
-        if (!hasData)
-            continue;
-
-        const float yMin = centerY - aggMax * amplitudeScale;
-        const float yMax = centerY - aggMin * amplitudeScale;
+        const float yMin = centerY - peak->getMax() * amplitudeScale;
+        const float yMax = centerY - peak->getMin() * amplitudeScale;
         const float fx = static_cast<float>(x) + 0.5f;
+        const float padding = 0.5f * std::max(0.0f, 1.0f - (yMax - yMin));
 
-        waveformPath.startNewSubPath(fx, yMin);
-        waveformPath.lineTo(fx, yMax);
+        waveformPath.startNewSubPath(fx, yMin - padding);
+        waveformPath.lineTo(fx, yMax + padding);
     }
 
     if (!waveformPath.isEmpty())
@@ -1569,9 +1544,10 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
     const std::vector<float>* originalEnergy = &pitchSnapshot->getOriginalEnergy();
     if (originalEnergy->empty()) originalEnergy = nullptr;
 
-    auto makeFrameToX = [&](int frame) -> float {
-        return static_cast<float>(sourceTimeToScreenX(
-            item.content.f0Timeline.timeAtFrame(frame), ctx, item));
+    const PianoRollTimeMap map(item.placement.projection,
+                               *item.content.committedSnapshot->timeGrid, ctx.coords);
+    const auto makeFrameToX = [&](int frame) -> float {
+        return static_cast<float>(map.sourceToX(item.content.f0Timeline.timeAtFrame(frame)));
     };
 
     auto makeFrameToY = [&](int, float frequency) -> float {
@@ -1711,9 +1687,10 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const std::vector<float>* originalEnergy = &pitchSnapshot->getOriginalEnergy();
     if (originalEnergy->empty()) originalEnergy = nullptr;
 
-    auto makeFrameToX = [&](int frame) -> float {
-        return static_cast<float>(sourceTimeToScreenX(
-            item.content.f0Timeline.timeAtFrame(frame), ctx, item));
+    const PianoRollTimeMap map(item.placement.projection,
+                               *item.content.committedSnapshot->timeGrid, ctx.coords);
+    const auto makeFrameToX = [&](int frame) -> float {
+        return static_cast<float>(map.sourceToX(item.content.f0Timeline.timeAtFrame(frame)));
     };
 
     auto makeFrameToY = [&](int, float frequency) -> float {

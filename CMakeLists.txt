@@ -2269,6 +2269,34 @@ if(OPENTUNE_BUILD_TESTS)
     endif()
     add_test(NAME StandaloneArrangementMoveTests COMMAND OpenTuneStandaloneArrangementMoveTests)
 
+    add_executable(OpenTunePianoRollZoomRenderTests
+        Tests/PianoRollZoomRenderTests.cpp
+        Tests/HeadlessEditorFactory.cpp
+    )
+    target_include_directories(OpenTunePianoRollZoomRenderTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone
+        ${ONNXRUNTIME_INCLUDE_DIR})
+    target_link_libraries(OpenTunePianoRollZoomRenderTests PRIVATE
+        OpenTuneStandalone
+        OpenTuneResources
+        juce::juce_audio_basics
+        juce::juce_gui_basics)
+    target_compile_definitions(OpenTunePianoRollZoomRenderTests PRIVATE JucePlugin_Build_Standalone=1)
+
+    add_executable(OpenTuneWaveformRangePeakTests
+        Tests/WaveformRangePeakTests.cpp
+        Source/Standalone/UI/WaveformMipmap.cpp
+    )
+    target_include_directories(OpenTuneWaveformRangePeakTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+    target_link_libraries(OpenTuneWaveformRangePeakTests PRIVATE juce::juce_audio_basics)
+    if(MSVC)
+        target_compile_options(OpenTunePianoRollZoomRenderTests PRIVATE /utf-8 /EHsc)
+        target_compile_options(OpenTuneWaveformRangePeakTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME PianoRollZoomRenderTests COMMAND OpenTunePianoRollZoomRenderTests)
+    add_test(NAME WaveformRangePeakTests COMMAND OpenTuneWaveformRangePeakTests)
+
     # Render/ARA contract tests use the production objects and their real worker
     # threads.  They intentionally link the application target instead of
     # providing test doubles for the render backends.

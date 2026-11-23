@@ -39,7 +39,6 @@ void WaveformMipmap::initializeLevels()
     {
         const int64_t numPeaks = (numSamples_ + kSamplesPerPeak[i] - 1) / kSamplesPerPeak[i];
         levels_[i].peaks.assign(static_cast<std::size_t>(numPeaks), PeakSample());
-        levels_[i].numSamplesCovered = numSamples_;
         levels_[i].complete = false;
         levels_[i].buildProgress = 0;
     }
@@ -109,39 +108,10 @@ bool WaveformMipmap::buildLevelSlice(int level, double timeBudgetMs)
         {
             const int64_t sampleStart = peakIdx * samplesPerPeak;
             const int64_t sampleEnd = std::min(sampleStart + samplesPerPeak, numSamples_);
-            const int64_t numToProcess = sampleEnd - sampleStart;
             
-            if (numToProcess <= 0)
-            {
-                lvl.peaks[static_cast<std::size_t>(peakIdx)] = PeakSample();
-                continue;
-            }
-            
-            float globalMin = 0.0f;
-            float globalMax = 0.0f;
-            bool hasData = false;
-            
-            for (int ch = 0; ch < numChannels_; ++ch)
-            {
-                const float* channelData = audioBuffer_->getReadPointer(ch);
-                
-                auto range = juce::FloatVectorOperations::findMinAndMax(
-                    channelData + sampleStart, static_cast<int>(numToProcess));
-                
-                if (!hasData)
-                {
-                    globalMin = range.getStart();
-                    globalMax = range.getEnd();
-                    hasData = true;
-                }
-                else
-                {
-                    globalMin = std::min(globalMin, range.getStart());
-                    globalMax = std::max(globalMax, range.getEnd());
-                }
-            }
-            
-            lvl.peaks[static_cast<std::size_t>(peakIdx)].setRange(globalMin, globalMax);
+            // 区块峰值与 PCM 边缘聚合共用 scanPcmPeak 的同一量化函数，
+            // 保证区块缓存与真实 PCM 聚合可交换（逐位一致）。
+            lvl.peaks[static_cast<std::size_t>(peakIdx)] = scanPcmPeak(sampleStart, sampleEnd);
         }
         
         lvl.buildProgress = endIdx;
@@ -211,6 +181,112 @@ int WaveformMipmap::selectBestLevelIndex(double pixelsPerSecond) const
     return -1;
 }
 
+std::optional<PeakSample> WaveformMipmap::queryExactPeak(int64_t startSample,
+                                                         int64_t endSampleExclusive) const
+{
+    if (numSamples_ <= 0)
+        return std::nullopt;
+
+    // 与真实样本范围求交集；交集为空即空区间
+    const int64_t s0 = std::max<int64_t>(startSample, 0);
+    const int64_t s1 = std::min<int64_t>(endSampleExclusive, numSamples_);
+    if (s1 <= s0)
+        return std::nullopt;
+
+    PeakSample accumulator;
+    bool hasData = false;
+    accumulateRange(s0, s1, kNumLevels - 1, accumulator, hasData);
+
+    // s1 > s0 时最细层必然扫到真实 PCM，accumulator 一定取到数据
+    return accumulator;
+}
+
+void WaveformMipmap::accumulateRange(int64_t startSample, int64_t endSampleExclusive, int level,
+                                     PeakSample& accumulator, bool& hasData) const
+{
+    if (startSample >= endSampleExclusive)
+        return;
+
+    if (level < 0)
+    {
+        const PeakSample peak = scanPcmPeak(startSample, endSampleExclusive);
+        if (!hasData)
+        {
+            accumulator = peak;
+            hasData = true;
+        }
+        else
+        {
+            accumulator.merge(peak);
+        }
+        return;
+    }
+
+    const auto& lvl = levels_[level];
+    const int64_t samplesPerPeak = kSamplesPerPeak[level];
+    const int64_t alignedStart = ((startSample + samplesPerPeak - 1) / samplesPerPeak) * samplesPerPeak;
+    const int64_t alignedEnd = (endSampleExclusive / samplesPerPeak) * samplesPerPeak;
+
+    if (alignedStart >= alignedEnd)
+    {
+        // 区间内没有本层完整区块，整段交给更细层
+        accumulateRange(startSample, endSampleExclusive, level - 1, accumulator, hasData);
+        return;
+    }
+
+    // 头部未对齐段交给更细层
+    accumulateRange(startSample, alignedStart, level - 1, accumulator, hasData);
+
+    // 完整覆盖的区块直接复用现有缓存；未建区块（buildProgress 之外）停在这里
+    int64_t block = alignedStart / samplesPerPeak;
+    const int64_t blockEnd = alignedEnd / samplesPerPeak;
+    while (block < blockEnd && block < static_cast<int64_t>(lvl.buildProgress))
+    {
+        const PeakSample& peak = lvl.peaks[static_cast<std::size_t>(block)];
+        if (!hasData)
+        {
+            accumulator = peak;
+            hasData = true;
+        }
+        else
+        {
+            accumulator.merge(peak);
+        }
+        ++block;
+    }
+
+    accumulateRange(block * samplesPerPeak, endSampleExclusive, level - 1, accumulator, hasData);
+}
+
+PeakSample WaveformMipmap::scanPcmPeak(int64_t startSample, int64_t endSampleExclusive) const
+{
+    float globalMin = 0.0f;
+    float globalMax = 0.0f;
+    bool hasData = false;
+
+    for (int ch = 0; ch < numChannels_; ++ch)
+    {
+        const float* channelData = audioBuffer_->getReadPointer(ch);
+        const auto range = juce::FloatVectorOperations::findMinAndMax(
+            channelData + startSample, static_cast<int>(endSampleExclusive - startSample));
+        if (!hasData)
+        {
+            globalMin = range.getStart();
+            globalMax = range.getEnd();
+            hasData = true;
+        }
+        else
+        {
+            globalMin = std::min(globalMin, range.getStart());
+            globalMax = std::max(globalMax, range.getEnd());
+        }
+    }
+
+    PeakSample peak;
+    peak.setRange(globalMin, globalMax);
+    return peak;
+}
+
 void WaveformMipmap::clear()
 {
     audioBuffer_.reset();
@@ -220,7 +296,6 @@ void WaveformMipmap::clear()
     for (int i = 0; i < kNumLevels; ++i)
     {
         levels_[i].peaks.clear();
-        levels_[i].numSamplesCovered = 0;
         levels_[i].complete = false;
         levels_[i].buildProgress = 0;
     }
@@ -262,14 +337,18 @@ void WaveformMipmapCache::clear()
     allMipmapsComplete_ = true;
 }
 
-void WaveformMipmapCache::setAudioSource(ContentKey contentKey,
-                                         std::shared_ptr<const juce::AudioBuffer<float>> buffer)
+bool WaveformMipmapCache::setAudioSource(ContentKey contentKey,
+                                        std::shared_ptr<const juce::AudioBuffer<float>> buffer)
 {
+    if (!buffer || buffer->getNumSamples() == 0)
+        return caches_.erase(contentKey) != 0;
+
     auto& mipmap = getOrCreate(contentKey);
     if (!mipmap.isSourceChanged(buffer))
-        return;
-    mipmap.setAudioSource(buffer);
+        return false;
+    mipmap.setAudioSource(std::move(buffer));
     allMipmapsComplete_ = false;
+    return true;
 }
 
 bool WaveformMipmapCache::buildIncremental(double timeBudgetMs)

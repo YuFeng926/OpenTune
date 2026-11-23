@@ -105,7 +105,7 @@ public:
 
     void drawUnvoicedFrameBands(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
     void drawWaveform(juce::Graphics& g, const RenderContext& ctx, PlacedContent item,
-                      const WaveformMipmap::Level& wfLevel, int wfLevelIndex);
+                      const WaveformMipmap& waveform);
 
     /// Draw published TimeGrid anchors as cache-friendly neutral lines.
     /// No hover/selected/drag affordances — those are painted by drawTimeGridHandles in overlay.

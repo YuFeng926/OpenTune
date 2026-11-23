@@ -1851,14 +1851,10 @@ void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNote
         }
     }
     if (!dirty.isEmpty()) {
-        if (zoomPreviewActive_) {
-            // 缩放事务期间冻结 Image，仅标记脏，由 endZoomPreview 最终重建
-            contentDirty_ = true;
-        } else {
-            // 局部重绘登记待补矩形（物理像素），paint 构建一次集合并消费
-            pendingContentRaster_.add(
-                (dirty.toFloat() * renderScale_).getSmallestIntegerContainer());
-        }
+        // 局部重绘登记待补矩形（物理像素），paint 构建一次集合并消费；
+        // 缩放事务的全量提交会在同一次 paint 中覆盖这些条带
+        pendingContentRaster_.add(
+            (dirty.toFloat() * renderScale_).getSmallestIntegerContainer());
         repaint(dirty.getX(), dirty.getY(), dirty.getWidth(), dirty.getHeight());
     }
 }
@@ -2461,76 +2457,53 @@ void PianoRollComponent::paint(juce::Graphics& g)
     }
 
     // 同一次 paint 提交保留表面，并把快照集合交给 overlay。
+    const bool zoomActive = zoomDeadlineTicks_ > 0;
+    const bool zoomPending = std::exchange(zoomCameraPending_, false);
     std::optional<Items> paintItems;
-    if (!zoomPreviewActive_)
-    {
-        const double commitT0 = zoomCommitPending_ ? juce::Time::getMillisecondCounterHiRes() : 0.0;
-        ensureSurfaceSizes();
-        const auto waveformDamage = commitCameraDelta();
-        if (staticDirty_) {
-            rasterizeStatic();
-            rasterizeLabels();
-        }
-        if (contentDirty_) {
-            paintItems.emplace(buildContentRenderItems());
-            rasterizeContentSurfaces(*paintItems);
-            pendingContentRaster_.clear();
-            if (zoomCommitPending_) {
-                recordRenderProbe(RenderProbePoint::ZoomCommitRaster,
-                                  juce::Time::getMillisecondCounterHiRes() - commitT0);
-                zoomCommitPending_ = false;
-            }
-        } else if (!pendingContentRaster_.isEmpty() || !waveformDamage.isEmpty()) {
-            paintItems.emplace(buildContentRenderItems());
-            const auto logicalBounds = [this](juce::Rectangle<int> physical) {
-                return (physical.toFloat() / renderScale_).getSmallestIntegerContainer();
-            };
-            if (!waveformDamage.isEmpty())
-                rasterizeWaveform(*paintItems, logicalBounds(waveformDamage), waveformDamage);
-            pendingContentRaster_.consolidate();
-            for (const auto& strip : pendingContentRaster_)
-                rasterizeContent(*paintItems, logicalBounds(strip), strip);
-            pendingContentRaster_.clear();
-        }
+    ensureSurfaceSizes();
+    const auto waveformDamage = commitCameraDelta(zoomPending);
+    if (staticDirty_) {
+        rasterizeStatic();
+        rasterizeLabels();
+    }
+    if (contentDirty_) {
+        paintItems.emplace(buildContentRenderItems());
+        rasterizeContentSurfaces(*paintItems);
+        pendingContentRaster_.clear();
+        if (zoomPending && !zoomActive)
+            recordRenderProbe(RenderProbePoint::ZoomCommitRaster,
+                              juce::Time::getMillisecondCounterHiRes() - paintStartMs);
+    } else if (!pendingContentRaster_.isEmpty() || !waveformDamage.isEmpty()) {
+        paintItems.emplace(buildContentRenderItems());
+        const auto logicalBounds = [this](juce::Rectangle<int> physical) {
+            return (physical.toFloat() / renderScale_).getSmallestIntegerContainer();
+        };
+        if (!waveformDamage.isEmpty())
+            rasterizeWaveform(*paintItems, logicalBounds(waveformDamage), waveformDamage);
+        pendingContentRaster_.consolidate();
+        for (const auto& strip : pendingContentRaster_)
+            rasterizeContent(*paintItems, logicalBounds(strip), strip);
+        pendingContentRaster_.clear();
     }
 
-    const ViewportState liveView{camera_, pixelsPerSemitone_, verticalScrollOffset_};
     {
-        // 底图层：正常路径 blit 保留表面；缩放预览期 chrome/标尺/键盘 live、内容层变换冻结 Image
         juce::Graphics::ScopedSaveState baseSave(g);
-        if (zoomPreviewActive_) {
-            const double t0 = juce::Time::getMillisecondCounterHiRes();
-            drawZoomPreview(g, liveView, damage);
-            recordRenderProbe(RenderProbePoint::ZoomPreviewPaint, juce::Time::getMillisecondCounterHiRes() - t0);
-        } else {
-            if (staticSurface_.isValid()) {
-                g.drawImage(staticSurface_, 0, 0, getWidth(), getHeight(),
-                            0, 0, staticSurface_.getWidth(), staticSurface_.getHeight(), false);
-            }
-            // 波形是时间参考，画在音高网格之上、音符之下，不参与垂直滚动。
-            if (waveformSurface_.isValid()) {
-                g.drawImage(waveformSurface_, 0, 0, vpW, vpH,
-                            0, 0, waveformSurface_.getWidth(), waveformSurface_.getHeight(), false);
-            }
-            if (contentSurface_.isValid()) {
-                g.drawImage(contentSurface_, 0, 0, vpW, vpH,
-                            0, 0, contentSurface_.getWidth(), contentSurface_.getHeight(), false);
-            }
-        }
+        g.drawImage(staticSurface_, 0, 0, getWidth(), getHeight(),
+                    0, 0, staticSurface_.getWidth(), staticSurface_.getHeight(), false);
+        // 波形是时间参考，画在音高网格之上、音符之下，不参与垂直滚动。
+        g.drawImage(waveformSurface_, 0, 0, vpW, vpH,
+                    0, 0, waveformSurface_.getWidth(), waveformSurface_.getHeight(), false);
+        g.drawImage(contentSurface_, 0, 0, vpW, vpH,
+                    0, 0, contentSurface_.getWidth(), contentSurface_.getHeight(), false);
 
         if (trackCaptureTint_) {
             g.setColour(juce::Colour(0x55E07A2F));
             g.fillRect(getTimelineContentStartX(), rulerHeight_,
                        getTimelineContentViewportWidth(), getTimelineContentViewportHeight());
         }
-        // 隐藏键盘的音名只画一次：预览期 live 逻辑坐标（内容与 tint 之后），
-        // 正常路径 blit 冻结的 labels 表面
-        if (!shouldShowPianoKeys()) {
-            if (zoomPreviewActive_)
-                drawPianoKeyboard(g, liveView, damage);
-            else if (labelsSurface_.isValid())
-                g.drawImage(labelsSurface_, 0, 0, pianoKeyWidth_, getHeight(),
-                            0, 0, labelsSurface_.getWidth(), labelsSurface_.getHeight(), false);
+        if (!shouldShowPianoKeys() && labelsSurface_.isValid()) {
+            g.drawImage(labelsSurface_, 0, 0, pianoKeyWidth_, getHeight(),
+                        0, 0, labelsSurface_.getWidth(), labelsSurface_.getHeight(), false);
         }
     }
 
@@ -2553,6 +2526,10 @@ void PianoRollComponent::paint(juce::Graphics& g)
 
     const double paintEndMs = juce::Time::getMillisecondCounterHiRes();
     recordRenderProbe(RenderProbePoint::RootPaint, paintEndMs - paintStartMs);
+    // 缩放事务进行中的 paint 计入 ZoomPreviewPaint（预览帧成本）；
+    // 截止后才呈现的提交栅格由 contentDirty_ 分支计入 ZoomCommitRaster
+    if (zoomActive)
+        recordRenderProbe(RenderProbePoint::ZoomPreviewPaint, paintEndMs - paintStartMs);
     if (lastVBlankMs_ > 0.0)
         recordRenderProbe(RenderProbePoint::VBlankToRootPaint, paintStartMs - lastVBlankMs_);
 }
@@ -2631,8 +2608,9 @@ std::optional<PianoRollRenderer::PlacedContent> PianoRollComponent::activeConten
 void PianoRollComponent::invalidateTimeAxisStaticSurface()
 {
     // 全局静态失效已在队列 → paint 全量栅格覆盖时间轴，不重复局部栅格；
-    // 表面干净有效 → 局部即时栅格（原子提交）；预览期/表面无效 → 交给 paint
-    if (!staticDirty_ && !zoomPreviewActive_ && staticSurface_.isValid()) {
+    // 表面干净且来源相机与当前一致 → 局部即时栅格（原子提交）；
+    // 相机增量尚未提交（来源为旧相机）或表面无效 → 交给 paint
+    if (!staticDirty_ && surfaceView_ == viewportState() && staticSurface_.isValid()) {
         rasterizeStatic(timeAxisRect());
     } else {
         staticDirty_ = true;
@@ -2963,7 +2941,6 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     renderCtx.coords = mapper;
     renderCtx.rasterBounds = clipArea;
 
-    const double pps = view.camera.pixelsPerSecond;
     const bool notesPrimary = isOpenDyne();
 
     // 背景波形：OpenDyne 模式下 blob 即波形表达，不叠加背景 PCM。
@@ -2977,12 +2954,9 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
             const auto* mipmap = waveformMipmapCache_.get(placement.contentKey);
             if (mipmap == nullptr || !mipmap->hasSource())
                 continue;
-            const int bestLevel = mipmap->selectBestLevelIndex(pps);
-            if (bestLevel < 0)
-                continue;
-            const auto& level = mipmap->getLevel(bestLevel);
+            // 峰值查询走 queryExactPeak 真实 PCM；缓存层级只加速查询，不影响像素
             renderer_->drawWaveform(g, renderCtx, PianoRollRenderer::PlacedContent{placement, it->second},
-                                    level, bestLevel);
+                                    *mipmap);
         }
         return;
     }
@@ -3018,75 +2992,6 @@ void PianoRollComponent::rasterizeContentSurfaces(const Items& items)
     rasterizeWaveform(items);
 }
 
-// ============================================================================
-// drawZoomPreview — 缩放预览（冻结表面 AffineTransform 预览）
-// ============================================================================
-
-void PianoRollComponent::drawZoomPreview(juce::Graphics& g, const ViewportState& liveView,
-                                         juce::Rectangle<int> damage)
-{
-    // 固定 chrome、标尺、音高道、键盘沿用 live 逻辑坐标绘制
-    drawFixedChrome(g, damage);
-    drawRuler(g, liveView, damage);
-    drawPitchBackground(g, liveView, damage);
-    // 键盘可见时键床画在内容前；隐藏时音名由 paint 在内容与 tint 之后绘制
-    if (shouldShowPianoKeys())
-        drawPianoKeyboard(g, liveView, damage);
-
-    const auto liveContentBounds = juce::Rectangle<int>(
-        getTimelineContentStartX(), rulerHeight_,
-        getTimelineContentViewportWidth(), getTimelineContentViewportHeight());
-    // 冻结表面与内容区有效时才做图像变换（来源几何由全量 raster 记录）
-    if (!waveformSurface_.isValid() || !contentSurface_.isValid()
-        || surfaceContentBounds_.isEmpty() || liveContentBounds.isEmpty())
-        return;
-
-    // 逻辑变换（0=surfaceView_，1=live）：x1 = r·x0 + dx，y1 = s·y0 + dy
-    const double c0 = surfaceContentBounds_.getX();
-    const double R0 = surfaceContentBounds_.getY();
-    const double c1 = liveContentBounds.getX();
-    const double R1 = liveContentBounds.getY();
-    const double p0 = surfaceView_.camera.pixelsPerSecond;
-    const double p1 = liveView.camera.pixelsPerSecond;
-    const double t0 = surfaceView_.camera.visibleStartSeconds;
-    const double t1 = liveView.camera.visibleStartSeconds;
-    const double h0 = surfaceView_.pixelsPerSemitone;
-    const double h1 = liveView.pixelsPerSemitone;
-    const double v0 = surfaceView_.verticalScrollOffset;
-    const double v1 = liveView.verticalScrollOffset;
-
-    const double r = p1 / p0;
-    const double dx = c1 - r * c0 + (t0 - t1) * p1;
-
-    // 物理图像 → 来源逻辑（getRight/getBottom = 全量 raster 时的视口宽/高）
-    const double bx = static_cast<double>(surfaceContentBounds_.getRight()) / waveformSurface_.getWidth();
-    const double by = static_cast<double>(surfaceContentBounds_.getBottom()) / waveformSurface_.getHeight();
-
-    const auto imageToLive = [&bx, &by](double sx, double sy, double tx, double ty) {
-        return juce::AffineTransform::scale(static_cast<float>(bx), static_cast<float>(by))
-            .followedBy(juce::AffineTransform::scale(static_cast<float>(sx), static_cast<float>(sy)))
-            .translated(static_cast<float>(tx), static_cast<float>(ty));
-    };
-
-    // 波形层：纵向只随视口高度缩放，不随音高缩放与纵向偏移
-    const double wy = static_cast<double>(liveContentBounds.getHeight()) / surfaceContentBounds_.getHeight();
-    const double wdy = R1 - wy * R0;
-    {
-        juce::Graphics::ScopedSaveState ws(g);
-        if (g.reduceClipRegion(damage.getIntersection(liveContentBounds)))
-            g.drawImageTransformed(waveformSurface_, imageToLive(r, wy, dx, wdy), false);
-    }
-
-    // 内容层：音高缩放 + 纵向偏移
-    const double s = h1 / h0;
-    const double dy = R1 - s * R0 + s * v0 - v1;
-    {
-        juce::Graphics::ScopedSaveState cs(g);
-        if (g.reduceClipRegion(damage.getIntersection(liveContentBounds)))
-            g.drawImageTransformed(contentSurface_, imageToLive(r, s, dx, dy), false);
-    }
-}
-
 void PianoRollComponent::rasterizeContent(
     const Items& items,
     std::optional<juce::Rectangle<int>> dirtyRect,
@@ -3115,13 +3020,8 @@ void PianoRollComponent::rasterizeContent(
 
     drawContent(g, surfaceView_, rasterBounds, ContentLayer::Notes, items);
 
-    if (fullRaster) {
+    if (fullRaster)
         contentDirty_ = false;
-        // 记录来源几何，缩放预览冻结期变换用
-        surfaceContentBounds_ = juce::Rectangle<int>(getTimelineContentStartX(), rulerHeight_,
-                                                     getTimelineContentViewportWidth(),
-                                                     getTimelineContentViewportHeight());
-    }
 
     recordRenderProbe(RenderProbePoint::ContentRaster, juce::Time::getMillisecondCounterHiRes() - t0);
 }
@@ -3153,7 +3053,7 @@ void PianoRollComponent::rasterizeWaveform(
     drawContent(g, surfaceView_, rasterBounds, ContentLayer::Waveform, items);
 }
 
-juce::Rectangle<int> PianoRollComponent::commitCameraDelta()
+juce::Rectangle<int> PianoRollComponent::commitCameraDelta(bool exactCamera)
 {
     const bool panPending = cameraPanPending_;
     cameraPanPending_ = false;
@@ -3167,7 +3067,11 @@ juce::Rectangle<int> PianoRollComponent::commitCameraDelta()
     const int contentH = getTimelineContentViewportHeight();
 
     // 决定是否全量提交，再移动任意表面。位图和来源几何在同一 paint 更新。
-    if ((staticDirty_ && contentDirty_)
+    // exactCamera（缩放事务/未呈现缩放输入）要求来源与当前相机精确一致：
+    // 状态不同（含增量条件覆盖不到的无 panPending 位移）推进来源并全量重绘；
+    // 状态相同不重复栅格，停轮后同相机像素一致。
+    if ((exactCamera && view != surfaceView_)
+        || (staticDirty_ && contentDirty_)
         || view.camera.pixelsPerSecond != oldPps
         || view.pixelsPerSemitone != surfaceView_.pixelsPerSemitone
         || (dx != 0 && std::abs(dx) >= contentW)
@@ -3812,21 +3716,19 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
                     && std::abs(lhs.projection.contentDurationSeconds - rhs.projection.contentDurationSeconds) <= 1.0e-9;
             });
 
-    // Register waveform mipmap sources (before early-return so late-binding audio works)
+    bool audioChanged = false;
     std::set<ContentKey> aliveContents;
     for (const auto& placement : placements) {
-        aliveContents.insert(placement.contentKey);
-        if (const auto snapshot = readSnapshotFor(placement.contentKey);
-            snapshot != nullptr && snapshot->audioBuffer != nullptr) {
-            waveformMipmapCache_.setAudioSource(placement.contentKey, snapshot->audioBuffer);
-        }
+        if (!aliveContents.insert(placement.contentKey).second)
+            continue;
+        if (const auto snapshot = readSnapshotFor(placement.contentKey))
+            audioChanged |= waveformMipmapCache_.setAudioSource(placement.contentKey, snapshot->audioBuffer);
     }
     waveformMipmapCache_.prune(aliveContents);
 
     explicitTimelineContentPlacements_ = explicitContract;
-    if (!changed) {
-        return false;
-    }
+    if (!changed)
+        return audioChanged;
 
     timelineContentPlacements_ = std::move(placements);
 
@@ -4357,26 +4259,18 @@ void PianoRollComponent::onHeartbeatTick()
     tryConsumeInitialF0View(editedContentKey_);
 #endif
 
-    // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建
-    if (showWaveform_ || isOpenDyne()) {
-        const bool progressed = waveformMipmapCache_.buildIncremental(0.75);
-
-        if (progressed) {
-            contentDirty_ = true;
-            if (isShowing() && !zoomPreviewActive_)
-                repaint();
-        }
-    }
+    // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建；
+    // 层级完成只加速 queryExactPeak 查询，不改变像素，不放脏、不 repaint
+    if (showWaveform_ || isOpenDyne())
+        waveformMipmapCache_.buildIncremental(0.75);
 
     if (!isShowing())
         return;
 
-    if (zoomPreviewActive_ && zoomDeadlineTicks_ > 0) {
+    // 缩放事务截止：按既有心跳计数递减；到 0 仅结束事务，
+    // 像素已与当前相机一致，不强制放脏 repaint
+    if (zoomDeadlineTicks_ > 0)
         --zoomDeadlineTicks_;
-        if (zoomDeadlineTicks_ == 0) {
-            endZoomPreview();
-        }
-    }
 }
 
 void PianoRollComponent::onScrollVBlankCallback(double timestampSec)
@@ -5805,7 +5699,6 @@ void PianoRollComponent::fitToSelectedNotes()
 }
 
 void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFactor) {
-    // 冻结图 = 上次 paint 的完整提交；未提交的相机增量由预览状态对变换精确吸收
     const double oldPps = camera_.pixelsPerSecond;
     const double newPps = TimelineViewportPolicy::normalisePixelsPerSecond(
         oldPps * zoomFactor,
@@ -5813,33 +5706,20 @@ void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFact
     const double anchorTime = camera_.visibleStartSeconds + anchorViewportX / oldPps;
 
     extendZoomPreview();
-    zoomAnchorTime_ = anchorTime;
-    zoomAnchorViewportX_ = anchorViewportX;
-
     userHasManuallyZoomed_ = true;
     commitViewportRequest(makeViewportRequest(
         TimelineViewportRequest::Kind::Zoom,
-        zoomAnchorTime_,
-        static_cast<double>(zoomAnchorViewportX_),
+        anchorTime,
+        static_cast<double>(anchorViewportX),
         newPps));
 }
 
 void PianoRollComponent::extendZoomPreview()
 {
-    zoomPreviewActive_ = true;
+    // 标记有未呈现的缩放输入并重置事务截止；
+    // 下一次 paint 消费标记，按当前相机精确栅格（截止已过同样成立）
+    zoomCameraPending_ = true;
     zoomDeadlineTicks_ = kZoomDeadlineTicks;
-}
-
-void PianoRollComponent::endZoomPreview() {
-    zoomPreviewActive_ = false;
-    zoomDeadlineTicks_ = 0;
-    zoomAnchorTime_ = -1.0;
-
-    // 下一次 paint 用当前相机一次重建保留表面。
-    staticDirty_ = true;
-    contentDirty_ = true;
-    zoomCommitPending_ = true;
-    repaint();
 }
 
 // ============================================================================

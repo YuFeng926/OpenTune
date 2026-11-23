@@ -81,6 +81,14 @@ public:
         TimelineViewportCamera camera{0.0, TimelineViewportCamera::kDefaultPixelsPerSecond};
         float pixelsPerSemitone = 25.0f;
         float verticalScrollOffset = 0.0f;
+
+        bool operator==(const ViewportState& other) const noexcept
+        {
+            return camera == other.camera
+                && pixelsPerSemitone == other.pixelsPerSemitone
+                && verticalScrollOffset == other.verticalScrollOffset;
+        }
+        bool operator!=(const ViewportState& other) const noexcept { return !(*this == other); }
     };
 
     void visibilityChanged() override;
@@ -365,23 +373,18 @@ private:
     juce::Image waveformSurface_;
     juce::Image contentSurface_;
     ViewportState surfaceView_;
-    // 内容表面来源几何 {contentStartX, rulerHeight, 内容视口宽, 内容视口高}；
-    // 全量内容 raster 时记录，缩放预览冻结期变换用
-    juce::Rectangle<int> surfaceContentBounds_;
     bool staticDirty_ = true;
     bool contentDirty_ = true;
     // 内容编辑与相机平移待补的物理像素区域，由同一次 paint 消费。
     juce::RectangleList<int> pendingContentRaster_;
     bool cameraPanPending_ = false;
-    // 缩放提交后的首次全量栅格以栅格起点计时记录 ZoomCommitRaster（提交仍恰一次栅格）
-    bool zoomCommitPending_ = false;
+    // 有未呈现的缩放输入：paint 消费后必须按当前相机全量栅格，
+    // 截止已过（心跳耗尽后才 paint）同样成立
+    bool zoomCameraPending_ = false;
     // 有效倍率（peer/host/root transform 真实绘制栈）；0 = 尚未从 paint 捕获
     float renderScale_ = 0.0f;
 
     // ── 缩放事务 ──────────────────────────────────────────────
-    bool zoomPreviewActive_ = false;
-    double zoomAnchorTime_ = -1.0;   // -1.0 sentinel: invalid until beginZoomPreviewAt sets it
-    int zoomAnchorViewportX_ = 0;
     int zoomDeadlineTicks_ = 0;          // 心跳计数倒计时，0 表示事务结束
     static constexpr int kZoomDeadlineTicks = 10;  // ~400ms @ 25Hz 心跳
 
@@ -407,7 +410,7 @@ private:
                            std::optional<juce::Rectangle<int>> dirtyRect = std::nullopt,
                            std::optional<juce::Rectangle<int>> physicalDirtyRect = std::nullopt);
 
-    // ── 按坐标域拆分的唯一绘制函数（raster target 与 preview target 共用） ──
+    // ── 按坐标域拆分的绘制函数 ──
     void drawFixedChrome(juce::Graphics& g, juce::Rectangle<int> damage);
     void drawRuler(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
     void drawPitchBackground(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage);
@@ -416,9 +419,6 @@ private:
 
     void drawContent(juce::Graphics& g, const ViewportState& view, juce::Rectangle<int> damage,
                      ContentLayer layer, const Items& items);
-    /** 缩放预览：固定 chrome/标尺/音高道/键盘按 live 逻辑坐标绘制，
-     *  音频波形与音符/F0 两层只变换冻结 Image。 */
-    void drawZoomPreview(juce::Graphics& g, const ViewportState& liveView, juce::Rectangle<int> damage);
 
     // ── 性能探针 ──────────────────────────────────────────────
     struct RasterProbe { int count = 0; double totalMs = 0.0; };
@@ -438,8 +438,10 @@ private:
     void recordRenderProbe(RenderProbePoint point, double elapsedMs, int samples = 1);
 
     // ── 保留式相机更新 ────────────────────────────────────────
-    // 满足增量条件时提交相机位移，返回波形横移暴露的物理像素范围。
-    juce::Rectangle<int> commitCameraDelta();
+    // 满足增量条件时提交相机位移，返回波形横移暴露的物理像素范围；
+    // exactCamera=true（缩放事务进行中或存在未呈现缩放输入）时，
+    // 来源状态 surfaceView_ 与当前相机不同必须推进来源并全量重绘。
+    juce::Rectangle<int> commitCameraDelta(bool exactCamera);
     /** 纵向滚动事件收口：同步滚动条并请求展示（表面提交由 paint 的 commitCameraDelta 完成）。 */
     void applyVerticalPan();
     void handleHorizontalScrollPixels(double pixelDelta);
@@ -448,7 +450,6 @@ private:
     // ── 缩放事务 ──────────────────────────────────────────────
     void beginZoomPreviewAt(int anchorViewportX, double zoomFactor);
     void extendZoomPreview();
-    void endZoomPreview();
     void handleVerticalZoomAt(float zoomFactor, float contentY);
     void zoomHorizontalIn();
     void zoomHorizontalOut();

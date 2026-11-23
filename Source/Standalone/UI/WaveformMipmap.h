@@ -6,6 +6,7 @@
 #include <memory>
 #include <map>
 #include <set>
+#include <optional>
 #include "Content/ContentKey.h"
 
 namespace OpenTune {
@@ -27,6 +28,14 @@ struct PeakSample
     float getMax() const noexcept { return max / 127.0f; }
     float getMagnitude() const noexcept { return static_cast<float>(juce::jmax(std::abs(min), std::abs(max))) / 127.0f; }
     bool isZero() const noexcept { return min == 0 && max == 0; }
+
+    // int8 域 min/max 合并。所有峰值聚合（多通道、缓存区块、PCM 边缘）都走同一
+    // 量化函数 setRange 与本合并，保证不同数据来源聚合出的结果逐位一致。
+    void merge(const PeakSample& other) noexcept
+    {
+        if (other.min < min) min = other.min;
+        if (other.max > max) max = other.max;
+    }
 };
 
 class WaveformMipmap
@@ -47,7 +56,6 @@ public:
     struct Level
     {
         std::vector<PeakSample> peaks;
-        int64_t numSamplesCovered = 0;
         bool complete = false;
         int64_t buildProgress = 0;
     };
@@ -71,9 +79,19 @@ public:
     /// 返回适合当前缩放的 complete 非空 level 索引；无可用 level 时返回 -1，
     /// 调用方必须以索引 >= 0 为前提，禁止访问伪就绪的 level 0。
     int selectBestLevelIndex(double pixelsPerSecond) const;
-    
+
+    /// 精确查询真实 PCM 在样本区间 [startSample, endSampleExclusive) 上的峰值。
+    /// 样本索引属于 setAudioSource 传入 buffer 的域，时间→样本换算由调用方按
+    /// 实际 buffer sampleRate 与 PianoRollTimeMap 完成。
+    /// 空区间约定：区间先与 [0, getNumSamples()) 求交集，交集为空
+    /// （endSampleExclusive <= startSample，或区间与音频不重叠）返回 std::nullopt；
+    /// 有效交集返回该区间 int8 域 min/max，静音也是数据（min == max == 0 的有效值）。
+    /// 完整覆盖的缓存区块直接复用，边缘与未建区块逐级下沉到真实 PCM 聚合；
+    /// 缓存层级与构建进度只影响查询路径，不影响返回值。
+    std::optional<PeakSample> queryExactPeak(int64_t startSample, int64_t endSampleExclusive) const;
+
     void clear();
-    
+
 private:
     std::shared_ptr<const juce::AudioBuffer<float>> audioBuffer_;
     int64_t numSamples_ = 0;
@@ -82,12 +100,19 @@ private:
     
     void initializeLevels();
     bool buildLevelSlice(int level, double timeBudgetMs);
+
+    // queryExactPeak 的内部递归：按 level 从粗到细消费完整区块，
+    // 未对齐/未建部分下沉更细层，level < 0 时直接扫描真实 PCM。
+    void accumulateRange(int64_t startSample, int64_t endSampleExclusive, int level,
+                         PeakSample& accumulator, bool& hasData) const;
+    // 多通道真实 PCM 扫描 + setRange 量化；区间必须非空。
+    PeakSample scanPcmPeak(int64_t startSample, int64_t endSampleExclusive) const;
 };
 
 class WaveformMipmapCache
 {
 public:
-    void setAudioSource(ContentKey contentKey, std::shared_ptr<const juce::AudioBuffer<float>> buffer);
+    bool setAudioSource(ContentKey contentKey, std::shared_ptr<const juce::AudioBuffer<float>> buffer);
     void remove(ContentKey contentKey);
     void prune(const std::set<ContentKey>& alive);
     void clear();
