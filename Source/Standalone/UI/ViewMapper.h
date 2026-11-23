@@ -23,6 +23,11 @@ struct ViewMapper {
             std::llround((absoluteSeconds - visibleStartSeconds) * pixelsPerSecond));
     }
 
+    // 连续 X 投影（不取整）：F0 渲染点专用，double→float 只在写入渲染点时一次完成。
+    double timeToXExact(double absoluteSeconds) const {
+        return contentStartX + (absoluteSeconds - visibleStartSeconds) * pixelsPerSecond;
+    }
+
     // Returns absolute timeline seconds for a parent-component X.
     double xToTime(int x) const {
         return visibleStartSeconds + static_cast<double>(x - contentStartX) / pixelsPerSecond;

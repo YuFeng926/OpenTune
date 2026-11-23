@@ -49,6 +49,12 @@ struct PianoRollTimeMap
         return coords.timeToX(sourceToTimeline(sourceSeconds));
     }
 
+    // source -> 连续 screen x: sourceToTimeline then ViewMapper::timeToXExact（不取整）。
+    double sourceToXExact(double sourceSeconds) const noexcept
+    {
+        return coords.timeToXExact(sourceToTimeline(sourceSeconds));
+    }
+
     // screen x -> source: ViewMapper::xToTime then timelineToSource.
     double xToSource(int x) const noexcept
     {
