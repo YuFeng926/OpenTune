@@ -1,4 +1,5 @@
 #include "ManualCorrectionEdit.h"
+#include "PitchUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -166,17 +167,20 @@ float lineAnchorF0WithSourceShape(const std::vector<float>& originalF0,
                                0.0f,
                                1.0f);
     const float targetLineF0 = interpolateLogF0(leftTargetF0, rightTargetF0, t);
-    const float shapeAmount = 1.0f - std::clamp(retuneSpeed, 0.0f, 1.0f);
-    if (shapeAmount <= 0.0f)
-        return targetLineF0;
 
     const float sourceF0 = originalF0[static_cast<std::size_t>(frame)];
     if (sourceF0 <= 0.0f)
         return targetLineF0;
 
-    const float logShape = std::log2(sourceF0)
-        - (sourceTrend.intercept + sourceTrend.slope * static_cast<float>(frame - startFrame));
-    return targetLineF0 * std::pow(2.0f, logShape * shapeAmount);
+    // 残差按半音计量并钳制：钳制的是可传递形状的幅度（原始残差），传递比例由
+    // retuneSpeed 经 mixRetune 决定。
+    const float residualSemitones = (std::log2(sourceF0)
+        - (sourceTrend.intercept + sourceTrend.slope * static_cast<float>(frame - startFrame))) * 12.0f;
+    const float cappedSemitones = std::clamp(residualSemitones,
+                                             -kLineAnchorShapeCapSemitones,
+                                             kLineAnchorShapeCapSemitones);
+    return PitchUtils::mixRetune(
+        targetLineF0 * std::pow(2.0f, cappedSemitones / 12.0f), targetLineF0, retuneSpeed);
 }
 
 } // namespace OpenTune

@@ -781,8 +781,12 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             const auto after = proc_.getContentSnapshot(key);
             if (after == nullptr || after->pitchCurve == nullptr)
                 return {};
-            const auto affected = PitchCurve::expandNoteBasedCorrectionRange(
-                startFrame, endFrameExclusive, static_cast<int>(before->pitchCurve->size()));
+            // 撤销动作的受影响范围先扩展到完整覆盖相交的手工段（用编辑前快照的
+            // 段）：AUTO/NoteSplit 的撤销重放让手工段整体回写，不被范围边界切分。
+            const auto affected = expandRangeToCoverWholeManualSegments(
+                before->pitchCurve->getCorrectionSegments(),
+                PitchCurve::expandNoteBasedCorrectionRange(
+                    startFrame, endFrameExclusive, static_cast<int>(before->pitchCurve->size())));
             auto action = createPianoRollEditAction(
                 key, before->notes, before->pitchCurve->getCorrectionSegments(), after,
                 std::vector<ContentEditRangeFrames>{
@@ -1248,35 +1252,13 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
             return result;
         }
 
-        static std::vector<PitchCorrectionSegment> segmentsInRange(
-            const std::vector<PitchCorrectionSegment>& segments, int start, int end)
-        {
-            std::vector<PitchCorrectionSegment> result;
-            for (const auto& segment : segments) {
-                if (segment.endFrame <= start || segment.startFrame >= end)
-                    continue;
-                const int clipStart = std::max(segment.startFrame, start);
-                const int clipEnd = std::min(segment.endFrame, end);
-                const int offset = clipStart - segment.startFrame;
-                if (clipEnd <= clipStart || offset + clipEnd - clipStart > static_cast<int>(segment.f0Data.size()))
-                    continue;
-                auto clipped = segment;
-                clipped.startFrame = clipStart;
-                clipped.endFrame = clipEnd;
-                clipped.f0Data.assign(segment.f0Data.begin() + offset,
-                                      segment.f0Data.begin() + offset + clipEnd - clipStart);
-                result.push_back(std::move(clipped));
-            }
-            return result;
-        }
-
         static std::vector<PitchCorrectionSegment> segmentsInRanges(
             const std::vector<PitchCorrectionSegment>& segments,
             const std::vector<ContentEditRangeFrames>& ranges)
         {
             std::vector<PitchCorrectionSegment> result;
             for (const auto& range : ranges) {
-                auto clipped = segmentsInRange(segments, range.startFrame, range.endFrameExclusive);
+                auto clipped = clipSegmentsToFrameRange(segments, range.startFrame, range.endFrameExclusive);
                 result.insert(result.end(),
                               std::make_move_iterator(clipped.begin()),
                               std::make_move_iterator(clipped.end()));
@@ -1301,15 +1283,9 @@ void OpenTuneAudioProcessor::initializeRuntimeStateOnce()
         {
             const int clipStart = std::max(segment.startFrame, start);
             const int clipEnd = std::min(segment.endFrame, end);
-            const int offset = clipStart - segment.startFrame;
-            if (clipEnd <= clipStart || offset + clipEnd - clipStart > static_cast<int>(segment.f0Data.size()))
+            if (clipEnd <= clipStart)
                 return std::nullopt;
-            auto clipped = segment;
-            clipped.startFrame = clipStart;
-            clipped.endFrame = clipEnd;
-            clipped.f0Data.assign(segment.f0Data.begin() + offset,
-                                  segment.f0Data.begin() + offset + clipEnd - clipStart);
-            return clipped;
+            return sliceCorrectionSegment(segment, clipStart, clipEnd);
         }
 
         OpenTuneAudioProcessor& proc_;

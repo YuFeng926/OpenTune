@@ -2315,36 +2315,35 @@ void ProcessRenderRuntime::processChunkRenderJob(std::shared_ptr<ContentRenderSe
         const int originalF0Size = static_cast<int>(originalF0Full.size());
         if (f0StartFrame >= 0 && f0StartFrame < originalF0Size)
         {
-            AutoTunePitchShifter autoTuneShifter(RenderCache::kSampleRate);
             const int safeNumF0Frames = std::min(numF0Frames, originalF0Size - f0StartFrame);
 
-            // Lightweight target track: explicit correction frames carry
-            // their absolute corrected F0, unedited frames stay 0 (no
-            // correction request => rate 1). The detector period remains
-            // the only source measure, so an FCPE octave error cannot be
-            // published as a transposition in unedited regions.
-            std::vector<float> autoTuneTargetF0(
-                static_cast<size_t>(safeNumF0Frames), 0.0f);
-            pitchCurve->forEachCorrectionF0Span(
-                f0StartFrame, f0StartFrame + safeNumF0Frames,
-                [&autoTuneTargetF0, f0StartFrame](
-                    int frameIndex, const float* values, int spanLength)
-                {
-                    if (values == nullptr)
-                        return;
-                    const int offset = frameIndex - f0StartFrame;
-                    for (int k = 0; k < spanLength; ++k)
-                        autoTuneTargetF0[static_cast<size_t>(offset + k)] =
-                            values[static_cast<size_t>(k)];
-                });
-
-            // 目标本身超出 ±75 音分时轻量周期重采样合同不成立：整段
-            // AutoTune 分支不执行，沿既有 fall-through 进入 vocoder。
-            const bool targetWithinLightContract =
-                !chunkNeedsVocoder(autoTuneTargetF0.data(), safeNumF0Frames,
-                                   originalF0Full, f0StartFrame);
-            if (targetWithinLightContract)
+            // 声码器掩码已涵盖轻量合同的全部判定：NoteBased 修正帧按 ±75 音分阈值
+            // 标记，手工段有声帧无条件标记，间隙与无声帧均不标记。掩码命中即整段
+            // AutoTune 分支不执行（目标轨道不再物化），沿既有 fall-through 进入
+            // vocoder。
+            if (!pitchCurve->rangeNeedsVocoder(f0StartFrame, f0StartFrame + safeNumF0Frames))
             {
+                AutoTunePitchShifter autoTuneShifter(RenderCache::kSampleRate);
+
+                // Lightweight target track: explicit correction frames carry
+                // their absolute corrected F0, unedited frames stay 0 (no
+                // correction request => rate 1). The detector period remains
+                // the only source measure, so an FCPE octave error cannot be
+                // published as a transposition in unedited regions.
+                std::vector<float> autoTuneTargetF0(
+                    static_cast<size_t>(safeNumF0Frames), 0.0f);
+                pitchCurve->forEachCorrectionF0Span(
+                    f0StartFrame, f0StartFrame + safeNumF0Frames,
+                    [&autoTuneTargetF0, f0StartFrame](
+                        int frameIndex, const float* values, int spanLength)
+                    {
+                        if (values == nullptr)
+                            return;
+                        const int offset = frameIndex - f0StartFrame;
+                        for (int k = 0; k < spanLength; ++k)
+                            autoTuneTargetF0[static_cast<size_t>(offset + k)] =
+                                values[static_cast<size_t>(k)];
+                    });
                 // Supply the source context needed by the pitch resampler:
                 // preceding waveform history for cycle transitions and future
                 // samples for aligned band-limited interpolation.

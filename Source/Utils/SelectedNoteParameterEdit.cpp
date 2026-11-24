@@ -1,4 +1,5 @@
 #include "SelectedNoteParameterEdit.h"
+#include "Content/ContentPatchGeometry.h"
 #include "Content/EditableContentSnapshot.h"
 #include <algorithm>
 #include <utility>
@@ -12,31 +13,6 @@ std::vector<Note> notesInRange(const std::vector<Note>& notes, double startSecon
     for (const auto& note : notes) {
         if (note.startTime < endSeconds && note.endTime > startSeconds)
             result.push_back(note);
-    }
-    return result;
-}
-
-std::vector<PitchCorrectionSegment> segmentsInRange(
-    const std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrame)
-{
-    std::vector<PitchCorrectionSegment> result;
-    for (const auto& segment : segments) {
-        if (segment.endFrame <= startFrame || segment.startFrame >= endFrame)
-            continue;
-
-        const int clippedStart = std::max(segment.startFrame, startFrame);
-        const int clippedEnd = std::min(segment.endFrame, endFrame);
-        const int offset = clippedStart - segment.startFrame;
-        const int length = clippedEnd - clippedStart;
-        if (offset < 0 || length <= 0 || offset + length > static_cast<int>(segment.f0Data.size()))
-            continue;
-
-        auto clipped = segment;
-        clipped.startFrame = clippedStart;
-        clipped.endFrame = clippedEnd;
-        clipped.f0Data.assign(segment.f0Data.begin() + offset,
-                              segment.f0Data.begin() + offset + length);
-        result.push_back(std::move(clipped));
     }
     return result;
 }
@@ -115,17 +91,21 @@ std::optional<SelectedNoteParameterPatch> planSelectedNoteParameterEdit(
         vibratoDepthDefault,
         vibratoRateDefault);
 
-    patch.affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-        editRange.startFrame, editRange.endFrameExclusive, timeline.endFrameExclusive());
+    // 范围先扩展到完整覆盖相交的手工段：手工段整体穿过提交/撤销机器，不被
+    // 范围边界切分成多段。
+    patch.affectedRange = expandRangeToCoverWholeManualSegments(
+        curveSnapshot->getCorrectionSegments(),
+        PitchCurve::expandNoteBasedCorrectionRange(
+            editRange.startFrame, editRange.endFrameExclusive, timeline.endFrameExclusive()));
     const double affectedStartSeconds = timeline.timeAtFrame(patch.affectedRange.startFrame);
     const double affectedEndSeconds = timeline.timeAtFrame(patch.affectedRange.endFrameExclusive);
     patch.beforeNotes = notesInRange(snapshot.notes, affectedStartSeconds, affectedEndSeconds);
     patch.afterNotes = notesInRange(valuePlan.notes, affectedStartSeconds, affectedEndSeconds);
-    patch.beforeSegments = segmentsInRange(
+    patch.beforeSegments = clipSegmentsToFrameRange(
         curveSnapshot->getCorrectionSegments(),
         patch.affectedRange.startFrame,
         patch.affectedRange.endFrameExclusive);
-    patch.afterSegments = segmentsInRange(
+    patch.afterSegments = clipSegmentsToFrameRange(
         derivedSnapshot->getCorrectionSegments(),
         patch.affectedRange.startFrame,
         patch.affectedRange.endFrameExclusive);

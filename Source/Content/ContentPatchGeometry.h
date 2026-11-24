@@ -33,10 +33,29 @@ inline std::vector<Note> filterNotesToRange(const std::vector<Note>& notes,
     return filtered;
 }
 
+// 唯一段切片原语：f0Data 恒按 [startFrame, endFrame) 裁切；baseF0Data 在覆盖到
+// 切片末帧时按同偏移裁切，保证切片后两数组仍与帧区间对齐（调用方传入的帧区间
+// 必须落在段自身的有效数据范围内）。
+inline PitchCorrectionSegment sliceCorrectionSegment(const PitchCorrectionSegment& segment,
+                                                     int startFrame, int endFrame)
+{
+    PitchCorrectionSegment piece;
+    piece.startFrame = startFrame;
+    piece.endFrame = endFrame;
+    piece.parameterSnapshot = segment.parameterSnapshot;
+    piece.source = segment.source;
+    const int offset = startFrame - segment.startFrame;
+    const int end = endFrame - segment.startFrame;
+    piece.f0Data.assign(segment.f0Data.begin() + offset, segment.f0Data.begin() + end);
+    if (static_cast<size_t>(end) <= segment.baseF0Data.size())
+        piece.baseF0Data.assign(segment.baseF0Data.begin() + offset, segment.baseF0Data.begin() + end);
+    return piece;
+}
+
 // Filters incoming segments to the affected frame range and clips boundary
-// crossings, maintaining the f0Data offset so each clipped segment keeps the
-// samples that belong to its retained frame span. Segments fully outside the
-// range, empty after clipping, or inconsistent with f0Data are dropped.
+// crossings through the shared slice primitive, so each clipped segment keeps
+// the f0Data/baseF0Data samples that belong to its retained frame span.
+// Segments fully outside the range or empty after clipping are dropped.
 inline std::vector<PitchCorrectionSegment> clipSegmentsToFrameRange(
     const std::vector<PitchCorrectionSegment>& segments,
     int rangeStartFrame,
@@ -52,26 +71,32 @@ inline std::vector<PitchCorrectionSegment> clipSegmentsToFrameRange(
         if (clipEnd <= clipStart)
             continue;
 
-        PitchCorrectionSegment clipped = seg;
-        const int startOffset = clipStart - seg.startFrame;
-        const int clipLen = clipEnd - clipStart;
-        if (startOffset >= 0 && clipLen > 0
-            && startOffset + clipLen <= static_cast<int>(seg.f0Data.size())) {
-            clipped.startFrame = clipStart;
-            clipped.endFrame = clipEnd;
-            clipped.f0Data.assign(seg.f0Data.begin() + startOffset,
-                                  seg.f0Data.begin() + startOffset + clipLen);
-            filtered.push_back(std::move(clipped));
-        }
+        filtered.push_back(sliceCorrectionSegment(seg, clipStart, clipEnd));
     }
     return filtered;
 }
 
+// 扩展帧区间使其完整覆盖所有与之相交的手工段（手绘/线锚）：范围提交与撤销
+// 重放以扩展后的范围替换段，手工段整体穿过提交/撤销机器，不被范围边界切分。
+inline F0FrameRange expandRangeToCoverWholeManualSegments(
+    const std::vector<PitchCorrectionSegment>& segments, F0FrameRange range)
+{
+    for (const auto& segment : segments) {
+        if (segment.endFrame <= range.startFrame || segment.startFrame >= range.endFrameExclusive)
+            continue;
+        if (isManualCorrectionSource(segment.source)) {
+            range.startFrame = std::min(range.startFrame, segment.startFrame);
+            range.endFrameExclusive = std::max(range.endFrameExclusive, segment.endFrame);
+        }
+    }
+    return range;
+}
+
 // Replaces the segments inside the affected frame range with newSegments:
 // segments entirely outside the range are kept as-is, boundary-crossing old
-// segments are split so their outside parts are preserved (f0Data offsets
-// maintained), then newSegments are inserted and the result is sorted by
-// startFrame.
+// segments are split through the shared slice primitive so their outside parts
+// are preserved (f0Data/baseF0Data offsets maintained), then newSegments are
+// inserted and the result is sorted by startFrame.
 inline std::vector<PitchCorrectionSegment> replaceSegmentsInFrameRange(
     const std::vector<PitchCorrectionSegment>& existingSegments,
     const std::vector<PitchCorrectionSegment>& newSegments,
@@ -90,29 +115,12 @@ inline std::vector<PitchCorrectionSegment> replaceSegmentsInFrameRange(
 
         // Segment crosses range boundary -> split and preserve outside parts
         // Left part: segment starts before range
-        if (seg.startFrame < rangeStartFrame) {
-            PitchCorrectionSegment left = seg;
-            left.endFrame = rangeStartFrame;
-            const int leftLen = left.endFrame - left.startFrame;
-            if (leftLen > 0 && leftLen <= static_cast<int>(seg.f0Data.size())) {
-                left.f0Data.assign(seg.f0Data.begin(), seg.f0Data.begin() + leftLen);
-                mergedSegments.push_back(std::move(left));
-            }
-        }
+        if (seg.startFrame < rangeStartFrame)
+            mergedSegments.push_back(sliceCorrectionSegment(seg, seg.startFrame, rangeStartFrame));
 
         // Right part: segment ends after range
-        if (seg.endFrame > rangeEndFrameExclusive) {
-            PitchCorrectionSegment right = seg;
-            right.startFrame = rangeEndFrameExclusive;
-            const int offset = right.startFrame - seg.startFrame;
-            const int rightLen = right.endFrame - right.startFrame;
-            if (offset >= 0 && rightLen > 0
-                && offset + rightLen <= static_cast<int>(seg.f0Data.size())) {
-                right.f0Data.assign(seg.f0Data.begin() + offset,
-                                    seg.f0Data.begin() + offset + rightLen);
-                mergedSegments.push_back(std::move(right));
-            }
-        }
+        if (seg.endFrame > rangeEndFrameExclusive)
+            mergedSegments.push_back(sliceCorrectionSegment(seg, rangeEndFrameExclusive, seg.endFrame));
     }
 
     // Callers already filtered the new segments to range-overlapping only.

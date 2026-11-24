@@ -42,6 +42,40 @@ struct PitchCorrectionSegment {
         : startFrame(start), endFrame(end), f0Data(data), source(src) {}
 };
 
+// 手工段来源谓词：手绘/线锚段整帧进声码器掩码，并在自动重算的清除中保留。
+inline bool isManualCorrectionSource(PitchCorrectionSegment::Source source) noexcept
+{
+    return source == PitchCorrectionSegment::Source::HandDraw
+        || source == PitchCorrectionSegment::Source::LineAnchor;
+}
+
+// 持久化加载边界的一次性归一：恢复 f0Data 与帧跨度的不变量。
+// 负 startFrame、f0Data 为空或区间倒置的段丢弃（丢弃后 span 计算两端非负，
+// 无溢出，掩码帧下标非负）；f0Data 不足时收缩 endFrame（saved 数据权威），
+// 超出时截断尾部；baseF0Data 长于跨度按前缀截断对齐，短于跨度（非空）置空
+// （错位的 base 丢弃优于错误对齐）。
+inline void normalizeLoadedCorrectionSegmentLengths(std::vector<PitchCorrectionSegment>& segments)
+{
+    std::vector<PitchCorrectionSegment> normalized;
+    normalized.reserve(segments.size());
+    for (auto& segment : segments) {
+        if (segment.startFrame < 0 || segment.f0Data.empty()
+            || segment.startFrame >= segment.endFrame)
+            continue;
+        const auto declaredSpan = static_cast<size_t>(segment.endFrame - segment.startFrame);
+        if (segment.f0Data.size() < declaredSpan)
+            segment.endFrame = segment.startFrame + static_cast<int>(segment.f0Data.size());
+        else if (segment.f0Data.size() > declaredSpan)
+            segment.f0Data.resize(declaredSpan);
+        if (segment.baseF0Data.size() > segment.f0Data.size())
+            segment.baseF0Data.resize(segment.f0Data.size());
+        else if (!segment.baseF0Data.empty() && segment.baseF0Data.size() < segment.f0Data.size())
+            segment.baseF0Data.clear();
+        normalized.push_back(std::move(segment));
+    }
+    segments.swap(normalized);
+}
+
 static std::vector<bool> computeVocoderMask(
     const std::vector<float>& originalF0,
     const std::vector<PitchCorrectionSegment>& correctionSegments)
@@ -50,12 +84,18 @@ static std::vector<bool> computeVocoderMask(
     std::vector<bool> mask(numFrames, false);
     for (const auto& seg : correctionSegments) {
         for (int f = seg.startFrame; f < seg.endFrame && f < numFrames; ++f) {
-            const float original = originalF0[static_cast<size_t>(f)];
-            if (original <= 0.0f) continue;
             const int offset = f - seg.startFrame;
             if (offset < 0 || offset >= static_cast<int>(seg.f0Data.size())) continue;
             const float corrected = seg.f0Data[static_cast<size_t>(offset)];
             if (corrected <= 0.0f) continue;
+            if (isManualCorrectionSource(seg.source)) {
+                // 手工段一律声码器（决策 1）：原轨无声的帧同样路由到声码器，
+                // 只要求修正值本身有效；不参与 ±75 音分轻量合同筛选。
+                mask[static_cast<size_t>(f)] = true;
+                continue;
+            }
+            const float original = originalF0[static_cast<size_t>(f)];
+            if (original <= 0.0f) continue;
             if (!isPitchShiftRateWithinCents(
                     static_cast<double>(corrected) / static_cast<double>(original),
                     kPitchShiftThresholdCents))
@@ -186,6 +226,14 @@ public:
         if (vocoderMask_.empty()) return false;
         const auto range = tl.rangeForTimes(startTime, endTime);
         for (int f = range.startFrame; f < range.endFrameExclusive; ++f)
+            if (isVocoderFrame(f)) return true;
+        return false;
+    }
+
+    // 帧区间掩码查询（帧坐标语义，与 noteNeedsVocoder 的时间转帧语义并列）：
+    // 任一帧命中掩码即 true；空区间/越界帧为 false。
+    bool rangeNeedsVocoder(int startFrame, int endFrameExclusive) const {
+        for (int f = startFrame; f < endFrameExclusive; ++f)
             if (isVocoderFrame(f)) return true;
         return false;
     }

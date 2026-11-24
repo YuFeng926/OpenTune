@@ -211,12 +211,13 @@ bool checkPitchRangePlanAndEmptyCurveNotePatch()
     const auto plan = planDrawNoteEdit(snapshot, makeInput(10.0, 12.0, 493.88f), 12);
     if (!plan.pitchCurveEdited
         || plan.affectedRange.startFrame != 0
-        || plan.affectedRange.endFrameExclusive != 28
+        // 范围扩展到完整覆盖相交的手工段：HandDraw [0,40) 整体穿过提交机器。
+        || plan.affectedRange.endFrameExclusive != 40
         || plan.beforeNotesInPitchRange.size() != 1
         || plan.beforeSegments.size() != 1
         || plan.beforeSegments[0].startFrame != 0
-        || plan.beforeSegments[0].endFrame != 28
-        || plan.beforeSegments[0].f0Data.size() != 28
+        || plan.beforeSegments[0].endFrame != 40
+        || plan.beforeSegments[0].f0Data.size() != 40
         || plan.segmentsToCommit.empty())
         return false;
 

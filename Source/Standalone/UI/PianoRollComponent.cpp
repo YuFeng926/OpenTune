@@ -1,12 +1,14 @@
 #include "PianoRollComponent.h"
 #include "PianoRollNoteEntry.h"
 #include "../../Content/EditableContentSnapshot.h"
+#include "../../Content/ContentPatchGeometry.h"
 #include "../../Utils/AppPreferences.h"
 #include "../../Utils/PendingSeekPolicy.h"
 #include "../../Utils/MagnifyZoom.h"
 #include "../../Utils/WheelPan.h"
 #include "../../Utils/PlayHeadState.h"
 #include "../../Utils/LocalizationManager.h"
+#include "../../Utils/ManualCorrectionEdit.h"
 #include "../Utils/AppLogger.h"
 #include "../../Utils/PianoRollEditAction.h"
 #include "../../Utils/VolumeEnvelopeRegionEdit.h"
@@ -1752,22 +1754,44 @@ juce::Rectangle<int> PianoRollComponent::getLineAnchorPreviewBounds() const
         return {};
     }
 
-    juce::Rectangle<float> bounds;
-    bool hasBounds = false;
-    auto includePoint = [&](float x, float y) {
-        const auto pointBounds = juce::Rectangle<float>(x - 4.0f, y - 4.0f, 8.0f, 8.0f);
-        bounds = hasBounds ? bounds.getUnion(pointBounds) : pointBounds;
-        hasBounds = true;
-    };
+    // 形状残差可达 ±3 半音（远超锚点 ±8px 邻域）：脏区取预览层实际绘制全部
+    // 元素（橡皮筋曲线 + 全部锚点圆点）的精确包围盒对应的纵向全高，不做几何
+    // 缓存、不重复求值 ops。全部 X 用 sourceToXExact 精确投影——缩放/TimeGrid
+    // 拉伸下绘制 X 可越出取整的锚点 X——外扩锚点圆点半径；已提交边交正式渲染，
+    // clear/落锚转移时早前圆点随包围盒一并重绘。
+    const auto projection = activeContentProjection();
+    if (!projection.isValid())
+        return {};
+    const auto snap = readEditedSnapshot();
+    if (!snap)
+        return {};
+    const PianoRollTimeMap map(projection, *snap->timeGrid, makeViewMapper());
+    const auto f0tl = currentF0Timeline();
+    if (f0tl.isEmpty())
+        return {};
 
+    const int mousePixelX = juce::roundToInt(interactionState_.drawing.currentMousePos.x);
+    double spanX0 = static_cast<double>(mousePixelX);
+    double spanX1 = spanX0;
     for (const auto& anchor : interactionState_.drawing.pendingAnchors) {
-        includePoint(static_cast<float>(sourceTimeToX(anchor.time)),
-                     makeViewMapper().freqToY(anchor.freq) + static_cast<float>(rulerHeight_));
+        const double dotX = map.sourceToXExact(anchor.time);
+        spanX0 = std::min(spanX0, dotX);
+        spanX1 = std::max(spanX1, dotX);
     }
-    includePoint(interactionState_.drawing.currentMousePos.x, interactionState_.drawing.currentMousePos.y);
+    // 橡皮筋与绘制同一取帧：首帧时间的精确投影可早于取整的锚点 X。
+    const double mouseTime = map.xToSource(mousePixelX);
+    const auto& last = interactionState_.drawing.pendingAnchors.back();
+    const auto anchorRange = f0tl.nonEmptyRangeForTimes(last.time, mouseTime);
+    if (!anchorRange.isEmpty())
+        spanX0 = std::min(spanX0, map.sourceToXExact(f0tl.timeAtFrame(anchorRange.startFrame)));
 
-    return hasBounds ? bounds.getSmallestIntegerContainer().expanded(4).getIntersection(getTimelineViewportBounds())
-                     : juce::Rectangle<int>();
+    const auto viewport = getTimelineViewportBounds();
+    const int minX = static_cast<int>(std::floor(spanX0)) - 2;
+    const int maxX = static_cast<int>(std::ceil(spanX1)) + 2;
+    const int x0 = std::max(viewport.getX(), minX);
+    const int x1 = std::min(viewport.getRight(), maxX);
+    if (x1 <= x0) return {};
+    return juce::Rectangle<int>(x0, viewport.getY(), x1 - x0, viewport.getHeight());
 }
 
 void PianoRollComponent::invalidateLiveNotes(const std::vector<Note>& beforeNotes, const std::vector<Note>& afterNotes)
@@ -2344,35 +2368,95 @@ void PianoRollComponent::drawHandDrawPreview(juce::Graphics& g, const PianoRollT
 
 void PianoRollComponent::drawLineAnchorPreview(juce::Graphics& g, const PianoRollTimeMap& map) {
     if (!interactionState_.drawing.isPlacingAnchors || currentTool_ != ToolId::LineAnchor || interactionState_.drawing.pendingAnchors.empty()) return;
+    if (currentCurve_ == nullptr) return;
 
+    // 预览只画未提交的橡皮筋段与锚点圆点；已提交边交正式渲染。橡皮筋与落锚提交
+    // （PianoRollToolHandler::handleLineAnchorMouseDown）共用同一几何：逐帧
+    // lineAnchorF0WithSourceShape 经 planManualCorrectionOps 求值，画出的折线
+    // 即下一次落锚会提交的段数据。
+    const auto& originalF0 = currentCurve_->getOriginalF0();
+    const auto f0tl = currentF0Timeline();
+    if (originalF0.empty() || f0tl.isEmpty()) return;
+
+    const auto& view = makeViewMapper();
     juce::Colour anchorColour = correctedF0Colour_;
 
-    for (size_t i = 0; i < interactionState_.drawing.pendingAnchors.size(); ++i) {
-        const auto& anchor = interactionState_.drawing.pendingAnchors[i];
+    for (const auto& anchor : interactionState_.drawing.pendingAnchors) {
         float x = static_cast<float>(map.sourceToX(anchor.time));
-        float y = makeViewMapper().freqToY(anchor.freq);
-
+        float y = view.freqToY(anchor.freq);
         g.setColour(anchorColour);
         g.fillEllipse(x - 2.0f, y - 2.0f, 4.0f, 4.0f);
-
-        if (i > 0) {
-            const auto& prev = interactionState_.drawing.pendingAnchors[i - 1];
-            float prevX = static_cast<float>(map.sourceToX(prev.time));
-            float prevY = makeViewMapper().freqToY(prev.freq);
-            g.setColour(anchorColour.withAlpha(0.7f));
-            g.drawLine(prevX, prevY, x, y, 2.0f);
-        }
     }
 
-    if (!interactionState_.drawing.pendingAnchors.empty()) {
-        const auto& last = interactionState_.drawing.pendingAnchors.back();
-        float lastX = static_cast<float>(map.sourceToX(last.time));
-        float lastY = makeViewMapper().freqToY(last.freq);
-        g.setColour(anchorColour.withAlpha(0.4f));
-        g.drawLine(lastX, lastY,
-                   interactionState_.drawing.currentMousePos.x,
-                   interactionState_.drawing.currentMousePos.y - static_cast<float>(rulerHeight_),
-                   1.5f);
+    // 提交链使用 JUCE 四舍五入的 e.x/e.y：预览对 currentMousePos 两轴取整后走
+    // 同一换算链（map.xToSource 即提交侧 pixelXToSourceTime 的映射），分数 DPI
+    // 下与提交逐帧一致。
+    const int mousePixelX = juce::roundToInt(interactionState_.drawing.currentMousePos.x);
+    const int mousePixelY = juce::roundToInt(interactionState_.drawing.currentMousePos.y);
+    const float mouseContentY = static_cast<float>(mousePixelY - rulerHeight_);
+    const float clickFreq = std::max(20.0f, view.yToFreq(mouseContentY));
+    const double mouseTime = map.xToSource(mousePixelX);
+    const int mouseFrame = f0tl.frameAtOrBefore(mouseTime);
+    // 鼠标帧不可编辑时提交会在 canEditFrame 处拒绝，预览同样不画该段。
+    if (!AudioEditingScheme::canEditFrame(audioEditingScheme_, originalF0, mouseFrame)) return;
+
+    const auto& last = interactionState_.drawing.pendingAnchors.back();
+    const auto anchorRange = f0tl.nonEmptyRangeForTimes(last.time, mouseTime);
+    if (anchorRange.isEmpty()) return;
+
+    // 橡皮筋段按落锚提交的同款半音吸附求值，预览即提交。
+    const float mouseFreq = PitchUtils::midiToFreq(
+        static_cast<float>(std::lround(PitchUtils::freqToMidi(clickFreq))));
+    const bool anchorIsLeft = last.time <= mouseTime;
+    const float leftTargetF0 = anchorIsLeft ? last.freq : mouseFreq;
+    const float rightTargetF0 = anchorIsLeft ? mouseFreq : last.freq;
+    const auto sourceTrend = fitOriginalF0LogTrend(originalF0, anchorRange.startFrame, anchorRange.endFrameExclusive);
+    const auto ops = planManualCorrectionOps(
+        audioEditingScheme_,
+        originalF0,
+        { anchorRange.startFrame, anchorRange.endFrameExclusive },
+        [&](int frame) {
+            return lineAnchorF0WithSourceShape(originalF0,
+                                               frame,
+                                               anchorRange.startFrame,
+                                               anchorRange.endFrameExclusive,
+                                               leftTargetF0,
+                                               rightTargetF0,
+                                               currentRetuneSpeed_,
+                                               sourceTrend);
+        },
+        PitchCorrectionSegment::Source::LineAnchor);
+
+    // 折线 X 用正式渲染的连续投影（sourceToXExact），与 PianoRollRenderer 同一映射。
+    const auto frameToX = [&](int frame) {
+        return static_cast<float>(map.sourceToXExact(f0tl.timeAtFrame(frame)));
+    };
+    g.setColour(anchorColour.withAlpha(0.4f));
+    // rounded 帽与正式渲染描边一致：孤点 0.01px 短横两端各扩半线宽成可视圆点，
+    // butt 帽下该短横不可见。
+    const juce::PathStrokeType previewStroke(1.5f, juce::PathStrokeType::curved,
+                                             juce::PathStrokeType::rounded);
+    for (const auto& op : ops) {
+        juce::Path opPath;
+        if (op.f0Data.size() == 1) {
+            // 单帧 op 显式画出：正式渲染对孤立点的同款 0.01px 短横约定。
+            const float x = frameToX(op.startFrame);
+            const float y = view.freqToY(op.f0Data.front());
+            opPath.startNewSubPath(x - 0.01f, y);
+            opPath.lineTo(x + 0.01f, y);
+        } else {
+            // 每个 op 独立起笔：planManualCorrectionOps 在无声/不可编辑帧断片，
+            // 断片之间不连线（与正式渲染的 run 断线约定一致）。
+            for (int k = 0; k < static_cast<int>(op.f0Data.size()); ++k) {
+                const float x = frameToX(op.startFrame + k);
+                const float y = view.freqToY(op.f0Data[static_cast<std::size_t>(k)]);
+                if (k == 0)
+                    opPath.startNewSubPath(x, y);
+                else
+                    opPath.lineTo(x, y);
+            }
+        }
+        g.strokePath(opPath, previewStroke);
     }
 }
 
@@ -3441,15 +3525,41 @@ AudioEditingScheme::ParameterEditResult PianoRollComponent::editParameter(AudioE
             return result;
         }
 
-        auto allSegments = snap->getCorrectionSegments();
+        const auto& allSegments = snap->getCorrectionSegments();
         int unionStart = frameSel.ranges.front().first;
         int unionEnd = frameSel.ranges.front().second;
         for (const auto& [s, e] : frameSel.ranges) {
             unionStart = std::min(unionStart, s);
             unionEnd = std::max(unionEnd, e);
         }
-        const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-            unionStart, unionEnd, f0tl.endFrameExclusive());
+        // 范围先扩展到完整覆盖相交的手工段：手工段整体穿过提交/撤销机器，
+        // 不被范围边界切分成多段。
+        const auto affectedRange = expandRangeToCoverWholeManualSegments(
+            currentCurve_->getCorrectionSegments(),
+            PitchCurve::expandNoteBasedCorrectionRange(
+                unionStart, unionEnd, f0tl.endFrameExclusive()));
+
+        // 无实际变化短路（如纯手工段选区重算后逐值相同）：不产生空撤销条目与 dirty。
+        // notes 在本分支不变，段内容逐值相等即整次提交无变化。
+        const auto& currentSegments = currentCurve_->getCorrectionSegments();
+        const bool segmentsChanged = allSegments.size() != currentSegments.size()
+            || !std::equal(allSegments.begin(), allSegments.end(), currentSegments.begin(),
+                [](const PitchCorrectionSegment& left, const PitchCorrectionSegment& right) {
+                    return left.startFrame == right.startFrame
+                        && left.endFrame == right.endFrame
+                        && left.source == right.source
+                        && left.f0Data == right.f0Data
+                        && left.baseF0Data == right.baseF0Data
+                        && left.parameterSnapshot.retuneSpeed == right.parameterSnapshot.retuneSpeed
+                        && left.parameterSnapshot.vibratoDepth == right.parameterSnapshot.vibratoDepth
+                        && left.parameterSnapshot.vibratoRate == right.parameterSnapshot.vibratoRate
+                        && left.parameterSnapshot.pitchDriftScale == right.parameterSnapshot.pitchDriftScale;
+                });
+        if (!segmentsChanged) {
+            result.status = AudioEditingScheme::ParameterEditStatus::Applied;
+            result.changed = false;
+            return result;
+        }
 
         pendingUndoDescription_ = LOC_RAW("Edit note");
         if (!commitEditedContentNotesAndSegments(*contentSnapshot, notes, allSegments, affectedRange)) {

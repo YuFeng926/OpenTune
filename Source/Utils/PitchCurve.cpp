@@ -1,4 +1,5 @@
 #include "PitchCurve.h"
+#include "Content/ContentPatchGeometry.h"
 #include "PitchUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -53,22 +54,6 @@ void insertSegmentSorted(std::vector<PitchCorrectionSegment>& segments, PitchCor
     segments.insert(insertPos, std::move(seg));
 }
 
-PitchCorrectionSegment sliceCorrectionSegment(const PitchCorrectionSegment& segment,
-                                              int startFrame, int endFrame)
-{
-    PitchCorrectionSegment piece;
-    piece.startFrame = startFrame;
-    piece.endFrame = endFrame;
-    piece.parameterSnapshot = segment.parameterSnapshot;
-    piece.source = segment.source;
-    const int offset = startFrame - segment.startFrame;
-    const int end = endFrame - segment.startFrame;
-    piece.f0Data.assign(segment.f0Data.begin() + offset, segment.f0Data.begin() + end);
-    if (static_cast<size_t>(end) <= segment.baseF0Data.size())
-        piece.baseF0Data.assign(segment.baseF0Data.begin() + offset, segment.baseF0Data.begin() + end);
-    return piece;
-}
-
 void insertVoicedSegmentPieces(std::vector<PitchCorrectionSegment>& segments,
                                const PitchCorrectionSegment& segment,
                                const std::vector<float>& originalF0)
@@ -102,7 +87,12 @@ void insertVoicedSegmentPieces(std::vector<PitchCorrectionSegment>& segments,
     flush(segment.endFrame);
 }
 
-void clearSegmentsInRangePreserveOutside(std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrame)
+// 清除 [startFrame, endFrame) 内命中的段并保留跨界段的段外部分。
+// preserveManualSegments 为 true 时只保留手工段（手绘/线锚），None 与 NoteBased
+// 一律清除——历史 None 段不能与新 NoteBased 段重叠（forEachCorrectionF0Span
+// 依赖按 endFrame 二分的有序前提）；显式编辑（手绘/橡皮擦）传 false 全清。
+void clearSegmentsInRangePreserveOutside(std::vector<PitchCorrectionSegment>& segments, int startFrame, int endFrame,
+                                         bool preserveManualSegments)
 {
     if (startFrame >= endFrame) {
         return;
@@ -112,7 +102,8 @@ void clearSegmentsInRangePreserveOutside(std::vector<PitchCorrectionSegment>& se
     kept.reserve(segments.size() + 1);
 
     for (const auto& seg : segments) {
-        if (seg.endFrame <= startFrame || seg.startFrame >= endFrame) {
+        if (seg.endFrame <= startFrame || seg.startFrame >= endFrame
+            || (preserveManualSegments && isManualCorrectionSource(seg.source))) {
             kept.push_back(seg);
             continue;
         }
@@ -288,7 +279,22 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
     const int calculationEndFrame = calculationRange.endFrameExclusive;
 
     auto correctionSegments = oldSnapshot->getCorrectionSegments();
-    clearSegmentsInRangePreserveOutside(correctionSegments, calculationStartFrame, calculationEndFrame);
+    // 自动重算无权清除手工段：None 与 NoteBased 一并清除，手绘/线锚段原样保留。
+    clearSegmentsInRangePreserveOutside(correctionSegments, calculationStartFrame, calculationEndFrame,
+                                        true);
+
+    // 手工段覆盖表：calculationRange 内被手工段占用的帧不让 NoteBased 重算写入，
+    // 主循环对这些帧写 0 让位；insertVoicedSegmentPieces 按有声分片后，
+    // NoteBased 段在手工段边界自然断开，两段共存。
+    std::vector<bool> manualCovered(static_cast<size_t>(calculationEndFrame - calculationStartFrame), false);
+    for (const auto& seg : correctionSegments) {
+        if (!isManualCorrectionSource(seg.source))
+            continue;
+        const int overlapStart = std::max(seg.startFrame, calculationStartFrame);
+        const int overlapEnd = std::min(seg.endFrame, calculationEndFrame);
+        for (int f = overlapStart; f < overlapEnd; ++f)
+            manualCovered[static_cast<size_t>(f - calculationStartFrame)] = true;
+    }
 
     std::vector<NoteCorrectionInfo> noteInfos(notes.size());
 
@@ -319,7 +325,9 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
         info.anchorPitch = anchorPitch;
         info.anchorMidi = PitchUtils::freqToMidi(anchorPitch);
         info.targetMidi = PitchUtils::freqToMidi(note.getAdjustedPitch());
-        info.retuneSpeed = juce::jlimit(0.0f, 1.0f, note.retuneSpeed);
+        // 负值 = 跟随全局旋钮：进入 NoteBased 重建计算前解析为本次重算传入的全局 retuneSpeed。
+        info.retuneSpeed = juce::jlimit(0.0f, 1.0f,
+            note.retuneSpeed >= 0.0f ? note.retuneSpeed : retuneSpeed);
         info.timeCenterSeconds = (note.startTime + note.endTime) * 0.5;
 
         if (info.anchorMidi > 0.0f && noteStartFrame < noteEndFrame) {
@@ -506,6 +514,11 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
     updateCurrentTransitionSpan();
 
     for (int i = calculationStartFrame; i < calculationEndFrame; ++i) {
+        // 手工段覆盖帧写 0 让位：置于有声判断之前，覆盖帧不参与 NoteBased 重算。
+        if (manualCovered[static_cast<size_t>(i - calculationStartFrame)]) {
+            correctedF0Buffer[i - calculationStartFrame] = 0.0f;
+            continue;
+        }
         const float rawF0 = originalF0[i];
         float f0 = rawF0 > 0.0f ? rawF0 * sourcePitchRatio : rawF0;
         if (f0 <= 0.0f) {
@@ -748,7 +761,7 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::setManualCorrectionRange(
     PitchCorrectionSegment newSeg(startFrame, endFrame, f0Data, source);
     newSeg.baseF0Data = f0Data;
     newSeg.parameterSnapshot = snapshot;
-    clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame);
+    clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame, false);
     insertVoicedSegmentPieces(correctionSegments, newSeg, oldSnapshot->getOriginalF0());
 
     uint64_t newGen = incrementGeneration();
@@ -771,7 +784,8 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::clearCorrectionRange(int s
 
     auto oldSnapshot = getSnapshot();
     auto correctionSegments = oldSnapshot->getCorrectionSegments();
-    clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame);
+    // 橡皮擦显式清除：全来源清除，语义不变。
+    clearSegmentsInRangePreserveOutside(correctionSegments, startFrame, endFrame, false);
 
     uint64_t newGen = incrementGeneration();
     auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(

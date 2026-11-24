@@ -113,6 +113,9 @@ namespace {
             for (int i = 0; i < erasedRangeCount; ++i)
                 erasedRanges.push_back({stream.readInt(), stream.readInt()});
         }
+        // 加载边界的一次性归一：恢复 f0Data 与帧跨度的不变量。原轨无声但修正
+        // 有声的段数据原样保留，由声码器掩码的来源前置判断路由到声码器。
+        normalizeLoadedCorrectionSegmentLengths(segments);
         curve->replaceCorrectionSegments(segments);
         if (!erasedRanges.empty())
             curve->replaceErasedRangesInRange(0, static_cast<int>(curve->size()), erasedRanges);

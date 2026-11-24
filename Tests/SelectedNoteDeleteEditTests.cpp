@@ -91,9 +91,11 @@ EditableContentSnapshot makeSnapshot(bool withCurve)
         std::vector<float> originalF0(100, 220.0f);
         std::vector<float> originalEnergy(100, 1.0f);
         std::vector<float> correctedF0(70);
-        std::vector<float> baseF0(70, 210.0f);
-        for (size_t i = 0; i < correctedF0.size(); ++i)
+        std::vector<float> baseF0(70);
+        for (size_t i = 0; i < correctedF0.size(); ++i) {
             correctedF0[i] = 300.0f + static_cast<float>(i);
+            baseF0[i] = 200.0f + static_cast<float>(i);
+        }
         PitchCorrectionSegment segment(
             0, 70, std::move(correctedF0), PitchCorrectionSegment::Source::HandDraw);
         segment.baseF0Data = std::move(baseF0);
@@ -144,7 +146,11 @@ bool checkPitchCurveDelete()
         || edit->afterSegments[0].f0Data.size() != 20
         || edit->afterSegments[0].f0Data.front() != 320.0f
         || edit->afterSegments[0].f0Data.back() != 339.0f
-        || edit->afterSegments[0].baseF0Data.size() != 70)
+        // 共享切片原语：baseF0Data 与 f0Data 同偏移对齐裁切（切片 [20,40)），
+        // 递增 base 的首尾取样锁定切片偏移。
+        || edit->afterSegments[0].baseF0Data.size() != 20
+        || edit->afterSegments[0].baseF0Data.front() != 220.0f
+        || edit->afterSegments[0].baseF0Data.back() != 239.0f)
         return false;
 
     const F0Timeline timeline(10, 1000.0, 100);

@@ -70,6 +70,10 @@ ManualCorrectionLogLineFit fitOriginalF0LogTrend(const std::vector<float>& origi
                                                 int startFrame,
                                                 int endFrameExclusive);
 
+// LineAnchor 残差传递上限（半音）：锚点线按 (1-retuneSpeed) 保留原始音高形状时，
+// 单帧最多传递 ±3 半音的残差，八度级错误不得无界传入锚点线。
+constexpr float kLineAnchorShapeCapSemitones = 3.0f;
+
 float lineAnchorF0WithSourceShape(const std::vector<float>& originalF0,
                                   int frame,
                                   int startFrame,

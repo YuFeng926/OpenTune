@@ -1,4 +1,5 @@
 #include "CaptureContentSlice.h"
+#include "Content/ContentPatchGeometry.h"
 #include "F0Timeline.h"
 #include "PlaybackSampleGeometry.h"
 #include "TimeCoordinate.h"
@@ -83,18 +84,10 @@ std::shared_ptr<PitchCurve> slicePitchCurveToFrameRange(
             continue;
         }
 
-        PitchCorrectionSegment slicedSegment = segment;
-        const int originalOffsetStart = overlapStart - segment.startFrame;
-        const int originalOffsetEnd = overlapEnd - segment.startFrame;
+        // 统一走共享切片原语（f0Data 恒裁、baseF0Data 对齐裁切），本地仅做帧坐标重定基。
+        PitchCorrectionSegment slicedSegment = sliceCorrectionSegment(segment, overlapStart, overlapEnd);
         slicedSegment.startFrame = overlapStart - startFrame;
         slicedSegment.endFrame = overlapEnd - startFrame;
-        slicedSegment.f0Data.assign(segment.f0Data.begin() + originalOffsetStart,
-                                    segment.f0Data.begin() + originalOffsetEnd);
-        // baseF0Data 与原段 frame 布局对齐：仅在完整覆盖原段 frame 数时按同区间切片。
-        if (segment.baseF0Data.size() >= static_cast<size_t>(segment.endFrame - segment.startFrame)) {
-            slicedSegment.baseF0Data.assign(segment.baseF0Data.begin() + originalOffsetStart,
-                                            segment.baseF0Data.begin() + originalOffsetEnd);
-        }
         slicedSegments.push_back(std::move(slicedSegment));
     }
     slicedCurve->replaceCorrectionSegments(slicedSegments);

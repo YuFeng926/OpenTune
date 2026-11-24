@@ -2,6 +2,7 @@
 
 #include "NoteDraftEdit.h"
 #include "PitchUtils.h"
+#include "../Content/ContentPatchGeometry.h"
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -127,8 +128,12 @@ DrawNoteEditPlan planDrawNoteEdit(const EditableContentSnapshot& snapshot,
         const F0FrameRange noteRange = timeline.rangeForTimes(input.startSeconds, input.endSeconds);
         if (!noteRange.isEmpty()) {
             plan.pitchCurveEdited = true;
-            plan.affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-                noteRange.startFrame, noteRange.endFrameExclusive, timeline.endFrameExclusive());
+            // 范围先扩展到完整覆盖相交的手工段：手工段整体穿过提交/撤销机器，
+            // 不被范围边界切分成多段。
+            plan.affectedRange = expandRangeToCoverWholeManualSegments(
+                curveSnapshot->getCorrectionSegments(),
+                PitchCurve::expandNoteBasedCorrectionRange(
+                    noteRange.startFrame, noteRange.endFrameExclusive, timeline.endFrameExclusive()));
 
             auto correctedCurve = PitchCurve::fromSnapshot(curveSnapshot);
             const auto correctedSnapshot = correctedCurve->applyCorrectionToRange(

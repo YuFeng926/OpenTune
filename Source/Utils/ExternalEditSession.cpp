@@ -228,6 +228,9 @@ std::shared_ptr<PitchCurve> readCurve(const juce::File& file)
     if (stream.getNumBytesRemaining() != 0 || originalF0.size() != energy.size())
         return nullptr;
 
+    // 加载边界的一次性归一：恢复 f0Data 与帧跨度的不变量。原轨无声但修正有声
+    // 的段数据原样保留，由声码器掩码的来源前置判断路由到声码器。
+    normalizeLoadedCorrectionSegmentLengths(segments);
     auto curve = std::make_shared<PitchCurve>();
     curve->setHopSize(hopSize);
     curve->setSampleRate(sampleRate);

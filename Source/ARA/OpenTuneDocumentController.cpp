@@ -1013,6 +1013,10 @@ std::optional<RestoredModificationContent> restoreAudioModificationContent(
                     return std::nullopt;
         }
 
+        // ARA 严格校验已覆盖 startFrame >= 0、区间有序与 f0Data 长度（违规整
+        // 文档拒绝），baseF0Data 对齐未校验：与其他加载边界一致做一次归一，
+        // 错位 base 按前缀截断或置空。
+        normalizeLoadedCorrectionSegmentLengths(restoredCorrectionSegments);
         content.analysis.pitchCurve->replaceCorrectionSegments(restoredCorrectionSegments);
     }
 

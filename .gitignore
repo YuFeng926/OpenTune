@@ -93,3 +93,4 @@ tools/
 
 # Local CMake preset overrides (machine-specific CMAKE_MAKE_PROGRAM etc.)
 CMakeUserPresets.json
+Testing/

@@ -1,4 +1,5 @@
 #include "ContentEditCommandsStub.h"
+#include "Content/ContentPatchGeometry.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/SelectedNoteParameterEdit.h"
@@ -76,29 +77,6 @@ std::vector<Note> notesInRange(const std::vector<Note>& notes, double start, dou
     return result;
 }
 
-std::vector<PitchCorrectionSegment> segmentsInRange(
-    const std::vector<PitchCorrectionSegment>& segments, int start, int end)
-{
-    std::vector<PitchCorrectionSegment> result;
-    for (const auto& segment : segments) {
-        if (segment.endFrame <= start || segment.startFrame >= end)
-            continue;
-        const int clippedStart = std::max(segment.startFrame, start);
-        const int clippedEnd = std::min(segment.endFrame, end);
-        const int offset = clippedStart - segment.startFrame;
-        const int length = clippedEnd - clippedStart;
-        if (offset < 0 || length <= 0 || offset + length > static_cast<int>(segment.f0Data.size()))
-            continue;
-        auto clipped = segment;
-        clipped.startFrame = clippedStart;
-        clipped.endFrame = clippedEnd;
-        clipped.f0Data.assign(segment.f0Data.begin() + offset,
-                              segment.f0Data.begin() + offset + length);
-        result.push_back(std::move(clipped));
-    }
-    return result;
-}
-
 EditableContentSnapshot makeSnapshot()
 {
     EditableContentSnapshot snapshot;
@@ -170,16 +148,24 @@ bool checkPurePlanForParameter(AudioEditingScheme::ParameterId id, float value,
         retuneDefault,
         depthDefault,
         rateDefault);
-    const auto affectedRange = PitchCurve::expandNoteBasedCorrectionRange(
-        editRange.startFrame, editRange.endFrameExclusive, timeline.endFrameExclusive());
+    // 计划器范围先扩展到完整覆盖相交的手工段：手工段 [0,10) 保持单段原边界。
+    const auto affectedRange = expandRangeToCoverWholeManualSegments(
+        curveSnapshot->getCorrectionSegments(),
+        PitchCurve::expandNoteBasedCorrectionRange(
+            editRange.startFrame, editRange.endFrameExclusive, timeline.endFrameExclusive()));
     const double affectedStart = timeline.timeAtFrame(affectedRange.startFrame);
     const double affectedEnd = timeline.timeAtFrame(affectedRange.endFrameExclusive);
     if (patch->beforeSegments.size() != 1
-        || patch->beforeSegments.front().startFrame != affectedRange.startFrame
+        || patch->beforeSegments.front().startFrame != 0
         || patch->beforeSegments.front().endFrame != 10
-        || patch->beforeSegments.front().f0Data != std::vector<float>({224.0f, 225.0f, 226.0f,
-                                                                        227.0f, 228.0f, 229.0f})
-        || patch->beforeSegments.front().baseF0Data != snapshot.pitchCurve->getCorrectionSegments().front().baseF0Data)
+        || patch->beforeSegments.front().f0Data != std::vector<float>({220.0f, 221.0f, 222.0f,
+                                                                        223.0f, 224.0f, 225.0f,
+                                                                        226.0f, 227.0f, 228.0f,
+                                                                        229.0f})
+        || patch->beforeSegments.front().baseF0Data != std::vector<float>({210.0f, 211.0f, 212.0f,
+                                                                           213.0f, 214.0f, 215.0f,
+                                                                           216.0f, 217.0f, 218.0f,
+                                                                           219.0f}))
         return false;
 
     return patch->affectedRange.startFrame == affectedRange.startFrame
@@ -187,11 +173,11 @@ bool checkPurePlanForParameter(AudioEditingScheme::ParameterId id, float value,
         && sameNotes(patch->beforeNotes, notesInRange(snapshot.notes, affectedStart, affectedEnd))
         && sameNotes(patch->afterNotes, notesInRange(legacyAfterNotes, affectedStart, affectedEnd))
         && sameSegments(patch->beforeSegments,
-                        segmentsInRange(curveSnapshot->getCorrectionSegments(),
-                                        affectedRange.startFrame, affectedRange.endFrameExclusive))
+                        clipSegmentsToFrameRange(curveSnapshot->getCorrectionSegments(),
+                                                 affectedRange.startFrame, affectedRange.endFrameExclusive))
         && sameSegments(patch->afterSegments,
-                        segmentsInRange(legacyAfterCurve->getCorrectionSegments(),
-                                        affectedRange.startFrame, affectedRange.endFrameExclusive));
+                        clipSegmentsToFrameRange(legacyAfterCurve->getCorrectionSegments(),
+                                                 affectedRange.startFrame, affectedRange.endFrameExclusive));
 }
 
 bool checkStaleNotesRevisionRejected()

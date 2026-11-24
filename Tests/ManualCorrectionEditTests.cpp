@@ -169,20 +169,55 @@ bool checkSourceTrendFitIgnoresUnvoicedFrames()
 
 bool checkLineAnchorSourceShapeAtRetuneEndpoints()
 {
-    const std::vector<float> originalF0{ 0.0f, 4.0f, 1.0f };
-    const ManualCorrectionLogLineFit trend{};
-    const float fullyShaped = lineAnchorF0WithSourceShape(
-        originalF0, 1, 0, 2, 100.0f, 100.0f, 0.0f, trend);
-    const float fullyRetuned = lineAnchorF0WithSourceShape(
-        originalF0, 1, 0, 2, 100.0f, 100.0f, 1.0f, trend);
-    const float halfRetuned = lineAnchorF0WithSourceShape(
-        originalF0, 1, 0, 2, 100.0f, 100.0f, 0.5f, trend);
-    const float unvoiced = lineAnchorF0WithSourceShape(
-        originalF0, 0, 0, 2, 100.0f, 100.0f, 0.0f, { 8.0f, 0.0f });
-    return near(fullyShaped, 400.0f)
-        && near(fullyRetuned, 100.0f)
-        && near(halfRetuned, 200.0f)
-        && near(unvoiced, 100.0f);
+    // 真实量纲：目标线 100→200 Hz（8 帧跨度），拟合趋势与目标线一致，
+    // 原始音高带 ±0.5 半音内波动，末帧无声。
+    const int spanFrames = 8;
+    const ManualCorrectionLogLineFit trend{ std::log2(100.0f),
+        (std::log2(200.0f) - std::log2(100.0f)) / static_cast<float>(spanFrames) };
+    const auto targetLine = [&](int frame) {
+        return interpolateLogF0(100.0f, 200.0f,
+                                static_cast<float>(frame) / static_cast<float>(spanFrames));
+    };
+    const std::vector<float> deviations{ 0.5f, -0.5f, 0.3f, 0.0f, -0.3f, 0.4f, -0.4f, 0.25f };
+    std::vector<float> originalF0;
+    for (int frame = 0; frame < spanFrames; ++frame)
+        originalF0.push_back(targetLine(frame)
+            * std::pow(2.0f, deviations[static_cast<std::size_t>(frame)] / 12.0f));
+    originalF0.push_back(0.0f);
+
+    for (int frame = 0; frame <= spanFrames; ++frame) {
+        const float line = targetLine(frame);
+        const bool unvoiced = frame == spanFrames;
+        const float source = originalF0[static_cast<std::size_t>(frame)];
+        const float dev = unvoiced ? 0.0f : deviations[static_cast<std::size_t>(frame)];
+        // retune=1：纯目标直线；retune=0：残差全额传递；retune=0.5：残差减半。
+        if (!near(lineAnchorF0WithSourceShape(originalF0, frame, 0, spanFrames,
+                                             100.0f, 200.0f, 1.0f, trend), line))
+            return false;
+        if (!near(lineAnchorF0WithSourceShape(originalF0, frame, 0, spanFrames,
+                                             100.0f, 200.0f, 0.0f, trend),
+                  unvoiced ? line : source))
+            return false;
+        if (!near(lineAnchorF0WithSourceShape(originalF0, frame, 0, spanFrames,
+                                             100.0f, 200.0f, 0.5f, trend),
+                  unvoiced ? line : line * std::pow(2.0f, dev / 24.0f)))
+            return false;
+    }
+
+    // 钳制：相对趋势 ±1 八度的帧在 retune=0 时形状被钳到 ±3 半音（期望值独立于
+    // 生产常量书写，钳制上限被显式改动时此处失败）。
+    std::vector<float> octaveErrorF0(spanFrames, 100.0f);
+    octaveErrorF0[3] = targetLine(3) * 2.0f;
+    octaveErrorF0[5] = targetLine(5) * 0.5f;
+    const auto shaped = [&](int frame) {
+        return lineAnchorF0WithSourceShape(octaveErrorF0, frame, 0, spanFrames,
+                                           100.0f, 200.0f, 0.0f, trend);
+    };
+    return near(shaped(3), targetLine(3) * std::pow(2.0f, 3.0f / 12.0f))
+        && near(shaped(5), targetLine(5) * std::pow(2.0f, -3.0f / 12.0f))
+        && near(shaped(0), targetLine(0))
+        && near(lineAnchorF0WithSourceShape(octaveErrorF0, 3, 0, spanFrames,
+                                            100.0f, 200.0f, 1.0f, trend), targetLine(3));
 }
 
 bool checkEmptyPlans()
