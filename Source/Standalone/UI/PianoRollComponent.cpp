@@ -158,6 +158,9 @@ void PianoRollComponent::initializeUIComponents() {
         TimelineViewportPolicy::maxPixelsPerSecond(TimelineViewportRequest::ViewKind::PianoRoll),
         [](double minPps, double maxPps, double pos) { return minPps * std::pow(maxPps / minPps, pos); },
         [](double minPps, double maxPps, double pps) { return std::log(pps / minPps) / std::log(maxPps / minPps); });
+    // Aurora 主题缩放滑杆 opt-in：启用 AuroraLookAndFeel::drawLinearSlider 的
+    // 统一绘制（深色槽、天蓝已滑过填充、白色圆点推子），其余主题与滑杆不受影响。
+    horizontalZoomSlider_.getProperties().set(UIColors::auroraCustomLinearSliderProperty, true);
     horizontalZoomSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
     horizontalZoomSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     horizontalZoomSlider_.setNormalisableRange(horizontalZoomRange);
@@ -172,6 +175,7 @@ void PianoRollComponent::initializeUIComponents() {
         kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
         [](double minPst, double maxPst, double pos) { return minPst * std::pow(maxPst / minPst, pos); },
         [](double minPst, double maxPst, double pst) { return std::log(pst / minPst) / std::log(maxPst / minPst); });
+    verticalZoomSlider_.getProperties().set(UIColors::auroraCustomLinearSliderProperty, true);
     verticalZoomSlider_.setSliderStyle(juce::Slider::LinearVertical);
     verticalZoomSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     verticalZoomSlider_.setNormalisableRange(verticalZoomRange);
@@ -200,7 +204,9 @@ void PianoRollComponent::layoutZoomControls()
     constexpr int horizontalWidth = 120;
     constexpr int horizontalHeight = 24;
     constexpr int verticalWidth = 24;
-    constexpr int verticalHeight = 56;
+    // JUCE 在长轴两端各收缩一个 thumb 半径（getSliderThumbRadius），120 高度
+    // 使垂直绘制矩形 = 120 - 24 = 96px，与水平轨道等长，视觉对称。
+    constexpr int verticalHeight = 120;
     constexpr int groupGap = 8;
     constexpr int cornerInset = 8;
     constexpr int totalHeight = verticalHeight + groupGap + horizontalHeight;

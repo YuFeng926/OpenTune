@@ -66,52 +66,58 @@ void AuroraLookAndFeel::drawLinearSlider(juce::Graphics& g, int x, int y, int wi
                                        float sliderPos, float minSliderPos, float maxSliderPos,
                                        const juce::Slider::SliderStyle style, juce::Slider& slider)
 {
-    auto bounds = juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height);
-    
-    if (style == juce::Slider::LinearVertical)
-    {
-        float trackW = 4.0f;
-        auto trackRect = bounds.withWidth(trackW).withX(bounds.getCentreX() - trackW / 2.0f).reduced(0.0f, 4.0f);
-        
-        // Dark Track
-        g.setColour(juce::Colour(Aurora::Colors::BgDeep).withAlpha(0.5f));
-        g.fillRoundedRectangle(trackRect, trackW/2);
-        
-        // Neon Fill
-        float fillTop = juce::jmax(trackRect.getY(), sliderPos);
-        float fillBottom = trackRect.getBottom();
-        
-        if (fillTop < fillBottom)
-        {
-            juce::Rectangle<float> activeTrack(trackRect.getX(), fillTop, trackRect.getWidth(), fillBottom - fillTop);
-            
-            // Glow
-            juce::Path glowPath;
-            glowPath.addRoundedRectangle(activeTrack, trackW/2);
-            drawNeonGlow(g, glowPath, juce::Colour(Aurora::Colors::Cyan), 0.8f);
-            
-            g.setColour(juce::Colour(Aurora::Colors::Cyan));
-            g.fillRoundedRectangle(activeTrack, trackW/2);
-        }
-        
-        // Thumb (Capsule style - unified with other themes)
-        float thumbW = 24.0f;
-        float thumbH = 12.0f;
-        auto thumbRect = juce::Rectangle<float>(bounds.getCentreX() - thumbW/2, sliderPos - thumbH/2, thumbW, thumbH);
-        
-        g.setColour(juce::Colour(Aurora::Colors::TextPrimary));
-        g.fillRoundedRectangle(thumbRect, thumbH/2);
-        
-        if (slider.isMouseOverOrDragging())
-        {
-            juce::Path p;
-            p.addRoundedRectangle(thumbRect, thumbH/2);
-            drawNeonGlow(g, p, juce::Colour(Aurora::Colors::TextPrimary), 1.0f);
-        }
-    }
-    else
+    juce::ignoreUnused(minSliderPos, maxSliderPos);
+
+    // Custom drawing is opt-in per slider (piano roll zoom sliders); every
+    // other linear slider keeps the stock LookAndFeel_V4 painting.
+    if (!slider.getProperties().contains(UIColors::auroraCustomLinearSliderProperty))
     {
         juce::LookAndFeel_V4::drawLinearSlider(g, x, y, width, height, sliderPos, minSliderPos, maxSliderPos, style, slider);
+        return;
+    }
+
+    const bool vertical = style == juce::Slider::LinearVertical;
+
+    auto bounds = juce::Rectangle<float>((float)x, (float)y, (float)width, (float)height);
+
+    const float trackThickness = 4.0f;
+    const float thumbDiameter = 12.0f;
+    // bounds 已被 JUCE getSliderLayout 在长轴两端收缩（预留 thumb 行程），
+    // 轨道占满该矩形即可，不再额外内缩。
+    auto track = vertical
+        ? bounds.withWidth(trackThickness).withX(bounds.getCentreX() - trackThickness * 0.5f)
+        : bounds.withHeight(trackThickness).withY(bounds.getCentreY() - trackThickness * 0.5f);
+
+    // Resting track — solid deep neutral gray-black, clearly separated from
+    // the blue piano roll field
+    g.setColour(juce::Colour(0xFF0F1114));
+    g.fillRoundedRectangle(track, trackThickness * 0.5f);
+
+    // Filled portion, from the minimum end up to the thumb. Same geometry as
+    // the resting track: no halo effects, so both segments read equal width.
+    auto fill = vertical
+        ? track.withTop(juce::jlimit(track.getY(), track.getBottom(), sliderPos))
+        : track.withRight(juce::jlimit(track.getX(), track.getRight(), sliderPos));
+    if (!fill.isEmpty())
+    {
+        g.setColour(juce::Colour(Aurora::Colors::Cyan));
+        g.fillRoundedRectangle(fill, trackThickness * 0.5f);
+    }
+
+    // Round thumb
+    auto thumb = juce::Rectangle<float>(thumbDiameter, thumbDiameter).withCentre(vertical
+        ? juce::Point<float>(bounds.getCentreX(), sliderPos)
+        : juce::Point<float>(sliderPos, bounds.getCentreY()));
+
+    const auto thumbColour = juce::Colour(Aurora::Colors::TextPrimary);
+    g.setColour(thumbColour);
+    g.fillEllipse(thumb);
+
+    if (slider.isMouseOverOrDragging())
+    {
+        juce::Path p;
+        p.addEllipse(thumb);
+        drawNeonGlow(g, p, thumbColour, 1.0f);
     }
 }
 

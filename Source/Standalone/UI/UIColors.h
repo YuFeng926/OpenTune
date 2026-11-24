@@ -121,6 +121,8 @@ struct UIColors
     static inline juce::Colour knobRim { 0x9A4FC3FF };
     static inline juce::Colour knobGlow { 0x821688FF };
     static inline const juce::Identifier auroraChromeIntensityProperty { "auroraChromeIntensity" };
+    // Opt-in marker enabling AuroraLookAndFeel's custom linear slider painting.
+    static inline const juce::Identifier auroraCustomLinearSliderProperty { "auroraCustomLinearSlider" };
 
     // Global Corner Radius
     static inline float cornerRadius = 8.0f;
