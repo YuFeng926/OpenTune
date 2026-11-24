@@ -248,6 +248,24 @@ bool runRenderCacheCapacityContract()
             == OpenTune::RenderCache::ChunkRenderResult::Published;
     };
 
+    // 生产顺序前置：publishPlaybackSource（setCanonicalSource）在任何 chunk 渲染
+    // 之前把 canonical 源挂到 cache（PluginProcessor 与 ARA DocumentController 均
+    // 先 republish 再入队）。prepare+settle 组合依赖该前置：无源时结算触发的
+    // prepared rebuild 缺少 native PCM 而失败回滚。下面的 prepare 块按生产契约
+    // 建立真实源；不走 prepare 的裸 cache 块保持现状（结算走 preparedSampleRate_
+    // == 0 的别名路径）。
+    auto canonicalPcm = std::make_shared<juce::AudioBuffer<float>>(1, 4096);
+    for (int i = 0; i < canonicalPcm->getNumSamples(); ++i)
+        canonicalPcm->setSample(0, i, 0.5f);
+    auto nativePcm = std::make_shared<juce::AudioBuffer<float>>(1, 4096);
+    for (int i = 0; i < nativePcm->getNumSamples(); ++i)
+        nativePcm->setSample(0, i, 0.25f);
+    OpenTune::NativePcmSource nativeSource;
+    nativeSource.buffer = nativePcm;
+    nativeSource.sampleRate = OpenTune::RenderCache::kSampleRate;
+    nativeSource.firstSourceSample = 0;
+    nativeSource.audioRevision = 1;
+
     {
         limit.store(baseline + 1024, std::memory_order_release);
         OpenTune::RenderCache cache;
@@ -289,6 +307,7 @@ bool runRenderCacheCapacityContract()
     {
         limit.store(baseline + 8192, std::memory_order_release);
         OpenTune::RenderCache cache;
+        cache.setCanonicalSource(canonicalPcm, 0, nativeSource);
         cache.reconcileFullPlanAndRequest({{0, 256}}, {{0, 256}}, 1);
         const auto job = cache.getPendingJobs();
         passed = passed && job.size() == 1 && cache.claimPendingJob(job.front());
@@ -391,6 +410,7 @@ bool runRenderCacheCapacityContract()
     {
         limit.store(baseline + 65536, std::memory_order_release);
         OpenTune::RenderCache cache;
+        cache.setCanonicalSource(canonicalPcm, 0, nativeSource);
         const std::vector<OpenTune::RenderCache::PlannedChunk> plan{{0, 256}, {256, 512}};
         cache.reconcileFullPlanAndRequest(plan, {{0, 512}}, 1);
         auto jobs = cache.getPendingJobs();

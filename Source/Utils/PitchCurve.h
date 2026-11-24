@@ -11,7 +11,7 @@
 #include "F0Timeline.h"
 #include "Note.h"
 #include "PitchUtils.h"
-#include "../Inference/ChunkRenderStrategy.h"
+#include "../DSP/PitchShiftRateContract.h"
 
 namespace OpenTune {
 

@@ -9,7 +9,6 @@
 #include "DSP/AutoTunePeriodDetector.h"
 #include "DSP/AutoTunePitchShifter.h"
 #include "DSP/PitchShiftRateContract.h"
-#include "Inference/ChunkRenderStrategy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1962,6 +1961,31 @@ void testDetectorTrackingConfirmsNeighboringHalfPeriod()
 // AutoTune path; anything beyond it selects the vocoder. Boundary ratios are
 // computed in double from exp2 so the comparison is exact.
 // ---------------------------------------------------------------------------
+// 测试本地 chunk 路由判定：与已删除的 ChunkRenderStrategy::chunkNeedsVocoder
+// 逐位等同（遍历 chunk 帧、跳过任一侧非正、按 kPitchShiftThresholdCents 比较），
+// 供本合同套件表达 chunk 级期望。
+bool chunkNeedsVocoder(const float* correctedF0,
+                       int numF0Frames,
+                       const std::vector<float>& originalF0,
+                       int f0StartFrame)
+{
+    for (int i = 0; i < numF0Frames; ++i) {
+        const int globalFrame = f0StartFrame + i;
+        if (globalFrame < 0 || globalFrame >= static_cast<int>(originalF0.size()))
+            continue;
+
+        const float corrected = correctedF0[i];
+        const float original = originalF0[static_cast<size_t>(globalFrame)];
+        if (corrected <= 0.0f || original <= 0.0f) continue;
+
+        if (!OpenTune::isPitchShiftRateWithinCents(
+                static_cast<double>(corrected) / static_cast<double>(original),
+                OpenTune::kPitchShiftThresholdCents))
+            return true;
+    }
+    return false;
+}
+
 void testPitchShiftRateContractAt75Cents()
 {
     const double upper75 = std::exp2(75.0 / 1200.0);
@@ -1985,13 +2009,13 @@ void testPitchShiftRateContractAt75Cents()
     const float overUpper = static_cast<float>(200.0 * above75);
     const float overLower = static_cast<float>(200.0 * below75);
 
-    expectTrue(!OpenTune::chunkNeedsVocoder(&atUpper, 1, original, 0),
+    expectTrue(!chunkNeedsVocoder(&atUpper, 1, original, 0),
                "routing: exactly +75 cents stays in AutoTune");
-    expectTrue(!OpenTune::chunkNeedsVocoder(&atLower, 1, original, 0),
+    expectTrue(!chunkNeedsVocoder(&atLower, 1, original, 0),
                "routing: exactly -75 cents stays in AutoTune");
-    expectTrue(OpenTune::chunkNeedsVocoder(&overUpper, 1, original, 0),
+    expectTrue(chunkNeedsVocoder(&overUpper, 1, original, 0),
                "routing: +75.5 cents selects the vocoder");
-    expectTrue(OpenTune::chunkNeedsVocoder(&overLower, 1, original, 0),
+    expectTrue(chunkNeedsVocoder(&overLower, 1, original, 0),
                "routing: -75.5 cents selects the vocoder");
 }
 
@@ -2392,7 +2416,7 @@ void testTargetStepWithStalePeriodRejectsLightRender()
             static_cast<float>(afterStep ? kHighFreq : kLowFreq);
         correctedF0[static_cast<size_t>(k)] = originalF0[static_cast<size_t>(k)];
     }
-    expectTrue(!OpenTune::chunkNeedsVocoder(
+    expectTrue(!chunkNeedsVocoder(
                    correctedF0.data(), numF0Frames, originalF0, 0),
                "target step: both tracks step together inside the light contract");
     expectTrue(static_cast<double>(kStepFrame) * samplesPerFrame
@@ -2447,7 +2471,7 @@ void testLowFrequencyHoldRejectsUnverifiableTarget()
         correctedF0[static_cast<size_t>(k)] = static_cast<float>(
             k >= kStepFrame ? kSecondTargetF0 : kFirstTargetF0);
     }
-    expectTrue(!OpenTune::chunkNeedsVocoder(
+    expectTrue(!chunkNeedsVocoder(
                    correctedF0.data(), numF0Frames, originalF0, 0),
                "low frequency: both targets stay inside the light contract");
 
@@ -2484,17 +2508,17 @@ void testLightPitchRoutingBounds()
     const float above = 220.0f * std::exp2(76.0f / 1200.0f);
     const float corrected[] = {below, above, 220.0f, 220.0f, above};
 
-    expectTrue(!OpenTune::chunkNeedsVocoder(corrected, 1, original, 0),
+    expectTrue(!chunkNeedsVocoder(corrected, 1, original, 0),
                "routing: 74 cents stays in AutoTune");
-    expectTrue(OpenTune::chunkNeedsVocoder(corrected + 1, 1, original, 1),
+    expectTrue(chunkNeedsVocoder(corrected + 1, 1, original, 1),
                "routing: 76 cents uses the vocoder");
-    expectTrue(OpenTune::chunkNeedsVocoder(corrected, 2, original, 0),
+    expectTrue(chunkNeedsVocoder(corrected, 2, original, 0),
                "routing: any frame above 75 cents selects the vocoder");
-    expectTrue(!OpenTune::chunkNeedsVocoder(corrected + 2, 1, original, 2),
+    expectTrue(!chunkNeedsVocoder(corrected + 2, 1, original, 2),
                "routing: neutral frame stays in AutoTune");
-    expectTrue(!OpenTune::chunkNeedsVocoder(corrected + 3, 1, original, 3),
+    expectTrue(!chunkNeedsVocoder(corrected + 3, 1, original, 3),
                "routing: unvoiced frame stays in AutoTune");
-    expectTrue(OpenTune::chunkNeedsVocoder(corrected + 4, 1, original, 4),
+    expectTrue(chunkNeedsVocoder(corrected + 4, 1, original, 4),
                "routing: global F0 start offset is respected");
 }
 

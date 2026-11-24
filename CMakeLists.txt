@@ -701,7 +701,6 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Inference/SoundTouchStretcher.h
         Source/Inference/TimeStretchCache.cpp
         Source/Inference/TimeStretchCache.h
-        Source/Inference/ChunkRenderStrategy.h
         # AI Model Interfaces
         Source/Inference/IF0Extractor.h
         Source/Inference/VocoderInterface.h
@@ -2182,6 +2181,11 @@ if(OPENTUNE_BUILD_TESTS)
         target_compile_options(OpenTuneExternalEditSessionTests PRIVATE /utf-8 /EHsc)
     endif()
     add_test(NAME ExternalEditSessionTests COMMAND OpenTuneExternalEditSessionTests)
+    # 会话夹具经 JUCE tempDirectory（GetTempPath → TEMP/TMP）落盘。与 render 合同
+    # 套件的 ot-test-data 注入同一机制：把临时根收敛到本套件自有的构建树目录，
+    # 不依赖系统临时目录对 freshly-built 测试进程的写权限。
+    set_tests_properties(ExternalEditSessionTests PROPERTIES
+        ENVIRONMENT "TEMP=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/ExternalEditSessionTests;TMP=${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/ExternalEditSessionTests")
 
     # Shared VST3 editor size preference survives stale per-instance preference saves.
     add_executable(OpenTuneAppPreferencesEditorSizeTests

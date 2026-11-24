@@ -6,7 +6,6 @@
 #include "../DSP/MelSpectrogram.h"
 #include "../DSP/HybridAperiodicResidual.h"
 #include "../DSP/NoteEqProcessor.h"
-#include "../Inference/ChunkRenderStrategy.h"
 #include "../Inference/VocoderDomain.h"
 #include "../Render/RenderChunkPlanner.h"
 #include "../Utils/AccelerationDetector.h"
