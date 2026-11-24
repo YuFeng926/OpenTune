@@ -2475,9 +2475,33 @@ void ArrangementViewComponent::mouseWheelMove(const juce::MouseEvent& e, const j
     const auto& settings = zoomSensitivity_;
 
     KeyShortcutConfig::BindingType wheelType;
-    if (KeyShortcutConfig::getWheelBindingType(wheel, e.mods, wheelType)
-        && handlePointerShortcut({ wheelType, e.mods }))
-        return;
+    if (KeyShortcutConfig::getWheelBindingType(wheel, e.mods, wheelType))
+    {
+        const KeyShortcutConfig::KeyBinding binding(wheelType, e.mods);
+
+        // Resolve the wheel binding to a ShortcutId BEFORE generic handlePointerShortcut
+        // so pointer-anchored horizontal zoom can use the matched shortcut for direction
+        // and magnitude (custom wheel bindings may map up/down/left/right arbitrarily).
+        const auto id = KeyShortcutConfig::findShortcutForBinding(
+            shortcutSettings_, binding, KeyShortcutConfig::kStandaloneArrangementScope);
+
+        if (id == KeyShortcutConfig::ShortcutId::ZoomHorizontalIn
+            || id == KeyShortcutConfig::ShortcutId::ZoomHorizontalOut)
+        {
+            const bool zoomIn = id == KeyShortcutConfig::ShortcutId::ZoomHorizontalIn;
+            const float magnitude = std::max(std::abs(wheel.deltaY), std::abs(wheel.deltaX));
+            const double anchorViewportX = static_cast<double>(e.x) - kArrangementContentStartX;
+            const double anchorTime = camera_.visibleStartSeconds
+                + anchorViewportX / camera_.pixelsPerSecond;
+            handleHorizontalZoomWheel((zoomIn ? 1.0f : -1.0f) * magnitude,
+                                      anchorTime,
+                                      anchorViewportX);
+            return;
+        }
+
+        if (handlePointerShortcut(binding))
+            return;
+    }
 
     if (e.mods.isCtrlDown() || e.mods.isCommandDown()
         || e.mods.isShiftDown() || e.mods.isAltDown())
