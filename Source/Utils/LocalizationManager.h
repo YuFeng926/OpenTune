@@ -323,6 +323,8 @@ constexpr const char* kZoomHorizontalIn = "Horizontal Zoom In";
 constexpr const char* kZoomHorizontalOut = "Horizontal Zoom Out";
 constexpr const char* kZoomVerticalIn = "Vertical Zoom In";
 constexpr const char* kZoomVerticalOut = "Vertical Zoom Out";
+constexpr const char* kHorizontalZoom = "Horizontal Zoom";
+constexpr const char* kVerticalZoom = "Vertical Zoom";
 constexpr const char* kFitSelectedNotes = "Fit Selected Notes";
 constexpr const char* kFitAllNotes = "Fit All Notes";
 
@@ -674,6 +676,8 @@ inline juce::String get(Language lang, const char* key)
         { Keys::kZoomHorizontalOut, "Horizontal Zoom Out", "水平缩小", "水平ズームアウト", "Уменьшить по горизонтали", "Reducir horizontalmente" },
         { Keys::kZoomVerticalIn, "Vertical Zoom In", "垂直放大", "垂直ズームイン", "Увеличить по вертикали", "Ampliar verticalmente" },
         { Keys::kZoomVerticalOut, "Vertical Zoom Out", "垂直缩小", "垂直ズームアウト", "Уменьшить по вертикали", "Reducir verticalmente" },
+        { Keys::kHorizontalZoom, "Horizontal Zoom", "水平缩放", "水平ズーム", "Масштаб по горизонтали", "Zoom horizontal" },
+        { Keys::kVerticalZoom, "Vertical Zoom", "垂直缩放", "垂直ズーム", "Масштаб по вертикали", "Zoom vertical" },
         { Keys::kFitSelectedNotes, "Fit Selected Notes", "缩放至所选音符", "選択したノートに合わせる", "По выбранным нотам", "Ajustar a notas seleccionadas" },
         { Keys::kFitAllNotes, "Fit All Notes", "缩放至全部音符", "すべてのノートに合わせる", "По всем нотам", "Ajustar a todas las notas" },
         { Keys::kToolDrawNote, "Tool: Draw Note", "工具：绘制音符", "ツール：ノート描画", "Инструмент: рисование нот", "Herram: dibujar nota" },

@@ -54,6 +54,10 @@ public:
 
     static double normalisePixelsPerSecond(double pps, TimelineViewportRequest::ViewKind viewKind) noexcept;
 
+    // 每种视图的 pps 钳制域，也是缩放滑杆对数映射的定义域
+    static double minPixelsPerSecond(TimelineViewportRequest::ViewKind viewKind) noexcept;
+    static double maxPixelsPerSecond(TimelineViewportRequest::ViewKind viewKind) noexcept;
+
     // 唯一入口：根据 request 计算 camera（含 Zoom）
     static TimelineViewportCamera resolve(const TimelineViewportRequest& request);
 

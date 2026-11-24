@@ -149,45 +149,36 @@ void PianoRollComponent::initializeUIComponents() {
     };
     addAndMakeVisible(timeUnitToggleButton_);
 
-    horizontalZoomOutButton_.setButtonText("-");
-    horizontalZoomOutButton_.setFontHeight(14.0f);
-    horizontalZoomOutButton_.setTooltip(LOC(kZoomHorizontalOut));
-    horizontalZoomOutButton_.setWantsKeyboardFocus(false);
-    horizontalZoomOutButton_.setMouseClickGrabsKeyboardFocus(false);
-    horizontalZoomOutButton_.onClick = [this] { zoomHorizontalOut(); };
-    addAndMakeVisible(horizontalZoomOutButton_);
+    // 对数映射：等滑程 = 等倍率，与滚轮缩放手感一致。
+    // 滑杆值直接使用实际缩放单位（水平 pps、垂直 pixelsPerSemitone），映射范围即钳制域。
+    const juce::NormalisableRange<double> horizontalZoomRange(
+        TimelineViewportPolicy::minPixelsPerSecond(TimelineViewportRequest::ViewKind::PianoRoll),
+        TimelineViewportPolicy::maxPixelsPerSecond(TimelineViewportRequest::ViewKind::PianoRoll),
+        [](double minPps, double maxPps, double pos) { return minPps * std::pow(maxPps / minPps, pos); },
+        [](double minPps, double maxPps, double pps) { return std::log(pps / minPps) / std::log(maxPps / minPps); });
+    horizontalZoomSlider_.setSliderStyle(juce::Slider::LinearHorizontal);
+    horizontalZoomSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    horizontalZoomSlider_.setNormalisableRange(horizontalZoomRange);
+    horizontalZoomSlider_.setScrollWheelEnabled(false);
+    horizontalZoomSlider_.setMouseClickGrabsKeyboardFocus(false);
+    horizontalZoomSlider_.setTitle(LOC(kHorizontalZoom));
+    horizontalZoomSlider_.setTooltip(LOC(kHorizontalZoom));
+    horizontalZoomSlider_.onValueChange = [this] { applyHorizontalZoomSlider(horizontalZoomSlider_.getValue()); };
+    addAndMakeVisible(horizontalZoomSlider_);
 
-    horizontalZoomInButton_.setButtonText("+");
-    horizontalZoomInButton_.setFontHeight(14.0f);
-    horizontalZoomInButton_.setTooltip(LOC(kZoomHorizontalIn));
-    horizontalZoomInButton_.setWantsKeyboardFocus(false);
-    horizontalZoomInButton_.setMouseClickGrabsKeyboardFocus(false);
-    horizontalZoomInButton_.onClick = [this] { zoomHorizontalIn(); };
-    addAndMakeVisible(horizontalZoomInButton_);
-
-    verticalZoomOutButton_.setButtonText("-");
-    verticalZoomOutButton_.setFontHeight(14.0f);
-    verticalZoomOutButton_.setTooltip(LOC(kZoomVerticalOut));
-    verticalZoomOutButton_.setWantsKeyboardFocus(false);
-    verticalZoomOutButton_.setMouseClickGrabsKeyboardFocus(false);
-    verticalZoomOutButton_.onClick = [this] { zoomVerticalOut(); };
-    addAndMakeVisible(verticalZoomOutButton_);
-
-    verticalZoomInButton_.setButtonText("+");
-    verticalZoomInButton_.setFontHeight(14.0f);
-    verticalZoomInButton_.setTooltip(LOC(kZoomVerticalIn));
-    verticalZoomInButton_.setWantsKeyboardFocus(false);
-    verticalZoomInButton_.setMouseClickGrabsKeyboardFocus(false);
-    verticalZoomInButton_.onClick = [this] { zoomVerticalIn(); };
-    addAndMakeVisible(verticalZoomInButton_);
-
-    // Accessibility: zoom is only for the eyes and has keyboard shortcuts; NVDA object
-    // navigation read these as unnamed "+" / "-" buttons inside the notes list.
-    for (auto* button : { &horizontalZoomOutButton_, &horizontalZoomInButton_,
-                          &verticalZoomOutButton_, &verticalZoomInButton_ })
-        button->setAccessible(false);
-
-    updateZoomControlColours();
+    const juce::NormalisableRange<double> verticalZoomRange(
+        kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
+        [](double minPst, double maxPst, double pos) { return minPst * std::pow(maxPst / minPst, pos); },
+        [](double minPst, double maxPst, double pst) { return std::log(pst / minPst) / std::log(maxPst / minPst); });
+    verticalZoomSlider_.setSliderStyle(juce::Slider::LinearVertical);
+    verticalZoomSlider_.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    verticalZoomSlider_.setNormalisableRange(verticalZoomRange);
+    verticalZoomSlider_.setScrollWheelEnabled(false);
+    verticalZoomSlider_.setMouseClickGrabsKeyboardFocus(false);
+    verticalZoomSlider_.setTitle(LOC(kVerticalZoom));
+    verticalZoomSlider_.setTooltip(LOC(kVerticalZoom));
+    verticalZoomSlider_.onValueChange = [this] { applyVerticalZoomSlider(verticalZoomSlider_.getValue()); };
+    addAndMakeVisible(verticalZoomSlider_);
 
     scrollVBlankAttachment_ = std::make_unique<juce::VBlankAttachment>(
         this, [this](double timestampSec) { onScrollVBlankCallback(timestampSec); });
@@ -202,31 +193,15 @@ void PianoRollComponent::initializeRenderer() {
     renderer_ = std::make_unique<PianoRollRenderer>();
 }
 
-void PianoRollComponent::updateZoomControlColours()
-{
-    const auto buttonColour = UIColors::currentThemeId() == ThemeId::Aurora
-        ? UIColors::auroraButtonNormal
-        : UIColors::buttonNormal;
-    horizontalZoomOutButton_.setColour(juce::TextButton::buttonColourId, buttonColour);
-    horizontalZoomInButton_.setColour(juce::TextButton::buttonColourId, buttonColour);
-    verticalZoomOutButton_.setColour(juce::TextButton::buttonColourId, buttonColour);
-    verticalZoomInButton_.setColour(juce::TextButton::buttonColourId, buttonColour);
-    horizontalZoomOutButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
-    horizontalZoomInButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
-    verticalZoomOutButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
-    verticalZoomInButton_.setColour(juce::TextButton::textColourOffId, UIColors::textPrimary);
-}
-
 void PianoRollComponent::layoutZoomControls()
 {
-    constexpr int buttonWidth = 28;
-    constexpr int buttonHeight = 24;
-    constexpr int buttonGap = 2;
+    constexpr int horizontalWidth = 120;
+    constexpr int horizontalHeight = 24;
+    constexpr int verticalWidth = 24;
+    constexpr int verticalHeight = 56;
     constexpr int groupGap = 8;
     constexpr int cornerInset = 8;
-    constexpr int horizontalGroupWidth = 3 * buttonWidth + buttonGap;
-    constexpr int verticalGroupHeight = 50;
-    constexpr int totalHeight = buttonHeight + groupGap + verticalGroupHeight;
+    constexpr int totalHeight = verticalHeight + groupGap + horizontalHeight;
 
     const int left = juce::jmax(zoomControlsArea_.getX(), getTimelineContentStartX()) + cornerInset;
     const int right = juce::jmin(zoomControlsArea_.getRight(),
@@ -235,26 +210,36 @@ void PianoRollComponent::layoutZoomControls()
     const int availableWidth = juce::jmax(0, right - left);
     const int availableHeight = bottom - zoomControlsArea_.getY();
     const bool visible = !zoomControlsArea_.isEmpty()
-        && availableWidth >= horizontalGroupWidth
+        && availableWidth >= horizontalWidth
         && availableHeight >= totalHeight;
 
-    horizontalZoomOutButton_.setVisible(visible);
-    horizontalZoomInButton_.setVisible(visible);
-    verticalZoomOutButton_.setVisible(visible);
-    verticalZoomInButton_.setVisible(visible);
+    horizontalZoomSlider_.setVisible(visible);
+    verticalZoomSlider_.setVisible(visible);
     if (!visible)
         return;
 
-    const int horizontalY = bottom - buttonHeight;
-    const int verticalY = horizontalY - groupGap - verticalGroupHeight;
+    const int horizontalY = bottom - horizontalHeight;
+    const int verticalY = horizontalY - groupGap - verticalHeight;
 
-    horizontalZoomOutButton_.setBounds(left + buttonWidth, horizontalY, buttonWidth, buttonHeight);
-    horizontalZoomInButton_.setBounds(left + 2 * buttonWidth + buttonGap,
-                                      horizontalY, buttonWidth, buttonHeight);
-    verticalZoomInButton_.setBounds(left, verticalY,
-                                    buttonWidth, buttonHeight);
-    verticalZoomOutButton_.setBounds(left, verticalY + buttonHeight + buttonGap,
-                                     buttonWidth, buttonHeight);
+    horizontalZoomSlider_.setBounds(left, horizontalY, horizontalWidth, horizontalHeight);
+    verticalZoomSlider_.setBounds(left, verticalY, verticalWidth, verticalHeight);
+}
+
+void PianoRollComponent::applyHorizontalZoomSlider(double pps)
+{
+    beginZoomPreviewAt(getTimelineContentViewportWidth() / 2, pps / camera_.pixelsPerSecond);
+}
+
+void PianoRollComponent::applyVerticalZoomSlider(double pst)
+{
+    handleVerticalZoomAt(static_cast<float>(pst / pixelsPerSemitone_),
+                         static_cast<float>(getTimelineContentViewportHeight()) * 0.5f);
+}
+
+void PianoRollComponent::syncZoomControls()
+{
+    horizontalZoomSlider_.setValue(camera_.pixelsPerSecond, juce::dontSendNotification);
+    verticalZoomSlider_.setValue(pixelsPerSemitone_, juce::dontSendNotification);
 }
 
 void PianoRollComponent::handleVolumeEnvelopeRegionEditResult(
@@ -3610,10 +3595,8 @@ void PianoRollComponent::resized() {
         repaint();
     }
 
-    horizontalZoomOutButton_.toFront(false);
-    horizontalZoomInButton_.toFront(false);
-    verticalZoomOutButton_.toFront(false);
-    verticalZoomInButton_.toFront(false);
+    horizontalZoomSlider_.toFront(false);
+    verticalZoomSlider_.toFront(false);
 }
 
 void PianoRollComponent::applyEditedContentCurve(std::shared_ptr<const PitchCurveSnapshot> curve)
@@ -4082,7 +4065,6 @@ void PianoRollComponent::requestContentRedraw() {
 }
 
 void PianoRollComponent::requestThemeRedraw() {
-    updateZoomControlColours();
     staticDirty_ = true;
     contentDirty_ = true;
     repaint();
@@ -4235,7 +4217,8 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     if (highestMidi > lowestMidi) {
         // +2 semitones padding: +1 for highest note's top half, +1 for lowest note's bottom half
         const float midiSpan = highestMidi - lowestMidi + 2.0f;
-        pixelsPerSemitone_ = static_cast<float>(contentHeight) / midiSpan;
+        pixelsPerSemitone_ = juce::jlimit(kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
+                                          static_cast<float>(contentHeight) / midiSpan);
         verticalScrollOffset_ = (maxMidi_ - highestMidi - 1.0f) * pixelsPerSemitone_;
     } else {
         const float startMidi = mapper.freqToMidi(startFrequency);
@@ -4506,6 +4489,10 @@ void PianoRollComponent::navigateFromOverview(TimelineViewportRequest req)
 
 void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
 {
+    // 外部相机交接（编排视图 pps 域可达 1000）统一收进 PianoRoll 钳制域；
+    // 请求路径经 resolve() 已钳制，此处幂等。
+    camera.pixelsPerSecond = TimelineViewportPolicy::normalisePixelsPerSecond(
+        camera.pixelsPerSecond, TimelineViewportRequest::ViewKind::PianoRoll);
     cameraPanPending_ |= camera != camera_;
     camera_ = camera;
     updateScrollBars();
@@ -4847,10 +4834,10 @@ void PianoRollComponent::refreshLocalizedText()
     timeUnitToggleButton_.setButtonText(displayMode_ == TimelineDisplayMode::Time
         ? LOC(kTime)
         : "BPM");
-    horizontalZoomOutButton_.setTooltip(LOC(kZoomHorizontalOut));
-    horizontalZoomInButton_.setTooltip(LOC(kZoomHorizontalIn));
-    verticalZoomOutButton_.setTooltip(LOC(kZoomVerticalOut));
-    verticalZoomInButton_.setTooltip(LOC(kZoomVerticalIn));
+    horizontalZoomSlider_.setTitle(LOC(kHorizontalZoom));
+    horizontalZoomSlider_.setTooltip(LOC(kHorizontalZoom));
+    verticalZoomSlider_.setTitle(LOC(kVerticalZoom));
+    verticalZoomSlider_.setTooltip(LOC(kVerticalZoom));
 }
 
 void PianoRollComponent::addListener(Listener* listener) {
@@ -5106,8 +5093,14 @@ void PianoRollComponent::updateFingerPinch() {
 
     if (g.pinchZoomsPitch) {
         const auto ratio = std::max(1.0f, std::abs(a.y - b.y)) / g.pinchStartSpan.y;
-        pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, g.pinchStartPixelsPerSemitone * ratio);
+        pixelsPerSemitone_ = juce::jlimit(kMinPixelsPerSemitone, kMaxPixelsPerSemitone, g.pinchStartPixelsPerSemitone * ratio);
         userHasManuallyZoomed_ = true;
+    }
+
+    // 恢复 restoreViewportState 的既有契约：手动缩放意图优先于异步初始定位
+    if (g.pinchZoomsTime || g.pinchZoomsPitch) {
+        if (pendingInitialF0ViewContentKey_ == editedContentKey_)
+            pendingInitialF0ViewContentKey_ = ContentKey{};
     }
 
     // 锚点（捏合起点处的时间/音高）始终跟随两指中点，捏合时同时平移。
@@ -5297,8 +5290,11 @@ void PianoRollComponent::handleVerticalZoomAt(float zoomFactor, float contentY) 
     float mouseMidi = makeViewMapper().yToMidi(contentY);
 
     pixelsPerSemitone_ *= zoomFactor;
-    pixelsPerSemitone_ = juce::jlimit(5.0f, 60.0f, pixelsPerSemitone_);
+    pixelsPerSemitone_ = juce::jlimit(kMinPixelsPerSemitone, kMaxPixelsPerSemitone, pixelsPerSemitone_);
     userHasManuallyZoomed_ = true;
+    // 恢复 restoreViewportState 的既有契约：手动缩放意图优先于异步初始定位
+    if (pendingInitialF0ViewContentKey_ == editedContentKey_)
+        pendingInitialF0ViewContentKey_ = ContentKey{};
 
     float targetY = (maxMidi_ - mouseMidi) * pixelsPerSemitone_;
     verticalScrollOffset_ = targetY - contentY;
@@ -5447,7 +5443,7 @@ void PianoRollComponent::updateOpenDyneZoomPan(const juce::MouseEvent& e) {
         // 音高轴：保持锚点 midi 在鼠标 Y 下
         const float zoomFactorV = static_cast<float>(std::exp(dy * 0.005));
         const float newPixelsPerSemitone = juce::jlimit(
-            5.0f, 60.0f, openDyneZoomPanStartPixelsPerSemitone_ * zoomFactorV);
+            kMinPixelsPerSemitone, kMaxPixelsPerSemitone, openDyneZoomPanStartPixelsPerSemitone_ * zoomFactorV);
         pixelsPerSemitone_ = newPixelsPerSemitone;
         const float contentY = static_cast<float>(e.y - rulerHeight_);
         const float targetY = (maxMidi_ - openDyneZoomPanAnchorMidi_) * pixelsPerSemitone_;
@@ -5520,7 +5516,8 @@ void PianoRollComponent::fitToNote(const Note& note) {
         (viewportW - 2.0 * marginW) / duration,
         TimelineViewportRequest::ViewKind::PianoRoll);
     const float newPixelsPerSemitone = juce::jlimit(
-        5.0f, 60.0f, static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
+        kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
+        static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
 
     const double midTime = (timelineStart + timelineEnd) * 0.5;
     userScrollHold_ = true;
@@ -5590,7 +5587,8 @@ void PianoRollComponent::fitToAllNotes() {
         (viewportW - 2.0 * marginW) / duration,
         TimelineViewportRequest::ViewKind::PianoRoll);
     const float newPixelsPerSemitone = juce::jlimit(
-        5.0f, 60.0f, static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
+        kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
+        static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
 
     // 居中时间范围
     const double midTime = (timelineStart + timelineEnd) * 0.5;
@@ -5670,7 +5668,8 @@ void PianoRollComponent::fitToSelectedNotes()
         TimelineViewportRequest::ViewKind::PianoRoll);
 
     const float newPixelsPerSemitone = juce::jlimit(
-        5.0f, 60.0f, static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
+        kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
+        static_cast<float>((viewportH - 2.0 * marginH) / (maxMidi - minMidi + 1.0f)));
 
     const double midTime = (timelineStart + timelineEnd) * 0.5;
     userScrollHold_ = true;
@@ -5707,6 +5706,9 @@ void PianoRollComponent::beginZoomPreviewAt(int anchorViewportX, double zoomFact
 
     extendZoomPreview();
     userHasManuallyZoomed_ = true;
+    // 恢复 restoreViewportState 的既有契约：手动缩放意图优先于异步初始定位
+    if (pendingInitialF0ViewContentKey_ == editedContentKey_)
+        pendingInitialF0ViewContentKey_ = ContentKey{};
     commitViewportRequest(makeViewportRequest(
         TimelineViewportRequest::Kind::Zoom,
         anchorTime,
@@ -6128,7 +6130,8 @@ void PianoRollComponent::fitToScreen() {
     const int contentViewportHeight = getTimelineContentViewportHeight();
     float range = maxMidi_ - minMidi_ + 1.0f;
     if (range > 0 && contentViewportHeight > 0) {
-        pixelsPerSemitone_ = static_cast<float>(contentViewportHeight) / range;
+        pixelsPerSemitone_ = juce::jlimit(kMinPixelsPerSemitone, kMaxPixelsPerSemitone,
+                                          static_cast<float>(contentViewportHeight) / range);
 
         // Reset scroll to show top
         verticalScrollOffset_ = 0; 
@@ -6342,6 +6345,8 @@ std::vector<Note> PianoRollComponent::getEditedContentNotesCopy() const {
 }
 
 void PianoRollComponent::updateScrollBars() {
+    // 唯一滑杆同步挂点：所有相机 / pixelsPerSemitone_ 变更路径最终都经过这里
+    syncZoomControls();
     syncNoteAccessibilityItems();
     // Vertical（水平滚动条已由 TimelineOverview 永久替代）
     float totalHeight = getTotalHeight();

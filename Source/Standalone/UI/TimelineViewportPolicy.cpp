@@ -5,7 +5,7 @@
 
 namespace OpenTune {
 
-static double ppsMinFor(TimelineViewportRequest::ViewKind viewKind) noexcept
+double TimelineViewportPolicy::minPixelsPerSecond(TimelineViewportRequest::ViewKind viewKind) noexcept
 {
     switch (viewKind)
     {
@@ -17,7 +17,7 @@ static double ppsMinFor(TimelineViewportRequest::ViewKind viewKind) noexcept
     return 10.0;
 }
 
-static double ppsMaxFor(TimelineViewportRequest::ViewKind viewKind) noexcept
+double TimelineViewportPolicy::maxPixelsPerSecond(TimelineViewportRequest::ViewKind viewKind) noexcept
 {
     switch (viewKind)
     {
@@ -33,7 +33,7 @@ double TimelineViewportPolicy::normalisePixelsPerSecond(
     double pps,
     TimelineViewportRequest::ViewKind viewKind) noexcept
 {
-    return std::clamp(pps, ppsMinFor(viewKind), ppsMaxFor(viewKind));
+    return std::clamp(pps, minPixelsPerSecond(viewKind), maxPixelsPerSecond(viewKind));
 }
 
 double TimelineViewportPolicy::clampStartSeconds(double startSeconds)

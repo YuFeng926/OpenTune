@@ -456,7 +456,9 @@ private:
     void zoomVerticalIn();
     void zoomVerticalOut();
     void layoutZoomControls();
-    void updateZoomControlColours();
+    void syncZoomControls();
+    void applyHorizontalZoomSlider(double pps);
+    void applyVerticalZoomSlider(double pst);
 
     // ── EQ popup ──────────────────────────────────────────────
     void closeEqPopup();
@@ -476,10 +478,12 @@ private:
     juce::ScrollBar verticalScrollBar_{ true };
     SmallButton scrollModeToggleButton_;
     SmallButton timeUnitToggleButton_;
-    SmallButton horizontalZoomOutButton_;
-    SmallButton horizontalZoomInButton_;
-    SmallButton verticalZoomOutButton_;
-    SmallButton verticalZoomInButton_;
+
+    static constexpr float kMinPixelsPerSemitone = 5.0f;
+    static constexpr float kMaxPixelsPerSemitone = 60.0f;
+
+    juce::Slider horizontalZoomSlider_;
+    juce::Slider verticalZoomSlider_;
     juce::Rectangle<int> zoomControlsArea_;
 
     void mouseDown(const juce::MouseEvent& e) override;
