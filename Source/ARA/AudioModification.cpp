@@ -125,7 +125,8 @@ void AudioModification::applyVolumeEnvelope(const AutomationLane& envelope)
 
 void AudioModification::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
-    content->analysis.pitchCurve = std::move(curve);
+    // 发布边界转交独立对象：提交后经调用方保留句柄改写不影响 owner 内容。
+    content->analysis.pitchCurve = curve ? curve->deriveCopy() : nullptr;
     ++content->pitchRevision;
     ++content->contentRevision;
 }
@@ -162,8 +163,11 @@ bool AudioModification::applyPitchShiftState(const PitchShiftEditState& state)
     if (!content.has_value() || content->analysis.pitchCurve == nullptr)
         return false;
 
+    // 曲线不可变别名：修正段写入以新曲线对象整体提交（写时复制）。
+    auto next = content->analysis.pitchCurve->deriveCopy();
+    next->replaceCorrectionSegments(state.segments);
     content->notes = state.notes;
-    content->analysis.pitchCurve->replaceCorrectionSegments(state.segments);
+    content->analysis.pitchCurve = std::move(next);
     content->pitchShiftSettings = state.settings;
     ++content->notesRevision;
     ++content->pitchRevision;
@@ -180,7 +184,8 @@ void AudioModification::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
     // 一次性提交：curve + Ready 状态 + 单次 analysis/content revision。
     // 不调用 applyOriginalF0State，避免同一次提交双 bump。
-    content->analysis.pitchCurve = std::move(curve);
+    // 发布边界转交独立对象：提交后经调用方保留句柄改写不影响 owner 内容。
+    content->analysis.pitchCurve = curve ? curve->deriveCopy() : nullptr;
     content->analysis.setOriginalF0State(OriginalF0State::Ready);
     ++content->analysis.analysisRevision;
     ++content->pitchRevision;

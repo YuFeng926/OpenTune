@@ -992,11 +992,12 @@ std::optional<RestoredModificationContent> restoreAudioModificationContent(
                 erasedEnd = std::max(erasedEnd, endFrameExclusive);
             }
 
-            content.analysis.pitchCurve = std::make_shared<PitchCurve>();
-            content.analysis.pitchCurve->replaceOriginalAnalysis(
+            auto fresh = std::make_shared<PitchCurve>();
+            fresh->replaceOriginalAnalysis(
                 std::move(f0), std::move(energy), hopSize, sampleRate);
             if (!erasedRanges.empty())
-                content.analysis.pitchCurve->replaceErasedRangesInRange(0, erasedEnd, erasedRanges);
+                fresh->replaceErasedRangesInRange(0, erasedEnd, erasedRanges);
+            content.analysis.pitchCurve = std::move(fresh);
         }
     }
 
@@ -1017,7 +1018,9 @@ std::optional<RestoredModificationContent> restoreAudioModificationContent(
         // 文档拒绝），baseF0Data 对齐未校验：与其他加载边界一致做一次归一，
         // 错位 base 按前缀截断或置空。
         normalizeLoadedCorrectionSegmentLengths(restoredCorrectionSegments);
-        content.analysis.pitchCurve->replaceCorrectionSegments(restoredCorrectionSegments);
+        auto next = content.analysis.pitchCurve->deriveCopy();
+        next->replaceCorrectionSegments(restoredCorrectionSegments);
+        content.analysis.pitchCurve = std::move(next);
     }
 
     return restored;
@@ -2601,8 +2604,10 @@ void OpenTuneDocumentController::commitF0Completion(const AraF0Target& target, c
             mod->applyDetectedKey(detectedKey);
     }
 
-    auto pitchCurve = mod->content->analysis.pitchCurve;
-    if (pitchCurve == nullptr)
+    std::shared_ptr<PitchCurve> pitchCurve;
+    if (mod->content->analysis.pitchCurve != nullptr)
+        pitchCurve = mod->content->analysis.pitchCurve->deriveCopy();
+    else
         pitchCurve = std::make_shared<PitchCurve>();
     pitchCurve->replaceOriginalAnalysis(result.f0, result.energy, result.hopSize, result.f0SampleRate);
     applyOriginalF0ToModification(target.key, std::move(pitchCurve));

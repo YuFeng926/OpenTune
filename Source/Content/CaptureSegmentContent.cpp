@@ -175,7 +175,8 @@ void CaptureSegmentContent::applyVolumeEnvelope(AutomationLane envelope)
 
 void CaptureSegmentContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
-    content_.analysis.pitchCurve = std::move(curve);
+    // 发布边界转交独立对象：提交后经调用方保留句柄改写不影响 owner 内容。
+    content_.analysis.pitchCurve = curve ? curve->deriveCopy() : nullptr;
     ++content_.pitchRevision;
     ++content_.contentRevision;
 }
@@ -184,7 +185,8 @@ void CaptureSegmentContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
     // 一次性提交：curve + Ready 状态 + 单次 analysis/content revision。
     // 不调用 applyOriginalF0State，避免同一次提交双 bump。
-    content_.analysis.pitchCurve = std::move(curve);
+    // 发布边界转交独立对象：提交后经调用方保留句柄改写不影响 owner 内容。
+    content_.analysis.pitchCurve = curve ? curve->deriveCopy() : nullptr;
     content_.analysis.setOriginalF0State(OriginalF0State::Ready);
     ++content_.analysis.analysisRevision;
     ++content_.pitchRevision;
@@ -204,8 +206,11 @@ bool CaptureSegmentContent::applyPitchShiftState(const PitchShiftEditState& stat
     if (content_.analysis.pitchCurve == nullptr)
         return false;
 
+    // 曲线不可变别名：修正段写入以新曲线对象整体提交（写时复制）。
+    auto next = content_.analysis.pitchCurve->deriveCopy();
+    next->replaceCorrectionSegments(state.segments);
     content_.notes = state.notes;
-    content_.analysis.pitchCurve->replaceCorrectionSegments(state.segments);
+    content_.analysis.pitchCurve = std::move(next);
     content_.pitchShiftSettings = state.settings;
     ++content_.notesRevision;
     ++content_.pitchRevision;

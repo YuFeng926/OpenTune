@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -772,10 +773,281 @@ bool testAutomationLaneMergeSeamAndEmptySides()
         && laneEvalNear(trailingOnly, 3.0, -6.0f);
 }
 
+// ── StandaloneClipContent 快照复用（snapshotToken）──────────────────────
+// 同一内容状态重复 snapshotContent 返回同一不可变对象；每个变更入口推进令牌
+// 使缓存失效并反映新内容；幂等入口（状态未变）不失效。
+
+bool snapshotReuseStablePointer(OpenTune::StandaloneClipContent& clip)
+{
+    const auto first = clip.snapshotContent();
+    const auto second = clip.snapshotContent();
+    return first.get() == second.get();
+}
+
+OpenTune::ContentState makePopulatedState()
+{
+    OpenTune::ContentState state;
+    state.sourceWindow = OpenTune::SourceWindow{91, {}, 0.5, 2.25};
+    state.audioBuffer = std::make_shared<juce::AudioBuffer<float>>(2, 48000);
+    state.sampleRate = 48000.0;
+    state.notes.push_back({});
+    state.notes.front().startTime = 0.5;
+    state.notes.front().endTime = 1.5;
+    state.volumeEnvelope = OpenTune::AutomationLane::fromSnapshot(
+        std::vector<OpenTune::AutomationPoint>{{0.0, -2.0f}, {2.0, -6.0f}});
+    state.pitchShiftSettings = OpenTune::PitchShiftSettings{2, -30};
+    state.analysis.detectedKey.root = OpenTune::Key::C;
+    state.analysis.detectedKey.scale = OpenTune::Scale::Major;
+    state.analysis.detectedKey.confidence = 0.8f;
+    state.analysis.detectedKey.origin = OpenTune::Origin::Automatic;
+    state.analysis.silentGaps.push_back({1000, 2000, -51.0f});
+    state.analysis.pitchCurve = makeUsableOriginalF0Curve();
+    state.analysis.originalF0State = OpenTune::OriginalF0State::Ready;
+    state.timeGrid = OpenTune::TimeGridSnapshot::makeIdentity(2.25);
+    return state;
+}
+
+bool testStandaloneSnapshotReuseSameState()
+{
+    OpenTune::StandaloneClipContent clip(42);
+    clip.initializeContent(makePopulatedState());
+    return snapshotReuseStablePointer(clip);
+}
+
+bool testStandaloneSnapshotInvalidatedPerMutationEntry()
+{
+    OpenTune::StandaloneClipContent clip(43);
+    clip.initializeContent(makePopulatedState());
+    if (!snapshotReuseStablePointer(clip))
+        return false;
+
+    bool ok = true;
+    auto expectInvalidated = [&](auto&& mutate) {
+        const auto before = clip.snapshotContent();
+        mutate();
+        const auto after = clip.snapshotContent();
+        if (before.get() == after.get())
+            ok = false;
+        return after;
+    };
+
+    auto snap = expectInvalidated([&] {
+        clip.applyTimeGrid(OpenTune::TimeGridSnapshot::makeIdentity(3.0));
+    });
+    if (!snap->timeGrid || !nearlyEqual(snap->timeGrid->totalDurationSeconds(), 3.0))
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyVolumeEnvelope(OpenTune::AutomationLane::fromSnapshot(
+            std::vector<OpenTune::AutomationPoint>{{0.0, -1.0f}, {3.0, -4.0f}}));
+    });
+    if (!nearlyEqual(snap->volumeEnvelope.evalAt(0.0), -1.0))
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyPitchCurve(makeUsableOriginalF0Curve());
+    });
+    if (snap->pitchCurve == nullptr || snap->pitchCurve->getOriginalF0().empty())
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyOriginalF0(makeUsableOriginalF0Curve());
+    });
+    if (snap->originalF0State != OpenTune::OriginalF0State::Ready)
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        OpenTune::DetectedKey key;
+        key.root = OpenTune::Key::G;
+        key.scale = OpenTune::Scale::Minor;
+        key.confidence = 0.6f;
+        key.origin = OpenTune::Origin::Automatic;
+        clip.applyDetectedKey(key);
+    });
+    if (snap->detectedKey.root != OpenTune::Key::G)
+        ok = false;
+
+    expectInvalidated([&] {
+        clip.applyReferenceFeatures(OpenTune::ReferenceFeatureSet{});
+    });
+
+    snap = expectInvalidated([&] {
+        clip.applyOriginalF0FailureReason("inference failed");
+    });
+    if (snap->originalF0FailureReason != "inference failed")
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyAudioBuffer(std::make_shared<juce::AudioBuffer<float>>(2, 960), 48000.0);
+    });
+    if (snap->audioBuffer == nullptr || snap->audioBuffer->getNumSamples() != 960)
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyPitchShiftSettings(OpenTune::PitchShiftSettings{5, 40});
+    });
+    if (snap->pitchShiftSettings.semitone != 5 || snap->pitchShiftSettings.cents != 40)
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applySilentGaps({{10, 20, -60.0f}});
+    });
+    if (snap->silentGaps.size() != 1 || snap->silentGaps.front().startSample != 10)
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyImportedSource(OpenTune::SourceWindow{77, {}, 1.0, 2.0},
+                                 OpenTune::NativePcmSource{}, 480);
+    });
+    if (snap->sourceWindow.sourceId != 77 || snap->firstCanonicalSample != 480)
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.applyNotes(std::vector<OpenTune::Note>{{}}, false);
+    });
+    if (snap->noteTopologyInitialized)
+        ok = false;
+
+    snap = expectInvalidated([&] {
+        clip.retireContent(clip.contentKey());
+    });
+    if (snap->notesRevision != 0)
+        ok = false;
+    snap = expectInvalidated([&] {
+        clip.reviveContent(clip.contentKey());
+    });
+    if (snap->notes.size() != 1 || snap->sourceWindow.sourceId != 77)
+        ok = false;
+
+    return ok;
+}
+
+bool testStandaloneSnapshotIdempotentOriginalF0State()
+{
+    OpenTune::StandaloneClipContent clip(44);
+    clip.initializeContent(makePopulatedState());
+    if (!snapshotReuseStablePointer(clip))
+        return false;
+
+    // 状态未变（Ready → Ready，无失败原因需清理）：不失效，同一对象。
+    const auto before = clip.snapshotContent();
+    clip.applyOriginalF0State(OpenTune::OriginalF0State::Ready);
+    const auto afterSame = clip.snapshotContent();
+    if (before.get() != afterSame.get())
+        return false;
+
+    // 状态变更：失效。
+    clip.applyOriginalF0State(OpenTune::OriginalF0State::NotRequested);
+    const auto afterChanged = clip.snapshotContent();
+    if (afterChanged.get() == before.get()
+        || afterChanged->originalF0State != OpenTune::OriginalF0State::NotRequested)
+        return false;
+
+    // 同状态但失败原因被清理：失效并反映清理结果；此前快照保留旧原因。
+    clip.applyOriginalF0FailureReason("stale");
+    const auto withStaleReason = clip.snapshotContent();
+    clip.applyOriginalF0State(OpenTune::OriginalF0State::NotRequested);
+    const auto afterReasonCleared = clip.snapshotContent();
+    return withStaleReason->originalF0FailureReason == "stale"
+        && afterReasonCleared.get() != withStaleReason.get()
+        && afterReasonCleared->originalF0FailureReason.empty();
+}
+
+bool testStandaloneSnapshotMatchesDirectProjection()
+{
+    OpenTune::StandaloneClipContent clip(45);
+    clip.initializeContent(makePopulatedState());
+    clip.applyNotes(std::vector<OpenTune::Note>{{}}, false);
+    clip.applyOriginalF0State(OpenTune::OriginalF0State::Ready);
+    clip.applyOriginalF0FailureReason("earlier");
+    clip.applyAudioBuffer(std::make_shared<juce::AudioBuffer<float>>(1, 512), 44100.0);
+
+    const auto cached = clip.snapshotContent();
+    const auto direct = OpenTune::makeContentSnapshot(clip.content());
+
+    return cached->sourceWindow.sourceId == direct.sourceWindow.sourceId
+        && cached->audioBuffer == direct.audioBuffer
+        && nearlyEqual(cached->audioSampleRate, direct.audioSampleRate)
+        && cached->audioRevision == direct.audioRevision
+        && cached->notesRevision == direct.notesRevision
+        && cached->noteTopologyInitialized == direct.noteTopologyInitialized
+        && cached->pitchRevision == direct.pitchRevision
+        && cached->timeGridRevision == direct.timeGridRevision
+        && cached->contentRevision == direct.contentRevision
+        && cached->firstCanonicalSample == direct.firstCanonicalSample
+        && cached->notes.size() == direct.notes.size()
+        && nearlyEqual(cached->notes.front().startTime, direct.notes.front().startTime)
+        && cached->pitchCurve == direct.pitchCurve
+        && cached->timeGrid == direct.timeGrid
+        && nearlyEqual(cached->volumeEnvelope.evalAt(1.0), direct.volumeEnvelope.evalAt(1.0))
+        && cached->pitchShiftSettings.semitone == direct.pitchShiftSettings.semitone
+        && cached->pitchShiftSettings.cents == direct.pitchShiftSettings.cents
+        && cached->originalF0State == direct.originalF0State
+        && cached->originalF0FailureReason == direct.originalF0FailureReason
+        && cached->detectedKey.root == direct.detectedKey.root
+        && cached->silentGaps.size() == direct.silentGaps.size();
+}
+
+bool testStandaloneCommitDoesNotRetainCallerHandle()
+{
+    // 发布边界转交独立对象：直接比较指针验证 owner 内容与调用方句柄分属
+    // 两个 PitchCurve 对象；提交后再写保留句柄，调用方对象发布新快照而
+    // owner 快照不变（不依赖外层缓存失效行为）。
+    OpenTune::StandaloneClipContent clip(50);
+    clip.initializeContent(makePopulatedState());
+    auto curve = std::make_shared<OpenTune::PitchCurve>();
+    curve->setHopSize(128);
+    curve->setSampleRate(16000.0);
+    curve->setOriginalF0(std::vector<float>(96, 220.0f));
+    clip.applyOriginalF0(curve);
+
+    const auto* ownerCurve = clip.content().analysis.pitchCurve.get();
+    if (ownerCurve == nullptr || ownerCurve == curve.get())
+        return false;
+
+    const auto committed = clip.snapshotContent();
+    if (clip.content().analysis.pitchCurve->getSnapshot() != committed->pitchCurve)
+        return false;
+
+    curve->replaceOriginalAnalysis(std::vector<float>(96, 880.0f), {},
+                                   curve->getHopSize(), curve->getSampleRate());
+    return clip.content().analysis.pitchCurve->getSnapshot() == committed->pitchCurve
+        && curve->getSnapshot()->getOriginalF0().size() == 96
+        && curve->getSnapshot()->getOriginalF0().front() == 880.0f
+        && committed->pitchCurve->getOriginalF0().front() == 220.0f;
+}
+
+bool testStandaloneColdSnapshotConcurrentReaders()
+{
+    // 冷快照发布在同一 clip 的互斥边界内串行化：两个并发冷读者
+    // 取得同一份已发布快照对象。
+    OpenTune::StandaloneClipContent clip(51);
+    clip.initializeContent(makePopulatedState());
+    std::shared_ptr<const OpenTune::EditableContentSnapshot> readerA;
+    std::shared_ptr<const OpenTune::EditableContentSnapshot> readerB;
+    std::thread threadA([&] { readerA = clip.snapshotContent(); });
+    std::thread threadB([&] { readerB = clip.snapshotContent(); });
+    threadA.join();
+    threadB.join();
+    return readerA != nullptr && readerA.get() == readerB.get();
+}
+
 } // namespace
 
 int main()
 {
+    if (!testStandaloneCommitDoesNotRetainCallerHandle())
+    {
+        std::fputs("FAIL: caller-retained curve handle does not fork owner snapshot\n", stderr);
+        return 1;
+    }
+
+    if (!testStandaloneColdSnapshotConcurrentReaders())
+    {
+        std::fputs("FAIL: cold snapshot concurrent readers share one published snapshot\n", stderr);
+        return 1;
+    }
+
     if (!testErasedRangesSurviveContentSnapshotProjection())
     {
         std::fputs("FAIL: erased ranges content snapshot projection\n", stderr);
@@ -935,6 +1207,30 @@ int main()
     if (!testAutomationLaneMergeSeamAndEmptySides())
     {
         std::fputs("FAIL: AutomationLane mergeContiguous seam and empty sides\n", stderr);
+        return 1;
+    }
+
+    if (!testStandaloneSnapshotReuseSameState())
+    {
+        std::fputs("FAIL: StandaloneClipContent snapshot reuse same-state pointer identity\n", stderr);
+        return 1;
+    }
+
+    if (!testStandaloneSnapshotInvalidatedPerMutationEntry())
+    {
+        std::fputs("FAIL: StandaloneClipContent snapshot invalidated per mutation entry\n", stderr);
+        return 1;
+    }
+
+    if (!testStandaloneSnapshotIdempotentOriginalF0State())
+    {
+        std::fputs("FAIL: StandaloneClipContent idempotent applyOriginalF0State keeps cache\n", stderr);
+        return 1;
+    }
+
+    if (!testStandaloneSnapshotMatchesDirectProjection())
+    {
+        std::fputs("FAIL: StandaloneClipContent cached snapshot matches direct makeContentSnapshot\n", stderr);
         return 1;
     }
 

@@ -116,11 +116,12 @@ ReferenceFeatureSet makeReferenceFeatureSetFromNotes(
 #if JucePlugin_Build_Standalone
 void publishStandalonePlaybackSource(ContentRenderService& crs,
                                      ContentKey key,
+                                     const std::shared_ptr<const EditableContentSnapshot>& snapshot,
                                      const ContentState& payload)
 {
-    auto snapshot = std::make_shared<const EditableContentSnapshot>(makeContentSnapshot(payload));
+    // 与 UI 首读共享同一 snapshotContent() 版本（单一投影，消除重复投影）。
     auto readSource = makePlaybackReadSource(
-        key, std::move(snapshot), payload.nativeSource, payload.audioBuffer,
+        key, snapshot, payload.nativeSource, payload.audioBuffer,
         payload.sampleRate, payload.firstCanonicalSample,
         crs.getOrCreateRenderCache(key), crs.getTimeStretchCache());
     crs.publishPlaybackSource(key, std::move(readSource));
@@ -138,9 +139,9 @@ ContentKey createStandaloneClipOwner(StandaloneContentRepository& repository,
     }
 
     // TimeGrid 由各 owner 入口（import/split/merge/copy/restore）按权威
-    // source window duration 显式初始化；这里只提交完整 payload，不再补造或改写。
-    clip->content() = std::move(payload);
-    publishStandalonePlaybackSource(crs, key, clip->content());
+    // source window duration 显式初始化；owner 入口一次性提交完整 payload。
+    clip->initializeContent(std::move(payload));
+    publishStandalonePlaybackSource(crs, key, clip->snapshotContent(), clip->content());
     return key;
 }
 
@@ -1713,18 +1714,15 @@ void OpenTuneAudioProcessor::handleSharedBackendChanged()
         for (const auto key : keys) {
             if (auto cache = contentRenderService_->getRenderCache(key))
                 cache->clear();
-            if (auto* clip = standaloneContentRepository_->findClip(key)) {
-                const auto snapshot = clip->snapshotContent();
-                if (snapshot != nullptr
-                    && snapshot->originalF0State == OriginalF0State::Extracting)
-                    setContentOriginalF0State(key,
-                        snapshot->hasUsableOriginalF0()
-                            ? OriginalF0State::Ready
-                            : OriginalF0State::NotRequested);
-                requestFullContentRender(key);
-            } else {
-                requestFullContentRender(key);
+            const auto snapshot = standaloneContentRepository_->snapshotFor(key);
+            if (snapshot != nullptr
+                && snapshot->originalF0State == OriginalF0State::Extracting) {
+                setContentOriginalF0State(key,
+                    snapshot->hasUsableOriginalF0()
+                        ? OriginalF0State::Ready
+                        : OriginalF0State::NotRequested);
             }
+            requestFullContentRender(key);
         }
         contentRenderService_->getTimeStretchCache().clear();
     }
@@ -3785,8 +3783,9 @@ std::shared_ptr<const EditableContentSnapshot> OpenTuneAudioProcessor::getConten
     switch (key.domainKind) {
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
-            auto* clip = standaloneContentRepository_->findClip(key);
-            return clip ? clip->snapshotContent() : nullptr;
+            // 快照取得与惰性缓存发布在同一仓库锁保护的操作内完成。
+            return standaloneContentRepository_
+                ? standaloneContentRepository_->snapshotFor(key) : nullptr;
         }
 #endif
 #if JucePlugin_Enable_ARA

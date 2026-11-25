@@ -16,7 +16,9 @@ struct AnalysisState
 {
     OriginalF0State originalF0State{OriginalF0State::NotRequested};
     std::string originalF0FailureReason;
-    std::shared_ptr<PitchCurve> pitchCurve;
+    // 不可变别名：外部读取方拿不到可就地改写的曲线；所有曲线变更以新
+    // PitchCurve 对象整体提交并推进 revision/token。
+    std::shared_ptr<const PitchCurve> pitchCurve;
     DetectedKey detectedKey;
     std::vector<SilentGap> silentGaps;
     ReferenceFeatureSet referenceFeatures;
@@ -37,7 +39,11 @@ struct AnalysisState
     void clearOriginalAnalysis()
     {
         if (pitchCurve)
-            pitchCurve->replaceOriginalAnalysis({}, {}, pitchCurve->getHopSize(), pitchCurve->getSampleRate());
+        {
+            auto next = pitchCurve->deriveCopy();
+            next->replaceOriginalAnalysis({}, {}, next->getHopSize(), next->getSampleRate());
+            pitchCurve = std::move(next);
+        }
         setOriginalF0State(OriginalF0State::NotRequested);
         if (detectedKey.origin != Origin::Manual)
             detectedKey = {};

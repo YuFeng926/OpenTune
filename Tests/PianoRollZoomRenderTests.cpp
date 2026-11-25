@@ -1,5 +1,6 @@
 #include "Standalone/UI/PianoRollComponent.h"
 #include "Standalone/UI/PianoRoll/PianoRollTimeMap.h"
+#include "Standalone/UI/PianoRoll/WaveformPreheatPlanner.h"
 #include "Utils/PlayHeadState.h"
 #include "Utils/TimeCoordinate.h"
 #include "Utils/UndoManager.h"
@@ -145,6 +146,21 @@ struct PianoRollComponentTestProbe
 
     static int staticRasters(const PianoRollComponent& roll) { return roll.staticRasterProbe_.count; }
     static int contentRasters(const PianoRollComponent& roll) { return roll.contentRasterProbe_.count; }
+
+    // ── WaveformQuery 探针按 pass 结算验收 ──
+    static int waveformQueryCount(const PianoRollComponent& roll) { return roll.waveformQueryProbe_.count; }
+    static double waveformQueryTotalMs(const PianoRollComponent& roll) { return roll.waveformQueryProbe_.totalMs; }
+    static void resetWaveformQueryProbe(PianoRollComponent& roll) { roll.waveformQueryProbe_ = {}; }
+    static void ensureSurfaces(PianoRollComponent& roll) { roll.ensureSurfaceSizes(); }
+    static void rasterWaveformFull(PianoRollComponent& roll, const PianoRollRenderer::ContentRenderItems& items)
+    {
+        roll.rasterizeWaveform(items);
+    }
+    static void rasterWaveformStrip(PianoRollComponent& roll, const PianoRollRenderer::ContentRenderItems& items,
+                                    juce::Rectangle<int> logical, juce::Rectangle<int> physical)
+    {
+        roll.rasterizeWaveform(items, logical, physical);
+    }
 
     // ── F0 缩放回归验收 ──
     static int contentStartX(const PianoRollComponent& roll) { return roll.getTimelineContentStartX(); }
@@ -796,6 +812,162 @@ bool verifyF0StripPixels(const std::shared_ptr<const EditableContentSnapshot>& s
     return true;
 }
 
+// 置债时序（组件级）：placement 安装后按新投影置债；相机移出内容窗口清债、
+// 回到内容内重置债；波形隐藏清债不置债。
+bool verifyPreheatDebtTiming(const std::shared_ptr<const EditableContentSnapshot>& snapshot)
+{
+    auto check = [](bool ok, const char* message) {
+        if (!ok)
+            std::fprintf(stderr, "preheat debt timing: %s\n", message);
+        return ok;
+    };
+
+    PlayHeadState playhead;
+    UndoManager undo;
+    PianoRollComponent roll(playhead, undo, {}, false);
+    roll.setSize(1000, 600);
+    roll.setShowWaveform(true);
+    const ContentKey key{DomainKind::StandaloneClip, 1};
+    constexpr ContentTimelineProjection placement{2.0, 48.0, 0.0, 48.0};
+    int snapshotReadCount = 0;
+    roll.setReadContentSnapshot([&](ContentKey requested) {
+        ++snapshotReadCount;
+        return requested == key ? snapshot : nullptr;
+    });
+
+    // 首次冷导入：placement 安装完成后按新投影置债。
+    roll.setEditedContentAndProjection(key, snapshot->pitchCurve, snapshot->audioBuffer,
+                                       snapshot->audioSampleRate, placement);
+    if (!check(roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "preheat debt arms after placement install"))
+        return false;
+
+    // 相机移出内容窗口：清残留债后按新窗口置债，窗口为空 → 无欠债。
+    auto state = roll.viewportState();
+    state.camera.visibleStartSeconds = 500.0;
+    roll.restoreViewportState(state);
+    if (!check(!roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "off-screen camera clears preheat debt"))
+        return false;
+
+    // 相机回到内容内：重新置债。
+    state.camera.visibleStartSeconds = 3.0;
+    roll.restoreViewportState(state);
+    if (!check(roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "on-screen camera re-arms preheat debt"))
+        return false;
+
+    // 波形隐藏（静止相机）：显示事件立即清债且不置债。
+    roll.setShowWaveform(false);
+    if (!check(!roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "waveform hidden clears debt without camera change"))
+        return false;
+
+    // 波形重新显示（静止相机）：显示事件立即按当前窗口置债。
+    roll.setShowWaveform(true);
+    if (!check(roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "waveform shown re-arms debt without camera change"))
+        return false;
+
+    // 切 OpenDyne（静止相机）：blob 模式无 queryExactPeak 查询，清债不置债。
+    roll.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+    if (!check(!roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "OpenDyne switch clears debt without camera change"))
+        return false;
+
+    // 切回 OpenTune（静止相机）：重新置债，心跳不再消费旧债。
+    roll.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+    if (!check(roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "OpenTune switch re-arms debt without camera change"))
+        return false;
+
+    // 全建后稳态：相机移动立即返回，零快照拷贝、无债。
+    while (!roll.getWaveformMipmapCache().isComplete())
+        roll.getWaveformMipmapCache().buildIncremental(8.0);
+    snapshotReadCount = 0;
+    state.camera.visibleStartSeconds = 5.0;
+    roll.restoreViewportState(state);
+    if (!check(snapshotReadCount == 0,
+               "steady-state camera move reads no snapshots"))
+        return false;
+    if (!check(!roll.getWaveformMipmapCache().hasPreheatDebt(),
+               "steady-state camera move leaves no debt"))
+        return false;
+
+    // WaveformQuery 探针按 pass 结算：条带 pass 的查询耗时随 pass 丢弃，
+    // 连续平移后的首次缩放不把平移成本记进缩放帧。
+    Probe::ensureSurfaces(roll);
+    Probe::rasterWaveformFull(roll, Probe::buildItems(roll));
+    if (!check(Probe::waveformQueryCount(roll) == 1,
+               "full raster settles the waveform query probe"))
+        return false;
+    Probe::resetWaveformQueryProbe(roll);
+    const auto stripLogical = roll.getTimelineViewportBounds().removeFromTop(100);
+    const auto stripPhysical = (stripLogical.toFloat() * Probe::renderScale(roll))
+        .getSmallestIntegerContainer();
+    Probe::rasterWaveformStrip(roll, Probe::buildItems(roll), stripLogical, stripPhysical);
+    if (!check(Probe::waveformQueryCount(roll) == 0,
+               "strip pass neither records nor folds waveform query cost"))
+        return false;
+    Probe::rasterWaveformFull(roll, Probe::buildItems(roll));
+    if (!check(Probe::waveformQueryCount(roll) == 1,
+               "next full raster records exactly its own pass"))
+        return false;
+
+    // 条带后接空 items 全绘：无查询消费，pass 记录为零成本（防漏计时回归）。
+    Probe::resetWaveformQueryProbe(roll);
+    Probe::rasterWaveformFull(roll, {});
+    if (!check(Probe::waveformQueryCount(roll) == 1
+                   && Probe::waveformQueryTotalMs(roll) == 0.0,
+               "empty full raster records a zero-cost pass"))
+        return false;
+    return true;
+}
+
+// 预热计划与渲染器像素端点一致（planWaveformPreheat，两个独立反例）：
+// (a) 小数 placement 起点经取整列投影，预热窗口从渲染器首列查询端点开始；
+// (b) 每列 127.5 样本时首列实际查询 [0,128) 消费 128，层级按列实际消费取值。
+bool verifyWaveformPreheatColumnEndpoints()
+{
+    const auto identityGrid = TimeGridSnapshot::makeFromHandles(std::vector<TimeHandle>{
+        {1, 0.0, 0.0, HandleKind::ClipStart, Confidence::Default},
+        {2, 4.0, 4.0, HandleKind::ClipEnd, Confidence::Default}});
+    if (!identityGrid)
+        return false;
+
+    // 反例 (a)：44.1kHz、100px/s、恒等网格、placement timeline 起点 1.004s +
+    // clip-in 1s（时间跨度 3s，比例 1）。列界与渲染器同源（placement 硬裁，
+    // 不外扩）：全绘列 [160, 460)，首列 xToSource(160)=0.996s → 43923（渲染器
+    // 等价值，不是 planner 回声）；末列查询端点 xToSource(460)=3.996s → 176224。
+    {
+        const ContentTimelineProjection projection{1.004, 3.0, 1.0, 3.0};
+        const auto plan = planWaveformPreheat(projection, *identityGrid, 44100.0,
+                                              0.0, 100.0, 60, 1000);
+        if (!plan.valid)
+            return false;
+        if (plan.startSample != 43923)
+            return false;
+        if (plan.endSampleExclusive != 176224)
+            return false;
+    }
+
+    // 反例 (b)：每列 127.5 样本（44.1kHz、pps=44100/127.5）。首列实际查询
+    // [0,128) 消费 128 样本，层级覆盖 128（浮点跨度 127.5 只选到 32）。
+    {
+        const ContentTimelineProjection projection{0.0, 10.0, 0.0, 10.0};
+        const double pixelsPerSecond = 44100.0 / 127.5;
+        const auto plan = planWaveformPreheat(projection, *identityGrid, 44100.0,
+                                              0.0, pixelsPerSecond, 0, 1000);
+        if (!plan.valid || plan.startSample != 0)
+            return false;
+        if (plan.levelCount < 2)
+            return false;
+        if (plan.endSampleExclusive != 127500)
+            return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -813,7 +985,14 @@ int main()
             if (!verifyF0StripPixels(snapshot, scheme, scale))
                 return 1;
     }
+    if (!verifyPreheatDebtTiming(snapshot))
+        return 1;
+    if (!verifyWaveformPreheatColumnEndpoints())
+    {
+        std::fprintf(stderr, "waveform preheat column endpoints mismatch the renderer\n");
+        return 1;
+    }
     std::puts("PianoRollZoomRenderTests passed (zoom gestures plus F0 cross-camera geometry and strips, "
-              "OpenTune and OpenDyne, 1x and 1.25x).");
+              "OpenTune and OpenDyne, 1x and 1.25x; preheat debt timing; preheat column endpoints).");
     return 0;
 }

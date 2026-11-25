@@ -15,6 +15,8 @@
 #include "Utils/TimeGrid.h"   // ⚡️ vocal-time-stretch §8.5 — TimeGrid handles
 #include "UI/ToolIds.h"
 #include "UI/ViewMapper.h"
+#include "F0VisualCache.h"
+#include "F0VisualSegments.h"
 #include "Content/EditableContentSnapshot.h"
 #include <algorithm>
 #include <vector>
@@ -107,6 +109,13 @@ public:
     void drawWaveform(juce::Graphics& g, const RenderContext& ctx, PlacedContent item,
                       const WaveformMipmap& waveform);
 
+    /// drawWaveform 的列界（渲染器与预热计划共用，单一实现）：损伤列范围
+    /// （fullRaster 时为空 = 内容视口 [contentStartX, width)）与 placement
+    /// 整数列界求交，placement 端点硬裁（不外扩）。
+    static std::pair<int, int> waveformColumnBounds(
+        bool fullRaster, const juce::Rectangle<int>& rasterBounds,
+        int width, int contentStartX, int segStartX, int segEndX) noexcept;
+
     /// Draw published TimeGrid anchors as cache-friendly neutral lines.
     /// No hover/selected/drag affordances — those are painted by drawTimeGridHandles in overlay.
     void drawTimeGridAnchors(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
@@ -118,8 +127,13 @@ public:
                                     PlacedContent item,
                                     const std::vector<int>& selectedNoteIndices,
                                     bool asPlayheadHighlight = false);
-    void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
+    void drawF0Curve(juce::Graphics& g, const RenderContext& ctx, PlacedContent item,
+                     F0VisualCacheStore& f0CacheStore);
     void drawF0SelectionHighlight(juce::Graphics& g, const RenderContext& ctx, PlacedContent item);
+
+    /// [PR-Perf] WaveformQuery 探针：drawWaveform 逐像素峰值查询环耗时累计，
+    /// 全量波形栅格前后由 PianoRollComponent 清零/读取结算。
+    double waveformQueryMs = 0.0;
 
     // ⚡️ §8.5 — paint TimeGrid handles as vertical guide lines.
     // TimeGrid 拖拽的 working grid 由调用方传入，共享 item 保持只读。

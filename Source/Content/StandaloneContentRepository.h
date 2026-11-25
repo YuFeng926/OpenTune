@@ -24,6 +24,10 @@ public:
     /// 查找 content owner（不区分 active/retired）。
     StandaloneClipContent* findClip(ContentKey key) const;
 
+    /// 仓库锁内完成「查找 + 快照取得 + 惰性缓存发布」：snapshotContent 的
+    /// 惰性缓存写入不暴露在锁外窗口。
+    std::shared_ptr<const EditableContentSnapshot> snapshotFor(ContentKey key) const;
+
     // ── Lifecycle ───────────────────────────────────────────
 
     /// 标记 lifecycle = Retired

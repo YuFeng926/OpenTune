@@ -508,18 +508,13 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen, con
         auto* clip = contentRepo->findClip(clipKey);
         if (!clip) { continue; }
 
-        // 应用音频数据（保存的窗口秒值与 native 来源原样恢复）
-        clip->content().sourceWindow = contentEntry.sourceWindow;
-        clip->content().nativeSource = prepared.nativeSource;
-        clip->content().firstCanonicalSample =
-            prepared.canonicalFirstSample + canonicalBegin;
+        // 应用存储元数据与音频数据（保存的窗口秒值与 native 来源原样恢复）
+        clip->applyImportedSource(contentEntry.sourceWindow, prepared.nativeSource,
+                                  prepared.canonicalFirstSample + canonicalBegin);
         clip->applyAudioBuffer(windowedBuffer, canonicalRate);
 
-        // 应用 notes
-        clip->applyNotes(contentEntry.notes);
-
-        // 恢复 note topology 状态（applyNotes 按新契约会置 true，空 notes 工程必须恢复持久值）
-        clip->content().noteTopologyInitialized = contentEntry.noteTopologyInitialized;
+        // 应用 notes（持久化 topology 状态随 notes 提交一并恢复）
+        clip->applyNotes(contentEntry.notes, contentEntry.noteTopologyInitialized);
 
         // 恢复 envelope（revision 不落盘，恢复端由 owner 推进新 revision）
         clip->applyVolumeEnvelope(contentEntry.volumeEnvelope);
@@ -589,18 +584,18 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen, con
         PitchShiftSettings pitchShift;
         pitchShift.semitone = contentEntry.pitchShiftSettings.semitone;
         pitchShift.cents = contentEntry.pitchShiftSettings.cents;
-        clip->content().pitchShiftSettings = pitchShift;
+        clip->applyPitchShiftSettings(pitchShift);
 
-        // 恢复 Silent gaps（直接写入 content，因为 silentGaps 是分析结果）
-        auto& contentRef = clip->content();
-        contentRef.analysis.silentGaps.clear();
+        // 恢复 Silent gaps（分析结果经 owner 提交）
+        std::vector<SilentGap> silentGaps;
         for (const auto& gapEntry : contentEntry.silentGaps) {
             SilentGap gap;
             gap.startSample = gapEntry.startSample;
             gap.endSampleExclusive = gapEntry.endSampleExclusive;
             gap.minLevel_dB = gapEntry.minLevel_dB;
-            contentRef.analysis.silentGaps.push_back(gap);
+            silentGaps.push_back(gap);
         }
+        clip->applySilentGaps(std::move(silentGaps));
 
         // 恢复 Reference features
         ReferenceFeatureSet refFeatures;

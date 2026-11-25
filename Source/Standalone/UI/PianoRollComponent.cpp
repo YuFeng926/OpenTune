@@ -31,10 +31,12 @@
 #include "Utils/NoteSpeech.h"
 #include "Utils/ScreenReaderAnnouncer.h"
 #include "Utils/TimeCoordinate.h"
+#include <unordered_map>
 #include "Inference/RenderCache.h"
 #include "TimelineViewportPolicy.h"
 #include "TimelineLayerComposer.h"
 #include "PianoRoll/PianoRollTimeMap.h"
+#include "PianoRoll/WaveformPreheatPlanner.h"
 #include "../../PluginProcessor.h"
 namespace OpenTune {
 
@@ -2735,6 +2737,7 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
         case RenderProbePoint::ZoomCommitRaster: probe = &zoomCommitRasterProbe_; break;
         case RenderProbePoint::SnapshotBuild: probe = &snapshotBuildProbe_; break;
         case RenderProbePoint::MoveImageSection: probe = &moveImageSectionProbe_; break;
+        case RenderProbePoint::WaveformQuery: probe = &waveformQueryProbe_; break;
     }
     probe->count += samples;
     probe->totalMs += elapsedMs;
@@ -2751,7 +2754,8 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
             + " zoom-preview-paint:" + juce::String(avg(zoomPreviewPaintProbe_), 1) + "ms x" + juce::String(zoomPreviewPaintProbe_.count)
             + " zoom-commit-raster:" + juce::String(avg(zoomCommitRasterProbe_), 1) + "ms x" + juce::String(zoomCommitRasterProbe_.count)
             + " snapshot-build:" + juce::String(avg(snapshotBuildProbe_), 1) + "ms x" + juce::String(snapshotBuildProbe_.count)
-            + " move-image-section:" + juce::String(avg(moveImageSectionProbe_), 1) + "ms x" + juce::String(moveImageSectionProbe_.count));
+            + " move-image-section:" + juce::String(avg(moveImageSectionProbe_), 1) + "ms x" + juce::String(moveImageSectionProbe_.count)
+            + " waveform-query:" + juce::String(avg(waveformQueryProbe_), 1) + "ms x" + juce::String(waveformQueryProbe_.count));
         staticRasterProbe_ = {};
         contentRasterProbe_ = {};
         overlayPresentProbe_ = {};
@@ -2761,6 +2765,7 @@ void PianoRollComponent::recordRenderProbe(RenderProbePoint point, double elapse
         zoomCommitRasterProbe_ = {};
         snapshotBuildProbe_ = {};
         moveImageSectionProbe_ = {};
+        waveformQueryProbe_ = {};
         probeReportWindowStart_ = now;
     }
 }
@@ -3054,8 +3059,11 @@ void PianoRollComponent::drawContent(juce::Graphics& g, const ViewportState& vie
     for (const auto& placedContent : placed)
         renderer_->drawNotes(g, renderCtx, placedContent);
 
+    // F0 投影点列缓存：解析在 drawF0Curve 的绘制开关判定之后（两条 F0 线都隐藏
+    // 时不构建投影），pass 末尾清除未命中条目。
     for (const auto& placedContent : placed)
-        renderer_->drawF0Curve(g, renderCtx, placedContent);
+        renderer_->drawF0Curve(g, renderCtx, placedContent, f0VisualCache_);
+    f0VisualCache_.prune();
 
     for (const auto& placedContent : placed)
         renderer_->drawTimeGridAnchors(g, renderCtx, placedContent);
@@ -3125,7 +3133,16 @@ void PianoRollComponent::rasterizeWaveform(
     g.addTransform(juce::AffineTransform::scale(renderScale_));
 
     // 水平相机与音符相同；垂直方向固定在视口中线，不吃 verticalScrollOffset。
+    // [PR-Perf] WaveformQuery 探针按单次栅格 pass 结算：进入即清零，本 pass
+    // 的逐像素 queryExactPeak 查询环总耗时（多 content 求和）在 pass 末尾
+    // 一次性结算并清零；条带 pass 的耗时随 pass 丢弃，连续平移后的首次缩放
+    // 不把平移成本记进缩放帧。
+    renderer_->waveformQueryMs = 0.0;
     drawContent(g, surfaceView_, rasterBounds, ContentLayer::Waveform, items);
+    const double waveformQueryPassMs = renderer_->waveformQueryMs;
+    renderer_->waveformQueryMs = 0.0;
+    if (fullRaster && showWaveform_ && !isOpenDyne())
+        recordRenderProbe(RenderProbePoint::WaveformQuery, waveformQueryPassMs, 1);
 }
 
 juce::Rectangle<int> PianoRollComponent::commitCameraDelta(bool exactCamera)
@@ -3726,11 +3743,8 @@ void PianoRollComponent::applyEditedContentAudioBuffer(std::shared_ptr<const juc
     audioBuffer_ = std::move(buffer);
     audioBufferSampleRate_ = sampleRate;
 
-    if (editedContentKey_.isValid() && audioBuffer_ != nullptr && audioBuffer_->getNumSamples() > 0) {
-        waveformMipmapCache_.setAudioSource(editedContentKey_, audioBuffer_);
-    } else if (editedContentKey_.isValid() && waveformMipmapCache_.get(editedContentKey_) != nullptr) {
-        waveformMipmapCache_.remove(editedContentKey_);
-    }
+    // mipmap 换源与置债由 applyTimelineContentPlacements 统一执行：安装后的
+    // placement 集合驱动 setAudioSource/清理，每个实际变化只置一次债。
 }
 
 double PianoRollComponent::getContentDurationSeconds() const
@@ -3826,10 +3840,16 @@ bool PianoRollComponent::applyTimelineContentPlacements(std::vector<TimelineCont
     waveformMipmapCache_.prune(aliveContents);
 
     explicitTimelineContentPlacements_ = explicitContract;
+    if (changed)
+        timelineContentPlacements_ = std::move(placements);
+
+    // 置债在安装新 placement 之后：窗口按新投影计算；requestWaveformPreheatForVisible
+    // 先清全部残留债（离屏/去重/换源后的旧窗口）再按当前可见范围重新置债。
+    if (audioChanged || changed)
+        requestWaveformPreheatForVisible();
+
     if (!changed)
         return audioChanged;
-
-    timelineContentPlacements_ = std::move(placements);
 
     userScrollHold_ = false;
     updateScrollBars();
@@ -4018,6 +4038,8 @@ void PianoRollComponent::applyEditedContent(ContentKey contentKey,
     }
 
     if (contentChanged || bufferChanged) {
+        // mipmap 换源/置债由 applyTimelineContentPlacements 统一执行（安装后的
+        // placement 驱动 setAudioSource 与置债，每个实际变化只置一次）。
         deriveSingleTimelineContentPlacement();
     }
 
@@ -4350,6 +4372,85 @@ bool PianoRollComponent::tryConsumeInitialF0View(ContentKey contentKey)
     return true;
 }
 
+namespace {
+
+// 波形 mipmap 心跳增量构建预算（绝对时间，毫秒）：常驻 0.75ms；
+// 预热欠债存在期间提升 8 倍，可见范围在当前显示层级的区块建完即还清欠债。
+constexpr double kWaveformHeartbeatBudgetMs = 0.75;
+constexpr double kWaveformPreheatBudgetMs = 6.0;
+
+} // namespace
+
+void PianoRollComponent::requestWaveformPreheatForVisible()
+{
+    // 全部 mipmap 完成即稳态：无债可清、无窗可置，零快照拷贝直接返回
+    // （缩放/拖动手势在已建完内容上不付任何同步开销）。
+    if (waveformMipmapCache_.isComplete())
+        return;
+
+    // 先清全部残留债：离屏/换源后的旧窗口不再消耗提升预算；
+    // 波形层不参与绘制（关闭波形或 OpenDyne blob 模式）时不存在 queryExactPeak
+    // 查询，清债后直接返回。
+    waveformMipmapCache_.clearPreheatDebt();
+    if (!showWaveform_ || isOpenDyne())
+        return;
+
+    const int viewportWidth = getTimelineContentViewportWidth();
+    const double pixelsPerSecond = camera_.pixelsPerSecond;
+    if (viewportWidth <= 0 || !(pixelsPerSecond > 0.0))
+        return;
+
+    const double visibleStart = camera_.visibleStartSeconds;
+    const int contentStartX = getTimelineContentStartX();
+
+    // 同一事件内同 key 快照只读一次（多 placement 复用同一内容时共享）。
+    std::unordered_map<ContentKey, std::shared_ptr<const EditableContentSnapshot>> snapshotByContentKey;
+
+    for (const auto& placement : timelineContentPlacements_)
+    {
+        if (!placement.isValid())
+            continue;
+        const auto* mipmap = waveformMipmapCache_.get(placement.contentKey);
+        if (mipmap == nullptr || !mipmap->hasSource())
+            continue;
+
+        // 屏外交叠预判与渲染器/预热同一列界来源（waveformColumnBounds）：
+        // placement 整数列界硬裁，交叠为空不付外层快照拷贝。
+        {
+            ViewMapper boundsCoords;
+            boundsCoords.visibleStartSeconds = visibleStart;
+            boundsCoords.pixelsPerSecond = pixelsPerSecond;
+            boundsCoords.contentStartX = contentStartX;
+            boundsCoords.contentWidth = viewportWidth;
+            const auto [overlapStartX, overlapEndX] = PianoRollRenderer::waveformColumnBounds(
+                true, {}, contentStartX + viewportWidth, contentStartX,
+                boundsCoords.timeToX(placement.projection.timelineStartSeconds),
+                boundsCoords.timeToX(placement.projection.timelineEndSeconds()));
+            if (overlapEndX <= overlapStartX)
+                continue;
+        }
+
+        auto& cachedSnapshot = snapshotByContentKey[placement.contentKey];
+        if (!cachedSnapshot)
+            cachedSnapshot = readSnapshotFor(placement.contentKey);
+        const auto& snapshot = cachedSnapshot;
+        if (!snapshot || !snapshot->timeGrid || snapshot->audioSampleRate <= 0.0)
+            continue;
+
+        const auto plan = planWaveformPreheat(placement.projection, *snapshot->timeGrid,
+                                              snapshot->audioSampleRate,
+                                              visibleStart, pixelsPerSecond,
+                                              contentStartX, viewportWidth);
+        if (!plan.valid)
+            continue;
+
+        // 同一内容的多个 placement 各自置独立窗口（mipmap 按窗口列表累计），
+        // 不做按键早去重——去重会漏掉后续 placement 的可见段。
+        waveformMipmapCache_.requestPreheat(placement.contentKey,
+            plan.startSample, plan.endSampleExclusive, plan.levelCount);
+    }
+}
+
 void PianoRollComponent::onHeartbeatTick()
 {
 #if !JucePlugin_Build_Standalone
@@ -4359,9 +4460,12 @@ void PianoRollComponent::onHeartbeatTick()
 #endif
 
     // 波形缓存增量构建在可见性 guard 之前：导入音频后即使钢琴卷帘尚未显示也预先构建；
-    // 层级完成只加速 queryExactPeak 查询，不改变像素，不放脏、不 repaint
+    // 层级完成只加速 queryExactPeak 查询，不改变像素，不放脏、不 repaint。
+    // 预热欠债存在期间（进入视图/相机激活/音频变更置位，可见范围建完即还清）
+    // 使用更大预算，可见采样范围在当前显示层级的区块优先建完。
     if (showWaveform_ || isOpenDyne())
-        waveformMipmapCache_.buildIncremental(0.75);
+        waveformMipmapCache_.buildIncremental(waveformMipmapCache_.hasPreheatDebt()
+            ? kWaveformPreheatBudgetMs : kWaveformHeartbeatBudgetMs);
 
     if (!isShowing())
         return;
@@ -4609,8 +4713,12 @@ void PianoRollComponent::activateTimelineCamera(TimelineViewportCamera camera)
     // 请求路径经 resolve() 已钳制，此处幂等。
     camera.pixelsPerSecond = TimelineViewportPolicy::normalisePixelsPerSecond(
         camera.pixelsPerSecond, TimelineViewportRequest::ViewKind::PianoRoll);
-    cameraPanPending_ |= camera != camera_;
+    const bool cameraChanged = camera != camera_;
+    cameraPanPending_ |= cameraChanged;
     camera_ = camera;
+    // 相机激活是全部缩放/滚动/跟随提交的唯一汇聚点：可视时间窗变化 → 波形预热欠债。
+    if (cameraChanged)
+        requestWaveformPreheatForVisible();
     updateScrollBars();
     repaint();
 }
@@ -4628,10 +4736,15 @@ void PianoRollComponent::restoreViewportState(const ViewportState& state)
     if (pendingInitialF0ViewContentKey_ == editedContentKey_)
         pendingInitialF0ViewContentKey_ = ContentKey{};
 
+    const bool cameraChanged = state.camera != camera_;
     camera_ = state.camera;
     pixelsPerSemitone_ = state.pixelsPerSemitone;
     const float maxScroll = juce::jmax(0.0f, getTotalHeight() - static_cast<float>(getTimelineContentViewportHeight()));
     verticalScrollOffset_ = juce::jlimit(0.0f, maxScroll, state.verticalScrollOffset);
+
+    // 可视时间窗变化与 activateTimelineCamera 同一置债语义：先清残留债再按新窗口置债。
+    if (cameraChanged)
+        requestWaveformPreheatForVisible();
 
     staticDirty_ = true;
     contentDirty_ = true;
@@ -4675,6 +4788,9 @@ void PianoRollComponent::applyAudioEditingScheme(AudioEditingScheme::Scheme sche
     staticDirty_ = true;
     contentDirty_ = true;
 
+    // scheme 变化即重算债务：OpenDyne blob 模式无 queryExactPeak 查询（清债），
+    // OpenTune 波形线按当前相机窗口置债（静止相机也生效），心跳不再消费旧债。
+    requestWaveformPreheatForVisible();
 
     // Scheme changed → relayout to show/hide the horizontal scrollbar.
     if (wasOpenDyne != nowOpenDyne)
@@ -4828,6 +4944,10 @@ void PianoRollComponent::setShowWaveform(bool shouldShow) {
     if (showWaveform_ == shouldShow) return;
     showWaveform_ = shouldShow;
     contentDirty_ = true;
+
+    // 显示资格变化即重算债务：关波形清债（无 queryExactPeak 查询），
+    // 开波形按当前相机窗口置债（静止相机也生效）。
+    requestWaveformPreheatForVisible();
 
     repaint();
 }
@@ -6192,6 +6312,8 @@ void PianoRollComponent::visibilityChanged()
     if (isShowing() && isVisible())
     {
         tryConsumeInitialF0View(editedContentKey_);
+        // 进入卷帘视图：可见采样范围在显示层级的波形区块预热（事件置欠债，心跳清偿）。
+        requestWaveformPreheatForVisible();
         // Use callAfterDelay to ensure focus grab after message loop processing
         // is complete. This is necessary because component may not be able to
         // receive focus immediately when it just became visible.

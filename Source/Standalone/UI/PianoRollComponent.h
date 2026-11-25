@@ -431,11 +431,18 @@ private:
     RasterProbe zoomCommitRasterProbe_;
     RasterProbe snapshotBuildProbe_;
     RasterProbe moveImageSectionProbe_;
+    RasterProbe waveformQueryProbe_;
     double probeReportWindowStart_ = 0.0;
     double lastVBlankMs_ = 0.0;
 
-    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint, ZoomPreviewPaint, ZoomCommitRaster, SnapshotBuild, MoveImageSection };
+    enum class RenderProbePoint { StaticRaster, ContentRaster, OverlayPresent, RootPaint, VBlankToRootPaint, ZoomPreviewPaint, ZoomCommitRaster, SnapshotBuild, MoveImageSection, WaveformQuery };
     void recordRenderProbe(RenderProbePoint point, double elapsedMs, int samples = 1);
+
+    // ── 波形 mipmap 预热（心跳驱动，无 timer）────────────────
+    // 事件置「预热欠债」：进入卷帘视图/相机激活（缩放、滚动提交）/音频内容变更。
+    // 欠债存在期间心跳使用更大预算，优先构建当前可见采样范围在当前显示层级
+    // 覆盖的区块；可见范围建完即还清欠债、恢复常驻预算。
+    void requestWaveformPreheatForVisible();
 
     // ── 保留式相机更新 ────────────────────────────────────────
     // 满足增量条件时提交相机位移，返回波形横移暴露的物理像素范围；
@@ -787,6 +794,8 @@ private:
     std::unique_ptr<PianoRollRenderer> renderer_;
     std::unique_ptr<PianoRollToolHandler> toolHandler_;
     mutable WaveformMipmapCache waveformMipmapCache_;
+    // F0 投影点列设备无关缓存（快照/投影/scheme 键控，绘制 pass 末尾裁剪）
+    F0VisualCacheStore f0VisualCache_;
 
     uint64_t lastKnownNotesRevision_ = 0;
     uint64_t lastKnownPitchRevision_ = 0;

@@ -131,32 +131,9 @@ static F0FrameRange visibleFrameRange(const PianoRollTimeMap& map,
             juce::jlimit(0, totalFrames, pastVisible + marginFrames)};
 }
 
-struct F0VisualPoint
-{
-    float x = 0.0f;
-    float y = 0.0f;
-    float levelHotMix = 0.0f;
-    juce::Colour noteColour; // 音符实际颜色（考虑修正幅度）
-};
-
-struct F0VisualSegment
-{
-    std::vector<F0VisualPoint> points;
-    // path 覆盖范围（points 内连续下标）：条带命中点段并前后各夹一个点，
-    // 使描边跨越条带边界、边缘辉光仍覆盖 rasterBounds；渐变继续使用全部点。
-    int pathFirst = 0;
-    int pathLast = -1;
-};
-
 // 绘制条带（屏幕 X 域，含描边/辉光余量）：段级命中判定用。命中段保持全段
 // 连续 X 投影与完整点列（渐变端点、色标口径与整绘一致），Y 与 path 构造只
 // 覆盖条带周边；与条带无交集的段跳过全部逐帧几何。
-
-static float smootherStep(float value) noexcept
-{
-    const float t = juce::jlimit(0.0f, 1.0f, value);
-    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
-}
 
 static void appendLinearF0Path(juce::Path& path,
                                const std::vector<F0VisualPoint>& points,
@@ -273,142 +250,6 @@ static bool buildNoteBlobPath(
     return true;
 }
 
-/// Reference traversal + bounded geometry: one producer scan over the viewport
-/// window computes the energy min/max reference（与整绘同源的着色参考，条带
-/// 补绘共用，保证同一像素颜色一致）and captures continuous voiced runs
-/// （帧范围 + 频率样本）。Only runs intersecting the draw band build geometry:
-/// per-frame X projection stays full-run（渐变端点为真实端点、色标口径与整绘
-/// 一致），while Y and path construction cover only the band neighbourhood
-/// （条带命中点段前后各夹一个点，描边跨越条带边界，边缘辉光仍覆盖
-/// rasterBounds）。run 内每帧一个点，一帧一点一一对应。
-/// Producer receives a sink(startFrame, data, length, gain).
-/// frameToColour maps globalFrame → colour (used for CorrectedF0 gradient tinting).
-template <typename SpanProducer, typename FX, typename FY, typename FC>
-static std::vector<F0VisualSegment> buildF0VisualSegments(
-    const std::vector<float>* originalEnergy,
-    int endFrameExclusive,
-    FX&& frameToX,
-    FY&& frameToY,
-    SpanProducer&& emitSpans,
-    FC&& frameToColour,
-    float bandX0, float bandX1)
-{
-    std::vector<F0VisualSegment> segments;
-
-    const bool hasEnergy = originalEnergy != nullptr
-        && endFrameExclusive <= static_cast<int>(originalEnergy->size());
-
-    float minEnergy = std::numeric_limits<float>::max();
-    float maxEnergy = std::numeric_limits<float>::lowest();
-
-    // ── 参考遍历（一次扫描）：能量 min/max 参考 + 连续有声段捕获 ──
-    struct F0VoicedRun
-    {
-        int firstFrame = 0;
-        int frameCount = 0;
-        std::size_t sampleBegin = 0;
-    };
-    std::vector<F0VoicedRun> runs;
-    std::vector<float> runFrequencies;
-    int runFirstFrame = 0;
-    int runFrameCount = 0;
-    std::size_t runSampleBegin = 0;
-
-    auto flushRun = [&]() {
-        if (runFrameCount == 0)
-            return;
-        runs.push_back({ runFirstFrame, runFrameCount, runSampleBegin });
-        runFrameCount = 0;
-    };
-
-    emitSpans([&](int start, const float* data, int length, float gain) {
-        if (!data) {
-            flushRun();
-            return;
-        }
-        for (int i = 0; i < length; ++i) {
-            const float frequency = data[i] * gain;
-            if (frequency < 20.0f || frequency > 2000.0f) {
-                flushRun();
-                continue;
-            }
-            const int globalFrame = start + i;
-            if (hasEnergy) {
-                const float energy = (*originalEnergy)[static_cast<size_t>(globalFrame)];
-                if (std::isfinite(energy)) {
-                    minEnergy = std::min(minEnergy, energy);
-                    maxEnergy = std::max(maxEnergy, energy);
-                }
-            }
-            if (runFrameCount == 0) {
-                runFirstFrame = globalFrame;
-                runSampleBegin = runFrequencies.size();
-            }
-            ++runFrameCount;
-            runFrequencies.push_back(frequency);
-        }
-    });
-    flushRun();
-
-    // run 内每帧一个点：X 连续投影，一帧一点一一对应；Y 占位待条带邻域回填。
-    for (const auto& run : runs) {
-        const float segX0 = frameToX(run.firstFrame);
-        const float segX1 = frameToX(run.firstFrame + run.frameCount - 1);
-        if (segX1 < bandX0 || segX0 > bandX1)
-            continue;
-
-        F0VisualSegment segment;
-        segment.points.reserve(static_cast<std::size_t>(run.frameCount));
-        for (int i = 0; i < run.frameCount; ++i) {
-            const int frame = run.firstFrame + i;
-            const float x = frameToX(frame);
-            float hotMix = 0.0f;
-            if (hasEnergy) {
-                const float energy = (*originalEnergy)[static_cast<std::size_t>(frame)];
-                const float normalized = juce::jlimit(0.0f, 1.0f,
-                    (energy - minEnergy) / juce::jmax(1e-6f, maxEnergy - minEnergy));
-                hotMix = 0.34f * smootherStep(normalized);
-            }
-            segment.points.push_back({x, 0.0f, hotMix, frameToColour(frame)});
-        }
-
-        // path 覆盖条带命中点段并前后各夹一个点：描边跨越条带边界，边缘辉光仍覆盖 rasterBounds。
-        const auto first = std::lower_bound(segment.points.begin(), segment.points.end(), bandX0,
-            [](const F0VisualPoint& point, float x) { return point.x < x; });
-        const auto last = std::upper_bound(segment.points.begin(), segment.points.end(), bandX1,
-            [](float x, const F0VisualPoint& point) { return x < point.x; });
-        constexpr int neighbours = 1;
-        segment.pathFirst = std::max(0, static_cast<int>(first - segment.points.begin()) - neighbours);
-        segment.pathLast = std::min(static_cast<int>(segment.points.size()) - 1,
-                                    static_cast<int>(last - segment.points.begin()) + neighbours - 1);
-
-        for (int point = segment.pathFirst; point <= segment.pathLast; ++point) {
-            const std::size_t sample = run.sampleBegin + static_cast<std::size_t>(point);
-            segment.points[static_cast<std::size_t>(point)].y =
-                frameToY(run.firstFrame + point, runFrequencies[sample]);
-        }
-        segments.push_back(std::move(segment));
-    }
-
-    return segments;
-}
-
-// Convenience overload for OriginalF0 / F0 selection: no per-frame colour callback.
-template <typename SpanProducer, typename FX, typename FY>
-static std::vector<F0VisualSegment> buildF0VisualSegments(
-    const std::vector<float>* originalEnergy,
-    int endFrameExclusive,
-    FX&& frameToX,
-    FY&& frameToY,
-    SpanProducer&& emitSpans,
-    float bandX0, float bandX1)
-{
-    return buildF0VisualSegments(originalEnergy, endFrameExclusive,
-        std::forward<FX>(frameToX), std::forward<FY>(frameToY),
-        std::forward<SpanProducer>(emitSpans),
-        [](int) { return juce::Colours::grey; }, bandX0, bandX1);
-}
-
 } // namespace
 
 void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
@@ -497,6 +338,17 @@ void PianoRollRenderer::drawUnvoicedFrameBands(juce::Graphics& g,
     }
 }
 
+std::pair<int, int> PianoRollRenderer::waveformColumnBounds(
+    bool fullRaster, const juce::Rectangle<int>& rasterBounds,
+    int width, int contentStartX, int segStartX, int segEndX) noexcept
+{
+    // 损伤扩边 2px（全量栅格无损伤 = 内容视口），placement 整数列界硬裁。
+    const auto damage = fullRaster ? juce::Rectangle<int>() : rasterBounds.expanded(2, 0);
+    const int startX = damage.isEmpty() ? contentStartX : std::max(damage.getX(), contentStartX);
+    const int endX = damage.isEmpty() ? width : std::min(damage.getRight(), width);
+    return { std::max(startX, segStartX), std::min(endX, segEndX) };
+}
+
 void PianoRollRenderer::drawWaveform(juce::Graphics& g,
                                       const RenderContext& ctx,
                                       PlacedContent item,
@@ -507,7 +359,8 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
         return;
 
     auto damageContext = ctx;
-    if (!ctx.rasterBounds.isEmpty())
+    const bool fullRaster = ctx.rasterBounds.isEmpty();
+    if (!fullRaster)
         damageContext.rasterBounds = ctx.rasterBounds.expanded(2, 0);
     const auto visibleWindow = computeVisibleTimeWindow(damageContext, item);
     if (!visibleWindow.isValid())
@@ -527,8 +380,8 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     // segment edges (visible when T_start > 0, e.g. capture segments).
     const int segStartX = ctx.coords.timeToX(item.placement.projection.timelineStartSeconds);
     const int segEndX = ctx.coords.timeToX(item.placement.projection.timelineEndSeconds());
-    const int drawStartX = std::max(startX, segStartX);
-    const int drawEndX = std::min(endX, segEndX);
+    const auto [drawStartX, drawEndX] = waveformColumnBounds(
+        fullRaster, ctx.rasterBounds, ctx.width, ctx.contentStartX, segStartX, segEndX);
     if (drawEndX <= drawStartX) return;
 
     // 波形是时间参考，垂直居中在当前视口，不跟随音高滚动或纵向缩放。
@@ -547,6 +400,10 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
     jassert(item.content.committedSnapshot->timeGrid);
     const PianoRollTimeMap map(item.placement.projection,
                                *item.content.committedSnapshot->timeGrid, ctx.coords);
+
+    // [PR-Perf] WaveformQuery：逐像素 queryExactPeak 查询环累计耗时（缓存命中的
+    // 区块消费与未建区块的 PCM 下沉扫描都计入），全量波形栅格由调用方结算。
+    const double waveformQueryStartMs = juce::Time::getMillisecondCounterHiRes();
 
     double sourceStart = map.xToSource(drawStartX);
     for (int x = drawStartX; x < drawEndX; ++x)
@@ -567,6 +424,8 @@ void PianoRollRenderer::drawWaveform(juce::Graphics& g,
         waveformPath.startNewSubPath(fx, yMin - padding);
         waveformPath.lineTo(fx, yMax + padding);
     }
+
+    waveformQueryMs += juce::Time::getMillisecondCounterHiRes() - waveformQueryStartMs;
 
     if (!waveformPath.isEmpty())
     {
@@ -1567,7 +1426,8 @@ void PianoRollRenderer::drawF0SelectionHighlight(juce::Graphics& g,
 
 void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
                                      const RenderContext& ctx,
-                                     PlacedContent item)
+                                     PlacedContent item,
+                                     F0VisualCacheStore& f0CacheStore)
 {
     if (item.content.f0Timeline.isEmpty())
         return;
@@ -1578,6 +1438,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
     if (!ctx.showOriginalF0 && !ctx.showCorrectedF0)
         return;
+
+    // F0 投影缓存解析在绘制开关判定之后：两条 F0 线都隐藏时不构建投影。
+    const F0VisualCacheEntry* f0Cache = f0CacheStore.resolve(item.content.ownerSnapshot,
+                                                             item.content.committedSnapshot,
+                                                             item.placement.projection);
 
     // 绘制条带（屏幕 X 域，扩描边/辉光余量）决定段级命中域；全视口帧区间固定
     // 着色参考，命中段渐变使用真实端点，折线只覆盖条带周边且条带内与整绘一致。
@@ -1597,6 +1462,11 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
     const PianoRollTimeMap map(item.placement.projection,
                                *item.content.committedSnapshot->timeGrid, ctx.coords);
     const auto makeFrameToX = [&](int frame) -> float {
+        // 缓存命中：X = coords.timeToXExact(缓存 timeline 秒)。缓存条目的 timeline 秒
+        // 由同一 (projection, timeGrid, 曲线帧时间) 经 sourceToTimeline 计算，与其复合链
+        // sourceToXExact(t) = coords.timeToXExact(sourceToTimeline(t)) 逐位一致。
+        if (f0Cache != nullptr)
+            return static_cast<float>(ctx.coords.timeToXExact(f0Cache->timelineSeconds[static_cast<std::size_t>(frame)]));
         return static_cast<float>(map.sourceToXExact(item.content.f0Timeline.timeAtFrame(frame)));
     };
 
@@ -1817,6 +1687,8 @@ void PianoRollRenderer::drawF0Curve(juce::Graphics& g,
 
         auto frameToColour = makeFrameToColour();
 
+        // 发射/合并/长度判定语义在直算原语内（修正段守卫依赖窗口端点）；
+        // 缓存只替换 makeFrameToX 的 X 源（timeline 秒），发射域仍是本窗口。
         const auto visualSegments = buildF0VisualSegments(
             originalEnergy, endFrame, makeFrameToX, makeFrameToY, correctedProducer,
             frameToColour, bandX0, bandX1);

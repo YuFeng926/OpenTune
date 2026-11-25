@@ -171,7 +171,7 @@ int main()
     constexpr int level = WaveformMipmap::kNumLevels - 1;
     auto& coarse = mipmap.getLevel(level);
     coarse.peaks[0] = referencePeak(*buffer, 0, WaveformMipmap::kSamplesPerPeak[level]);
-    coarse.buildProgress = 1;
+    coarse.markBuilt(0);
     runRangeSuite(mipmap, *buffer, "partial-build");
 
     // 层级透明：同一区间在构建中途与构建完成后的结果逐位一致
@@ -202,6 +202,375 @@ int main()
         const auto silent = mipmap.queryExactPeak(45000, 46000);
         check(silent.has_value() && silent->isZero(),
               "fully silent range is valid zero data, not empty");
+    }
+
+    // ── 预热欠债：窗口区块优先建（事件 → requestPreheat → 心跳清偿）， ──
+    // ── 乱序位图构建过程中查询仍逐位一致，欠债在窗口建完时自动清偿。 ──
+    {
+        // 长音频：level 0 窗口区块远小于总量，保证欠债清偿时窗口外仍有未建区块。
+        constexpr int64_t bigSamples = 3000001;
+        auto bigBuffer = std::make_shared<juce::AudioBuffer<float>>(2, static_cast<int>(bigSamples));
+        std::mt19937 rng(0x1EAFBEEFu);
+        std::uniform_real_distribution<float> amplitude(-1.0f, 1.0f);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* data = bigBuffer->getWritePointer(ch);
+            for (int64_t i = 0; i < bigSamples; ++i)
+            {
+                if (i % 8171 == 0)
+                    data[i] = (i % 16343 == 0) ? 1.0f : -1.0f;
+                else if (i % 4099 < 24)
+                    data[i] = static_cast<float>(i % 7) * 1.0e-4f;
+                else
+                    data[i] = amplitude(rng);
+            }
+        }
+
+        WaveformMipmap warm;
+        warm.setAudioSource(bigBuffer);
+        const int64_t windowStart = bigSamples / 5;
+        const int64_t windowEnd = windowStart + bigSamples / 5;
+
+        warm.requestPreheat(windowStart, windowEnd, WaveformMipmap::kNumLevels);
+        check(warm.hasPreheatDebt(), "preheat window arms debt");
+
+        // 建置过程中的窗口查询逐位等于真实 PCM 参考
+        const auto wantWindow = referencePeak(*bigBuffer, windowStart, windowEnd);
+        const auto midWindow = warm.queryExactPeak(windowStart, windowEnd);
+        check(midWindow.has_value() && midWindow->min == wantWindow.min && midWindow->max == wantWindow.max,
+              "preheat window query matches PCM mid-build");
+
+        while (warm.hasPreheatDebt())
+            warm.buildIncremental(4.0);
+        check(!warm.hasPreheatDebt(), "debt cleared once window built");
+
+        const auto& lvl0 = warm.getLevel(0);
+        const int64_t spp0 = WaveformMipmap::kSamplesPerPeak[0];
+        const int64_t w0 = windowStart / spp0;
+        const int64_t w1 = (windowEnd + spp0 - 1) / spp0;
+        bool windowFullyBuilt = true;
+        for (int64_t b = w0; b < w1; ++b)
+            windowFullyBuilt = windowFullyBuilt && lvl0.isBuilt(b);
+        check(windowFullyBuilt, "window blocks fully built at level 0 after debt cleared");
+
+        bool hasUnbuiltOutside = false;
+        const int64_t total0 = static_cast<int64_t>(lvl0.peaks.size());
+        for (int64_t b = 0; b < total0 && !hasUnbuiltOutside; ++b)
+            if ((b < w0 || b >= w1) && !lvl0.isBuilt(b))
+                hasUnbuiltOutside = true;
+        check(hasUnbuiltOutside, "outside-window blocks lag behind window priority");
+
+        runRangeSuite(warm, *bigBuffer, "preheat-mid-build");
+        while (!warm.isComplete())
+            warm.buildIncremental(4.0);
+        runRangeSuite(warm, *bigBuffer, "preheat-complete");
+
+        // 已建完范围重复置债：无欠债
+        warm.requestPreheat(windowStart, windowEnd, WaveformMipmap::kNumLevels);
+        check(!warm.hasPreheatDebt(), "re-arming built window sets no debt");
+
+        // 空窗口与零层级不置债
+        warm.requestPreheat(windowStart, windowStart, WaveformMipmap::kNumLevels);
+        check(!warm.hasPreheatDebt(), "empty window sets no debt");
+        warm.requestPreheat(windowStart, windowEnd, 0);
+        check(!warm.hasPreheatDebt(), "zero level count sets no debt");
+    }
+
+    // ── 阻断 2 回归（共用 12M 样本源：窗口区块量 > 单片预算，窗口通道语义可确定断言）──
+    {
+        constexpr int64_t bigSamples = 12000001;
+        auto bigBuffer = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(bigSamples));
+        std::mt19937 rng(0x5EED0123u);
+        std::uniform_real_distribution<float> amplitude(-1.0f, 1.0f);
+        {
+            auto* data = bigBuffer->getWritePointer(0);
+            for (int64_t i = 0; i < bigSamples; ++i)
+                data[i] = amplitude(rng);
+        }
+        const int64_t spp0 = WaveformMipmap::kSamplesPerPeak[0];
+
+        // 窗口起点语义：置债后从窗口起点开始建，不从头扫前缀。
+        {
+            WaveformMipmap warm;
+            warm.setAudioSource(bigBuffer);
+            const int64_t winStart = bigSamples * 2 / 3;
+            const int64_t winEnd = winStart + bigSamples / 4;
+
+            warm.requestPreheat(winStart, winEnd, 1);
+            check(warm.hasPreheatDebt(), "tail window arms debt");
+
+            warm.buildIncremental(1.0);
+            const auto& lvl = warm.getLevel(0);
+            const int64_t w0 = winStart / spp0;
+            // 第一片之后：窗口起点之前的区块全部未建（从头扫前缀即为本断言失败）。
+            bool prefixUnbuilt = true;
+            for (int64_t b = 0; b < w0 && prefixUnbuilt; ++b)
+                prefixUnbuilt = prefixUnbuilt && !lvl.isBuilt(b);
+            check(prefixUnbuilt, "window channel starts at window start, not sample 0");
+
+            bool windowProgressed = false;
+            for (int64_t b = w0; b < winEnd / spp0 && !windowProgressed; ++b)
+                windowProgressed = lvl.isBuilt(b);
+            check(windowProgressed, "window channel builds inside the window");
+
+            while (warm.hasPreheatDebt())
+                warm.buildIncremental(1.0);
+            check(!warm.hasPreheatDebt(), "tail window debt clears from window start");
+            bool windowFullyBuilt = true;
+            const int64_t w1 = (winEnd + spp0 - 1) / spp0;
+            for (int64_t b = w0; b < w1; ++b)
+                windowFullyBuilt = windowFullyBuilt && lvl.isBuilt(b);
+            check(windowFullyBuilt, "window blocks fully built after debt cleared");
+        }
+
+        // 跨层窗口优先：窗口涉及的最细层在粗层全曲未完成前即可推进。
+        {
+            WaveformMipmap warm;
+            warm.setAudioSource(bigBuffer);
+            const int64_t winStart = bigSamples / 3;
+            const int64_t winEnd = winStart + bigSamples / 6;
+            warm.requestPreheat(winStart, winEnd, 3);
+            check(warm.hasPreheatDebt(), "multi-level window arms debt");
+
+            warm.buildIncremental(1.0);
+            const int64_t spp2 = WaveformMipmap::kSamplesPerPeak[2];
+            const auto& lvl2 = warm.getLevel(2);
+            const int64_t l2w0 = winStart / spp2;
+            bool level2WindowProgress = false;
+            for (int64_t b = l2w0; b < winEnd / spp2 && !level2WindowProgress; ++b)
+                level2WindowProgress = lvl2.isBuilt(b);
+            check(level2WindowProgress, "level 2 window builds first");
+
+            // 真正的跨层契约：L2 全曲未完整时 L1 窗口已推进。
+            const int64_t spp1 = WaveformMipmap::kSamplesPerPeak[1];
+            const auto& lvl1 = warm.getLevel(1);
+            const int64_t l1w0 = winStart / spp1;
+            bool level1WindowProgress = false;
+            for (int64_t b = l1w0; b < winEnd / spp1 && !level1WindowProgress; ++b)
+                level1WindowProgress = lvl1.isBuilt(b);
+            check(level1WindowProgress && !lvl2.fullyBuilt(),
+                  "level 1 window advances before level 2 completes its full range");
+
+            const auto& lvl5 = warm.getLevel(WaveformMipmap::kNumLevels - 1);
+            bool level5Untouched = true;
+            for (int64_t b = 0; b < static_cast<int64_t>(lvl5.peaks.size()); ++b)
+                level5Untouched = level5Untouched && !lvl5.isBuilt(b);
+
+            check(level5Untouched, "non-window coarse levels stay behind window levels");
+        }
+
+        // 右窗 → 左窗跳转：新窗独立建完，旧窗已建块保留、未建块不动。
+        {
+            WaveformMipmap warm;
+            warm.setAudioSource(bigBuffer);
+            const int64_t rightStart = bigSamples * 2 / 3;
+            const int64_t rightEnd = rightStart + bigSamples / 4;
+            warm.requestPreheat(rightStart, rightEnd, 1);
+            warm.buildIncremental(1.0);
+
+            const auto& lvl = warm.getLevel(0);
+            const auto maskAtJump = lvl.builtMask;
+            const int64_t r0 = rightStart / spp0;
+            const int64_t r1 = (rightEnd + spp0 - 1) / spp0;
+            bool rightPartiallyBuilt = false;
+            for (int64_t b = r0; b < r1 && !rightPartiallyBuilt; ++b)
+                rightPartiallyBuilt = lvl.isBuilt(b);
+            check(rightPartiallyBuilt && warm.hasPreheatDebt(),
+                  "right window partially built and still owes debt before jump");
+
+            const int64_t leftStart = bigSamples / 12;
+            const int64_t leftEnd = leftStart + bigSamples / 12;
+            // 组件置债契约是 clear-first：清残留债后按新窗口重置债。
+            warm.clearPreheat();
+            warm.requestPreheat(leftStart, leftEnd, 1);
+            check(warm.hasPreheatDebt(), "left jump arms debt");
+            while (warm.hasPreheatDebt())
+                warm.buildIncremental(1.0);
+            check(!warm.hasPreheatDebt(), "left window debt clears independently");
+
+            const int64_t l0 = leftStart / spp0;
+            const int64_t l1 = (leftEnd + spp0 - 1) / spp0;
+            bool leftFullyBuilt = true;
+            for (int64_t b = l0; b < l1; ++b)
+                leftFullyBuilt = leftFullyBuilt && lvl.isBuilt(b);
+            check(leftFullyBuilt, "left window fully built after jump");
+
+            bool rightUnchanged = true;
+            for (int64_t b = r0; b < r1 && rightUnchanged; ++b)
+            {
+                const bool builtAtJump = (maskAtJump[static_cast<std::size_t>(b >> 6)]
+                    >> (static_cast<unsigned>(b) & 63u)) & 1u;
+                rightUnchanged = rightUnchanged && lvl.isBuilt(b) == builtAtJump;
+            }
+            check(rightUnchanged, "right window blocks unchanged across the jump");
+        }
+
+        // 同内容多 placement：两个独立窗口各自推进、各自清偿，不合并不互斥。
+        {
+            WaveformMipmap warm;
+            warm.setAudioSource(bigBuffer);
+            const int64_t winA0 = bigSamples / 12;
+            const int64_t winA1 = winA0 + bigSamples / 96;
+            const int64_t winB0 = bigSamples * 2 / 3;
+            const int64_t winB1 = winB0 + bigSamples / 96;
+            warm.requestPreheat(winA0, winA1, 1);
+            warm.requestPreheat(winB0, winB1, 1);
+            check(warm.hasPreheatDebt(), "two disjoint windows arm debt");
+
+            warm.buildIncremental(1.0);
+            check(!warm.hasPreheatDebt(), "both small windows clear debt in one slice");
+
+            const auto& lvl = warm.getLevel(0);
+            bool windowAFullyBuilt = true;
+            for (int64_t b = winA0 / spp0; b < (winA1 + spp0 - 1) / spp0; ++b)
+                windowAFullyBuilt = windowAFullyBuilt && lvl.isBuilt(b);
+            bool windowBFullyBuilt = true;
+            for (int64_t b = winB0 / spp0; b < (winB1 + spp0 - 1) / spp0; ++b)
+                windowBFullyBuilt = windowBFullyBuilt && lvl.isBuilt(b);
+            check(windowAFullyBuilt && windowBFullyBuilt,
+                  "both windows fully built independently");
+        }
+
+        // 缓存层清债与欠债优先：清债后重置债按新 key 窗口先建。
+        {
+            WaveformMipmapCache cache;
+            const ContentKey keyA{DomainKind::StandaloneClip, 77, 0};
+            const ContentKey keyB{DomainKind::StandaloneClip, 78, 0};
+            cache.setAudioSource(keyA, bigBuffer);
+            cache.setAudioSource(keyB, bigBuffer);
+
+            const int64_t tailStart = bigSamples * 2 / 3;
+            const int64_t tailEnd = tailStart + bigSamples / 4;
+
+            cache.requestPreheat(keyA, tailStart, tailEnd, 1);
+            check(cache.hasPreheatDebt(), "cache debt armed for stale key");
+            cache.clearPreheatDebt();
+            check(!cache.hasPreheatDebt(), "clearPreheatDebt clears stale window debt");
+
+            cache.requestPreheat(keyB, tailStart, tailEnd, 1);
+            check(cache.hasPreheatDebt(), "debt re-armed for the fresh key");
+
+            cache.buildIncremental(1.0);
+            const auto& lvlB = cache.get(keyB)->getLevel(0);
+            const int64_t tw0 = tailStart / spp0;
+            bool keyBWindowProgress = false;
+            for (int64_t b = tw0; b < tailEnd / spp0 && !keyBWindowProgress; ++b)
+                keyBWindowProgress = lvlB.isBuilt(b);
+            const auto& lvlA = cache.get(keyA)->getLevel(0);
+            bool keyAUntouched = true;
+            for (int64_t b = tw0; b < tailEnd / spp0; ++b)
+                keyAUntouched = keyAUntouched && !lvlA.isBuilt(b);
+            check(keyBWindowProgress && keyAUntouched,
+                  "debted key's window builds first; cleared key untouched");
+        }
+
+        // 双欠债 key 跨拍进展：第一轮把剩余预算均分给欠债 key（份额轮转），
+        // 两个 key 每拍都推进。
+        {
+            WaveformMipmapCache cache;
+            const ContentKey keyA{DomainKind::StandaloneClip, 97, 0};
+            const ContentKey keyB{DomainKind::StandaloneClip, 98, 0};
+            cache.setAudioSource(keyA, bigBuffer);
+            cache.setAudioSource(keyB, bigBuffer);
+
+            const int64_t winA0 = 0;
+            const int64_t winA1 = bigSamples * 1 / 3;
+            const int64_t winB0 = bigSamples * 2 / 3;
+            const int64_t winB1 = bigSamples;
+            cache.requestPreheat(keyA, winA0, winA1, 1);
+            cache.requestPreheat(keyB, winB0, winB1, 1);
+            check(cache.hasPreheatDebt(), "two debtors arm debt");
+
+            const auto builtInWindow = [&](const WaveformMipmap& m, int64_t start, int64_t end) {
+                const auto& lvl = m.getLevel(0);
+                int64_t count = 0;
+                for (int64_t b = start / spp0; b < (end + spp0 - 1) / spp0; ++b)
+                    if (lvl.isBuilt(b))
+                        ++count;
+                return count;
+            };
+
+            int64_t prevA = builtInWindow(*cache.get(keyA), winA0, winA1);
+            int64_t prevB = builtInWindow(*cache.get(keyB), winB0, winB1);
+            for (int beat = 0; beat < 3; ++beat)
+            {
+                cache.buildIncremental(1.0);
+                const int64_t nowA = builtInWindow(*cache.get(keyA), winA0, winA1);
+                const int64_t nowB = builtInWindow(*cache.get(keyB), winB0, winB1);
+                check(nowA > prevA && nowB > prevB,
+                      "both debtors progress within one beat (share rotation)");
+                prevA = nowA;
+                prevB = nowB;
+            }
+        }
+
+        // 移除最后一个未完成 key 立即刷新完成标志：稳态直接生效，
+        // 全建后相机移动零快照读取的快速路径不再被过期标志挡住。
+        {
+            WaveformMipmapCache cache;
+            const ContentKey keyA{DomainKind::StandaloneClip, 95, 0};
+            const ContentKey keyB{DomainKind::StandaloneClip, 96, 0};
+            cache.setAudioSource(keyA, bigBuffer);
+            auto slowBuffer = std::make_shared<juce::AudioBuffer<float>>(
+                1, static_cast<int>(bigSamples) * 4);
+            {
+                std::mt19937 rng(0x5EED9876u);
+                std::uniform_real_distribution<float> amplitude(-1.0f, 1.0f);
+                auto* data = slowBuffer->getWritePointer(0);
+                for (int64_t i = 0; i < bigSamples * 4; ++i)
+                    data[i] = amplitude(rng);
+            }
+            cache.setAudioSource(keyB, slowBuffer);
+            while (!cache.get(keyA)->isComplete())
+                cache.buildIncremental(4.0);
+            check(!cache.isComplete(), "incomplete key keeps the cache incomplete");
+
+            cache.remove(keyB);
+            check(cache.isComplete(),
+                  "removing the last incomplete key completes the cache immediately");
+            cache.requestPreheat(keyA, 0, 1024, 1);
+            check(!cache.hasPreheatDebt(), "steady-state cache takes no debt after arm");
+        }
+    }
+
+    // ── hasPreheatDebt 稳态 O(1)：终态快速返回不进 mipmap 扫描。 ──
+    {
+        constexpr int64_t smallSamples = 200001;
+        auto smallBuffer = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(smallSamples));
+        std::mt19937 rng(0x2468ACE0u);
+        std::uniform_real_distribution<float> amplitude(-1.0f, 1.0f);
+        {
+            auto* data = smallBuffer->getWritePointer(0);
+            for (int64_t i = 0; i < smallSamples; ++i)
+                data[i] = amplitude(rng);
+        }
+
+        WaveformMipmapCache cache;
+        const ContentKey keyA{DomainKind::StandaloneClip, 91, 0};
+        const ContentKey keyB{DomainKind::StandaloneClip, 92, 0};
+        cache.setAudioSource(keyA, smallBuffer);
+        cache.setAudioSource(keyB, smallBuffer);
+        while (!cache.isComplete())
+            cache.buildIncremental(8.0);
+        check(cache.isComplete() && !cache.hasPreheatDebt(), "steady state has no debt");
+
+        const uint64_t counterBefore = cache.debtScanCounter_;
+        for (int i = 0; i < 1000; ++i)
+            (void) cache.hasPreheatDebt();
+        check(cache.debtScanCounter_ == counterBefore,
+              "steady-state hasPreheatDebt takes the O(1) fast path (no scan)");
+
+        auto otherBuffer = std::make_shared<juce::AudioBuffer<float>>(1, static_cast<int>(smallSamples) * 2);
+        {
+            auto* data = otherBuffer->getWritePointer(0);
+            for (int64_t i = 0; i < smallSamples * 2; ++i)
+                data[i] = amplitude(rng);
+        }
+        cache.setAudioSource(keyB, otherBuffer);
+        check(!cache.isComplete() && !cache.hasPreheatDebt(),
+              "incomplete cache without debt still reports no debt");
+        check(cache.debtScanCounter_ > counterBefore,
+              "non-steady state scans mipmaps (counter advances)");
     }
 
     if (failures != 0)

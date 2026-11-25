@@ -762,6 +762,9 @@ set(OPENTUNE_COMMON_SOURCES
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.cpp
         Source/Standalone/UI/PianoRoll/PianoRollRenderer.h
         Source/Standalone/UI/PianoRoll/PianoRollTimeMap.h
+        Source/Standalone/UI/PianoRoll/F0VisualCache.cpp
+        Source/Standalone/UI/PianoRoll/F0VisualCache.h
+        Source/Standalone/UI/PianoRoll/F0VisualSegments.h
 
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp
         Source/Standalone/UI/PianoRoll/PianoRollToolHandler.h
@@ -2287,6 +2290,24 @@ if(OPENTUNE_BUILD_TESTS)
         juce::juce_audio_basics
         juce::juce_gui_basics)
     target_compile_definitions(OpenTunePianoRollZoomRenderTests PRIVATE JucePlugin_Build_Standalone=1)
+
+    add_executable(OpenTuneF0VisualCacheTests
+        Tests/F0VisualCacheTests.cpp
+    )
+    target_include_directories(OpenTuneF0VisualCacheTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source
+        ${CMAKE_CURRENT_SOURCE_DIR}/Source/Standalone)
+    target_link_libraries(OpenTuneF0VisualCacheTests PRIVATE
+        OpenTuneStandalone
+        OpenTuneResources
+        juce::juce_audio_basics
+        juce::juce_core
+        juce::juce_gui_basics)
+    target_compile_definitions(OpenTuneF0VisualCacheTests PRIVATE JucePlugin_Build_Standalone=1)
+    if(MSVC)
+        target_compile_options(OpenTuneF0VisualCacheTests PRIVATE /utf-8 /EHsc)
+    endif()
+    add_test(NAME F0VisualCacheTests COMMAND OpenTuneF0VisualCacheTests)
 
     add_executable(OpenTuneWaveformRangePeakTests
         Tests/WaveformRangePeakTests.cpp

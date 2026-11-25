@@ -548,6 +548,18 @@ public:
         return copiedCurve;
     }
 
+    /// 派生可变副本：新 PitchCurve 对象共享当前不可变快照（拷贝构造因
+    /// atomic 成员不可用），后续 replaceXXX 在副本上发布新快照，不回写本对象。
+    /// 用于内容 owner 的「读出-修改-整体提交」写入模式。
+    std::shared_ptr<PitchCurve> deriveCopy() const
+    {
+        auto derived = std::make_shared<PitchCurve>();
+        std::atomic_store(&derived->snapshot_, getSnapshot());
+        derived->nextRenderGeneration_.store(
+            nextRenderGeneration_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return derived;
+    }
+
 private:
     std::shared_ptr<const PitchCurveSnapshot> snapshot_;
     std::atomic<uint64_t> nextRenderGeneration_{1};

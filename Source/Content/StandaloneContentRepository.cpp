@@ -40,6 +40,17 @@ StandaloneClipContent* StandaloneContentRepository::findClip(ContentKey key) con
     return findClipImpl(static_cast<StandaloneClipId>(key.objectId));
 }
 
+std::shared_ptr<const EditableContentSnapshot>
+StandaloneContentRepository::snapshotFor(ContentKey key) const
+{
+    if (key.domainKind != DomainKind::StandaloneClip)
+        return nullptr;
+
+    juce::ScopedReadLock rl(lock_);
+    auto* clip = findClipImpl(static_cast<StandaloneClipId>(key.objectId));
+    return clip ? clip->snapshotContent() : nullptr;
+}
+
 bool StandaloneContentRepository::retireClip(ContentKey key)
 {
     if (key.domainKind != DomainKind::StandaloneClip)

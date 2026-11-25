@@ -479,8 +479,7 @@ bool testSplitMergeHistorySurvivesBothReplayDirections()
     auto* content = repository->findClip(original.contentKey);
     auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 88200);
     audio->clear();
-    content->content().sourceWindow = {111, {}, 0.0, 2.0};
-    content->content().nativeSource = {audio, 44100.0, 0};
+    content->applyImportedSource({111, {}, 0.0, 2.0}, {audio, 44100.0, 0}, 0);
     content->applyAudioBuffer(audio, 44100.0);
     auto curve = std::make_shared<OpenTune::PitchCurve>();
     curve->setSampleRate(44100.0);
@@ -778,8 +777,7 @@ bool testNotesOnlyMenuAndControlParity()
     auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 88200);
     audio->clear();
     const auto sourceId = processor.getSourceStore()->createSource({"parity", {}, audio, 44100.0, 1, 88200});
-    content->content().sourceWindow = {sourceId, {}, 0.0, 2.0};
-    content->content().nativeSource = {audio, 44100.0, 0};
+    content->applyImportedSource({sourceId, {}, 0.0, 2.0}, {audio, 44100.0, 0}, 0);
     content->applyAudioBuffer(audio, 44100.0);
     auto curve = std::make_shared<OpenTune::PitchCurve>();
     curve->replaceOriginalAnalysis(std::vector<float>(200, 220.0f), {}, 441, 44100.0);
@@ -911,11 +909,11 @@ bool testControlAutoTunePreservesUnrequestedCorrectionGap()
         std::fill_n(samples + 348390, 8820, 0.0f);
         std::fill_n(samples + 701190, 8820, 0.0f);
     }
-    content->content().sourceWindow = {
-        111, {}, 0.0, static_cast<double>(sampleCount) / OpenTune::RenderCache::kSampleRate};
-    content->content().nativeSource = {audio, OpenTune::RenderCache::kSampleRate, 0};
+    content->applyImportedSource(
+        {111, {}, 0.0, static_cast<double>(sampleCount) / OpenTune::RenderCache::kSampleRate},
+        {audio, OpenTune::RenderCache::kSampleRate, 0}, 0);
     content->applyAudioBuffer(audio, OpenTune::RenderCache::kSampleRate);
-    content->content().analysis.silentGaps = OpenTune::SilentGapDetector::detectAllGapsAdaptive(*audio);
+    content->applySilentGaps(OpenTune::SilentGapDetector::detectAllGapsAdaptive(*audio));
     if (!expect(content->content().analysis.silentGaps.size() == 2,
                 "multi-range AUTO fixture must detect its two split gaps"))
         return false;

@@ -20,7 +20,17 @@ ContentKey StandaloneClipContent::contentKey() const
 
 std::shared_ptr<const EditableContentSnapshot> StandaloneClipContent::snapshotContent() const
 {
-    return std::make_shared<const EditableContentSnapshot>(makeContentSnapshot(content_));
+    // 冷快照发布的互斥边界：仓库读锁允许多读者共存，惰性缓存的 token/指针
+    // 写入由本锁串行化。提交路径（apply*）与快照读不取本锁、无读写并发保证
+    // （消息线程单线程所有权）；本锁唯一保证的是双冷读者的发布串行化。
+    std::lock_guard<std::mutex> guard(snapshotMutex_);
+    if (cachedSnapshot_ != nullptr && cachedSnapshotToken_ == snapshotToken_)
+        return cachedSnapshot_;
+
+    auto snapshot = std::make_shared<const EditableContentSnapshot>(makeContentSnapshot(content_));
+    cachedSnapshotToken_ = snapshotToken_;
+    cachedSnapshot_ = std::move(snapshot);
+    return cachedSnapshot_;
 }
 
 // ── Lifecycle ───────────────────────────────────────────────
@@ -39,6 +49,7 @@ void StandaloneClipContent::retireContent(ContentKey key)
     content_ = ContentState{};
 
     retired_.push_back(std::move(record));
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::reviveContent(ContentKey key)
@@ -51,6 +62,7 @@ void StandaloneClipContent::reviveContent(ContentKey key)
             content_ = std::move(it->content);
             lifecycle_ = ContentLifecycle::Ready;
             bumpContentRevision();
+            bumpSnapshotToken();
             retired_.erase(it);
             return;
         }
@@ -87,14 +99,32 @@ bool StandaloneClipContent::hasActiveContent() const
 
 // ── Apply commands ──────────────────────────────────────────
 
-void StandaloneClipContent::applyNotes(std::vector<Note> notes)
+void StandaloneClipContent::initializeContent(ContentState payload)
+{
+    // TimeGrid 由各 owner 入口（import/split/merge/copy/restore）按权威
+    // source window duration 显式初始化；这里只提交完整 payload，不再补造或改写。
+    content_ = std::move(payload);
+    bumpSnapshotToken();
+}
+
+void StandaloneClipContent::applyNotes(std::vector<Note> notes, bool topologyInitialized)
 {
     content_.notes = std::move(notes);
     for (auto& note : content_.notes)
         note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
-    content_.noteTopologyInitialized = true;
+    content_.noteTopologyInitialized = topologyInitialized;
     ++content_.notesRevision;
     bumpContentRevision();
+    bumpSnapshotToken();
+}
+
+void StandaloneClipContent::applyImportedSource(SourceWindow window, NativePcmSource nativeSource,
+                                                int64_t firstCanonicalSample)
+{
+    content_.sourceWindow = std::move(window);
+    content_.nativeSource = std::move(nativeSource);
+    content_.firstCanonicalSample = firstCanonicalSample;
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyVolumeEnvelope(AutomationLane envelope)
@@ -103,24 +133,30 @@ void StandaloneClipContent::applyVolumeEnvelope(AutomationLane envelope)
     for (auto& note : content_.notes)
         note.outputGainDb = content_.volumeEnvelope.evalAt(note.startTime);
     ++content_.notesRevision;
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyPitchCurve(std::shared_ptr<PitchCurve> curve)
 {
-    content_.analysis.pitchCurve = std::move(curve);
+    // 发布边界转交独立对象：owner 内容里的曲线与调用方保留的句柄分属两个
+    // PitchCurve 对象（共享同一不可变快照），提交后经旧句柄改写不影响 owner。
+    content_.analysis.pitchCurve = curve ? curve->deriveCopy() : nullptr;
     ++content_.pitchRevision;
     bumpContentRevision();
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyOriginalF0(std::shared_ptr<PitchCurve> curve)
 {
     // 一次性提交：curve + Ready 状态 + 单次 analysis/content revision。
     // 不调用 applyOriginalF0State，避免同一次提交双 bump。
-    content_.analysis.pitchCurve = std::move(curve);
+    // 发布边界转交独立对象（同 applyPitchCurve）。
+    content_.analysis.pitchCurve = curve ? curve->deriveCopy() : nullptr;
     content_.analysis.setOriginalF0State(OriginalF0State::Ready);
     ++content_.analysis.analysisRevision;
     ++content_.pitchRevision;
     bumpContentRevision();
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot> snapshot)
@@ -129,6 +165,7 @@ void StandaloneClipContent::applyTimeGrid(std::shared_ptr<const TimeGridSnapshot
         return;
     content_.timeGrid = std::move(snapshot);
     ++content_.timeGridRevision;
+    bumpSnapshotToken();
 }
 
 bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& state)
@@ -136,34 +173,59 @@ bool StandaloneClipContent::applyPitchShiftState(const PitchShiftEditState& stat
     if (content_.analysis.pitchCurve == nullptr)
         return false;
 
+    // 曲线不可变别名：修正段写入以新曲线对象整体提交（写时复制），
+    // 公开内容里不存在可就地改写的可变曲线。
+    auto next = content_.analysis.pitchCurve->deriveCopy();
+    next->replaceCorrectionSegments(state.segments);
     content_.notes = state.notes;
-    content_.analysis.pitchCurve->replaceCorrectionSegments(state.segments);
+    content_.analysis.pitchCurve = std::move(next);
     content_.pitchShiftSettings = state.settings;
     ++content_.notesRevision;
     ++content_.pitchRevision;
     bumpContentRevision();
+    bumpSnapshotToken();
     return true;
 }
 
 void StandaloneClipContent::applyDetectedKey(const DetectedKey& key)
 {
     content_.analysis.detectedKey = key;
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyReferenceFeatures(const ReferenceFeatureSet& features)
 {
     content_.analysis.referenceFeatures = features;
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyOriginalF0State(OriginalF0State state)
 {
-    // 幂等 setter：状态未变则不推进 revision，与 Capture/ARA owner 语义一致。
-    content_.analysis.setOriginalF0State(state);
+    // 幂等 setter：状态未变且失败原因无需清理时不推进快照令牌，
+    // 与 Capture/ARA owner 的 revision 语义一致。
+    const bool reasonCleared = state != OriginalF0State::Failed
+        && !content_.analysis.originalF0FailureReason.empty();
+    if (!content_.analysis.setOriginalF0State(state) && !reasonCleared)
+        return;
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyOriginalF0FailureReason(std::string reason)
 {
     content_.analysis.originalF0FailureReason = std::move(reason);
+    bumpSnapshotToken();
+}
+
+void StandaloneClipContent::applyPitchShiftSettings(PitchShiftSettings settings)
+{
+    content_.pitchShiftSettings = std::move(settings);
+    bumpSnapshotToken();
+}
+
+void StandaloneClipContent::applySilentGaps(std::vector<SilentGap> gaps)
+{
+    content_.analysis.silentGaps = std::move(gaps);
+    bumpSnapshotToken();
 }
 
 void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBuffer<float>> buffer, double sampleRate)
@@ -181,6 +243,7 @@ void StandaloneClipContent::applyAudioBuffer(std::shared_ptr<const juce::AudioBu
         ++content_.timeGridRevision;
     }
     bumpContentRevision();
+    bumpSnapshotToken();
 }
 
 // ── Private helpers ─────────────────────────────────────────
