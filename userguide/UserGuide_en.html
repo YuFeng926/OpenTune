@@ -68,14 +68,14 @@
     <h1>OpenTune</h1>
     <div class="subtitle">AI-Powered Pitch Correction Software</div>
     <div class="tagline">Preserve formants, pitch-shift without distortion</div>
-    <div class="version">User Guide v1.7</div>
-    <div class="version" style="margin-top: 10px;">August 2026</div>
+    <div class="version">User Guide v1.8.3</div>
+    <div class="version" style="margin-top: 10px;">November 2026</div>
 </div>
 
 <div class="toc">
     <h2>Table of Contents</h2>
     <ul>
-        <li><a href="#whats-new">★ What's New in v1.7</a></li>
+        <li><a href="#whats-new">★ What's New in v1.8.3</a></li>
         <li><a href="#intro">1. Introduction</a></li>
         <li><a href="#requirements">2. System Requirements</a></li>
         <li><a href="#install">3. Installation &amp; Launch</a></li>
@@ -87,71 +87,98 @@
         <li><a href="#schemes">9. Editing Schemes</a></li>
         <li><a href="#preferences">10. Preferences</a></li>
         <li><a href="#shortcuts">11. Keyboard Shortcuts</a></li>
-        <li><a href="#themes">12. Themes &amp; Visuals</a></li>
-        <li><a href="#gpu">13. GPU Acceleration</a></li>
-        <li><a href="#vst3">14. VST3/ARA Plugin Mode</a></li>
-        <li><a href="#export">15. Audio Export</a></li>
-        <li><a href="#faq">16. FAQ</a></li>
+        <li><a href="#accessibility">12. Accessibility Mode and Keyboard Editing</a></li>
+        <li><a href="#themes">13. Themes &amp; Visuals</a></li>
+        <li><a href="#gpu">14. GPU Acceleration</a></li>
+        <li><a href="#vst3">15. VST3/ARA Plugin Mode</a></li>
+        <li><a href="#export">16. Audio Export</a></li>
+        <li><a href="#faq">17. FAQ</a></li>
     </ul>
 </div>
 
-
 <div class="page-break"></div>
-<h2 id="whats-new">★ What's New in v1.7</h2>
+<h2 id="whats-new">★ What's New in v1.8.3</h2>
+
+<p>This chapter summarizes the changes users notice directly between v1.8.0 and v1.8.3. Operations from earlier documentation that no longer apply are rewritten in the corresponding chapters of this guide.</p>
 
 <h3>🎉 New Features</h3>
 <table>
-    <tr><th width="25%">Feature</th><th>Description</th></tr>
-    <tr><td><strong>OpenDyne Editing Mode</strong></td><td>Neural editing mode with Melodyne-style workflow: waveform visualization, pitch modulation/drift tools, volume envelope, scissors cutting, overview navigation strip</td></tr>
-    <tr><td><strong>Melodyne-style Overview</strong></td><td>Waveform preview strip merged with scrollbar, viewport navigation</td></tr>
-    <tr><td><strong>Wheel Navigation (OpenDyne)</strong></td><td>Ctrl+Wheel dual-axis zoom, Alt+Wheel vertical zoom, Shift+Wheel horizontal scroll</td></tr>
-    <tr><td><strong>Melodyne-style Zoom</strong></td><td>Cmd+Alt double-click focus/restore, arrow key precise zoom, temporary magnifier cursor</td></tr>
-    <tr><td><strong>Pitch Grid Snap</strong></td><td>Toggleable pitch grid snapping, one-click snap to nearest note</td></tr>
-    <tr><td><strong>Note Edge Retraction</strong></td><td>Automatic edge retraction when dragging notes, avoids obscuring adjacent elements</td></tr>
-    <tr><td><strong>Right-click Toolbar (OpenDyne)</strong></td><td>Right-click tool selection changed to vertical icon toolbar layout</td></tr>
-    <tr><td><strong>Timeline Overview Strip</strong></td><td>New timeline overview strip with piano roll viewport memory</td></tr>
-    <tr><td><strong>Mouse Cursor Themes</strong></td><td>3 selectable cursor styles: Adwaita, Capitaine, Breeze</td></tr>
-    <tr><td><strong>Shortcut Three-section Layout</strong></td><td>Shortcut settings page divided into General/OpenTune/OpenDyne sections</td></tr>
-    <tr><td><strong>Note-level EQ Editing</strong></td><td>Note-level EQ editing with dynamic filters and real spectrum chain</td></tr>
-    <tr><td><strong>Grid Style Switching</strong></td><td>Piano roll grid style switching between PianoLanes and EqualSpacing</td></tr>
-    <tr><td><strong>Piano Roll Background Brightness</strong></td><td>Settings &rarr; View page adds a piano roll background brightness slider (0%&ndash;200%, default 100%)</td></tr>
-    <tr><td><strong>Reference Pitch Frequency</strong></td><td>User-configurable reference pitch frequency (400&ndash;500 Hz), replacing the hardcoded 440 Hz</td></tr>
-    <tr><td><strong>VST3 Non-ARA Capture Mode</strong></td><td>New VST3 non-ARA capture mode supporting Melodyne Transfer-style capture &rarr; render &rarr; playback workflow</td></tr>
-    <tr><td><strong>Scissors Double-Click Merge</strong></td><td>Double-click a split line to merge adjacent notes; supports chained merge of multiple selected notes</td></tr>
+    <tr><th width="26%">Feature</th><th>Description</th></tr>
+    <tr><td><strong>Piano Roll Zoom Sliders</strong></td><td>A new set of zoom sliders sits at the bottom left of the view: the vertical bar zooms the pitch axis and the horizontal bar zooms the time axis. Both sliders share the same travel and zoom ratio, and dragging zooms around the center of the viewport; wheel zoom still centers on the pointer position.</td></tr>
+    <tr><td><strong>Notes Colored by Transposition Amount</strong></td><td>Notes with larger edits are colored automatically: upward shifts lean cool blue and downward shifts lean warm orange, and the color deepens as the edit grows. You can see at a glance which notes need resynthesis.</td></tr>
+    <tr><td><strong>Custom Pitch Curve Colors</strong></td><td>Preferences → View lets you choose the Original Pitch Curve Color and the Pitch Correction Curve Color separately.</td></tr>
+    <tr><td><strong>UI Zoom</strong></td><td>The View menu adds six UI Zoom levels — 75%, 90%, 100%, 110%, 125%, and 150% — so small screens and high-DPI displays both get a comfortable size.</td></tr>
+    <tr><td><strong>View Menu Toggles</strong></td><td>The View menu toggles Show Waveform, Piano Keyboard, Scale Brightness, Note Labels, and Unvoiced Frames directly, and switches the theme, mouse trail, and mouse cursor style.</td></tr>
+    <tr><td><strong>Track Colors</strong></td><td>The track context menu adds Track Color, which sets a custom color or a random color; the View menu switches how all new tracks pick colors: Random Colors / Custom Colors.</td></tr>
+    <tr><td><strong>Reorganized Preferences</strong></td><td>Settings are split into six pages — Audio, Theme, Editing, View, Shortcuts, and Mouse Trail — and you can switch pages with Ctrl+Tab and move through controls with Tab.</td></tr>
+    <tr><td><strong>Accessibility Mode</strong></td><td>When enabled, the interface supports screen reader announcements and you can select, move, resize, split, and merge notes entirely from the keyboard.</td></tr>
+    <tr><td><strong>Mouse Bindings for Shortcuts</strong></td><td>Wheel up/down/left/right, the middle button, and the side buttons can all be bound as shortcuts; the settings page groups bindings by General / OpenTune Mode / OpenDyne Mode, reports conflicts, and lets you reassign on the spot.</td></tr>
+    <tr><td><strong>Audition While Dragging Notes</strong></td><td>With Preview transposition while dragging notes enabled, dragging a note to a new pitch plays the target pitch immediately.</td></tr>
+    <tr><td><strong>Onboarding and Demo Project</strong></td><td>The first launch walks through the interface guide; when it ends, a demo song loads automatically with three follow-up tips so you hear the effect of pitch correction right away.</td></tr>
+    <tr><td><strong>About Dialog</strong></td><td>The File menu adds About OpenTune, showing the version and copyright, project address, feedback entry, and contributor list.</td></tr>
+    <tr><td><strong>Recent Projects</strong></td><td>The File menu remembers recently opened projects; open one or clear the list with a single click.</td></tr>
+    <tr><td><strong>Two Batch Import Modes</strong></td><td>When you choose several audio files at once, you can Import Sequentially To Current Track or Import To Separate Tracks.</td></tr>
+    <tr><td><strong>Time Tool (Experimental)</strong></td><td>The Time Tool is now experimental and appears in the tool area only after you turn on Enable Experimental Features in Preferences → Audio.</td></tr>
+    <tr><td><strong>Hybrid Mode</strong></td><td>With Hybrid Mode enabled in Preferences → Audio, small corrections use lightweight processing and only large corrections use AI resynthesis.</td></tr>
+    <tr><td><strong>Read Audio in the Plugin</strong></td><td>In the plugin, audio is read through the red round button at the top: ARA hosts read the currently selected region, and other hosts record it with a start/end capture.</td></tr>
+    <tr><td><strong>External Edit</strong></td><td>Inside the plugin you can hand the current pitch curve to the standalone app for detailed work, then save and return it to the plugin automatically.</td></tr>
+    <tr><td><strong>macOS 12 or Later</strong></td><td>The minimum macOS version is 12.0, and both Intel and Apple silicon run it; macOS also gets an AU component.</td></tr>
+    <tr><td><strong>Regenerate Notes</strong></td><td>The Edit menu adds Regenerate Notes, which re-splits note blocks from the existing analysis without re-analyzing the audio.</td></tr>
 </table>
 
-<h3>🐛 Fixes &amp; Optimizations</h3>
+<h3>🛠 Improvements &amp; Optimizations</h3>
 <table>
-    <tr><th width="25%">Issue</th><th>Improvement</th></tr>
-    <tr><td><strong>High Memory Usage</strong></td><td>Optimized memory management reduces resident memory by ~500–900 MB</td></tr>
-    <tr><td><strong>Poor GPU Compatibility</strong></td><td>GPU acceleration works on all major GPUs, with automatic CPU fallback</td></tr>
-    <tr><td><strong>Slow Processing</strong></td><td>GPU acceleration significantly improves processing speed</td></tr>
-    <tr><td><strong>Preferences Dialog Adaptation</strong></td><td>Adapts to different screen resolutions, supports scaling</td></tr>
+    <tr><th width="26%">Item</th><th>Improvement</th></tr>
+    <tr><td><strong>Zoom Smoothness</strong></td><td>Waveforms and pitch curves stay smooth while zooming, and dragging to zoom no longer stutters.</td></tr>
+    <tr><td><strong>Curve Display</strong></td><td>Pitch curves are drawn continuously per frame, so the curve shape stays stable while zooming without breaks or jumps.</td></tr>
+    <tr><td><strong>Auto Correction Accuracy</strong></td><td>Fixed low notes being judged as the adjacent octave; auto correction now lands closer to the sung pitch.</td></tr>
+    <tr><td><strong>Natural-Sounding Correction</strong></td><td>Note onsets, breath points, and drum hits join more smoothly during transposition, and heavily shifted audio sounds clearer.</td></tr>
+    <tr><td><strong>Clearer Render Status</strong></td><td>Playback uses the original pitch until rendering finishes; the top-right badge shows Rendering (done/total), and the corrected audio takes over automatically when rendering ends.</td></tr>
+    <tr><td><strong>No Repeated Analysis</strong></td><td>Re-importing the same audio or reopening a project reuses the existing pitch analysis, so waiting time drops noticeably.</td></tr>
+    <tr><td><strong>More Complete Project Loading</strong></td><td>Reopening a project fully restores track content, track headers, and corrected pitch curves.</td></tr>
+    <tr><td><strong>Media Archived on Save</strong></td><td>Saving a project creates a matching “ProjectName_Media” folder next to the project file and stores the audio it uses, so the project opens on another computer.</td></tr>
+    <tr><td><strong>Stable Plugin Playback</strong></td><td>Continuous playback in the host no longer stutters or repeats a fragment, and the output goes silent as soon as playback stops.</td></tr>
+    <tr><td><strong>Memory and Cache</strong></td><td>Closing or deleting a clip releases its cache promptly, so long editing sessions use less memory.</td></tr>
+    <tr><td><strong>Stability</strong></td><td>Fixed crashes and silent audio when closing the window or switching editing regions in some hosts.</td></tr>
 </table>
+
+<div class="tip">
+    <div class="tip-title">Earlier Content Updated</div>
+    Model names, model file locations, parameter ranges, default shortcuts, plugin behavior, and render status descriptions from earlier manuals are rewritten to match the actual v1.8.3 interface; this guide is the reference.
+</div>
 
 <h2 id="intro">1. Introduction</h2>
 
-<p>OpenTune is an open-source AI pitch correction application powered by a neural vocoder. Unlike traditional DSP algorithms that transpose by directly shifting pitch, OpenTune uses the PC-NSF-HiFiGAN vocoder to regenerate vocals while preserving the original formants. Even extreme pitch adjustments sound natural, solid, and artifact-free.</p>
+<p>OpenTune is an open-source AI pitch correction application built on a neural vocoder. It uses the PC-NSF-HiFiGAN vocoder to regenerate vocals while preserving the original formants, so even extreme pitch adjustments stay natural and solid.</p>
 
-<p>OpenTune offers both <strong>Standalone</strong> and <strong>VST3/ARA (DAW plugin)</strong> modes — use it as an independent multi-track editor, or embed it into your DAW for collaborative real-time editing.</p>
+<p>OpenTune offers two working modes: <strong>Standalone</strong> and <strong>VST3/ARA (DAW plugin)</strong>. Use it as an independent multi-track editor or embed it in a DAW for collaborative editing. The macOS version also provides an AU component.</p>
+
+<h3>Two Correction Methods</h3>
+<table>
+    <tr><th width="22%">Method</th><th>When to Use</th><th>Sound and Speed</th></tr>
+    <tr><td><strong>Lightweight Processing</strong></td><td>Small corrections, up to about 75 cents</td><td>Fast processing that keeps the detail and texture of the original recording</td></tr>
+    <tr><td><strong>AI Resynthesis</strong></td><td>Large changes: hand drawing, anchors, whole-clip pitch shift, and corrections beyond about 75 cents</td><td>Regenerates the vocal with consistent quality and a short render wait</td></tr>
+</table>
+
+<p>With Hybrid Mode enabled in Preferences → Audio, the software picks between these two methods based on correction size. With it off, all corrections use AI resynthesis.</p>
 
 <h3>Core Advantages</h3>
 <table>
     <tr><th width="25%">Feature</th><th>Description</th></tr>
-    <tr><td><strong>Formant-Preserving</strong></td><td>Changes pitch without altering vocal timbre — no "chipmunk effect" or unnatural voice shift</td></tr>
-    <tr><td><strong>Wide Transposition Range</strong></td><td>Supports dramatic pitch correction and key changes while maintaining clarity and stability</td></tr>
-    <tr><td><strong>AI Resynthesis</strong></td><td>Powered by PC-NSF-HiFiGAN deep-learning vocoder for high-fidelity vocal reconstruction</td></tr>
-    <tr><td><strong>Auto-Tune-Style Workflow</strong></td><td>Full suite of tools: auto-correction, hand-draw, note, and anchor</td></tr>
-    <tr><td><strong>Auto Scale Detection</strong></td><td>Built-in Krumhansl-Schmuckler algorithm supporting 8 scale types</td></tr>
-    <tr><td><strong>Dual-Format Support</strong></td><td>Standalone for independent use + VST3/ARA plugin for seamless DAW integration</td></tr>
-    <tr><td><strong>GPU Acceleration</strong></td><td>DirectML / CoreML automatically accelerates AI inference; seamless CPU fallback</td></tr>
-    <tr><td><strong>500-Step Undo</strong></td><td>Custom Undo/Redo system — every editing operation is reversible</td></tr>
-    <tr><td><strong>Open Source &amp; Free</strong></td><td>Permanently free, community-driven, continuously improved</td></tr>
+    <tr><td><strong>Formant-Preserving</strong></td><td>Pitch changes leave the vocal timbre intact — no “chipmunk effect” or unnatural voice shift</td></tr>
+    <tr><td><strong>Wide Transposition Range</strong></td><td>Handles dramatic pitch correction and key changes while the sound stays clear and stable</td></tr>
+    <tr><td><strong>AI Resynthesis</strong></td><td>High-fidelity vocal reconstruction with the PC-NSF-HiFiGAN deep-learning vocoder</td></tr>
+    <tr><td><strong>Auto-Tune-Style Workflow</strong></td><td>A full toolset: auto correction, hand drawing, notes, anchors, eraser, EQ, and more</td></tr>
+    <tr><td><strong>Automatic Scale Detection</strong></td><td>Built-in scale recognition with 8 scale types; set the root and scale manually at any time</td></tr>
+    <tr><td><strong>Dual-Format Support</strong></td><td>Standalone operation plus VST3/ARA plugin integration with major DAWs</td></tr>
+    <tr><td><strong>GPU Acceleration</strong></td><td>DirectML acceleration on Windows and CoreML on macOS; switches to CPU when no GPU is available</td></tr>
+    <tr><td><strong>500-Step Undo</strong></td><td>Step back through any editing operation</td></tr>
+    <tr><td><strong>Open Source &amp; Free</strong></td><td>Free forever, community-driven, and continuously improved</td></tr>
 </table>
 
 <div class="tip">
     <div class="tip-title">Technical Highlights</div>
-    OpenTune uses the RMVPE deep-learning model for high-precision pitch extraction, paired with PC-NSF-HiFiGAN neural vocoder for high-quality resynthesis. GPU acceleration delivers fast processing speeds.
+    OpenTune extracts the original pitch with the FCPE deep-learning model, resynthesizes audio at high quality with the PC-NSF-HiFiGAN neural vocoder, and supports GPU acceleration.
 </div>
 
 <h2 id="requirements">2. System Requirements</h2>
@@ -159,11 +186,11 @@
 <h3>Minimum Requirements</h3>
 <table>
     <tr><th width="25%">Item</th><th>Requirement</th></tr>
-    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 12.0+ (Intel / Apple Silicon)</td></tr>
-    <tr><td>Processor</td><td>Intel Core i5 or equivalent AMD processor</td></tr>
+    <tr><td>Operating System</td><td>Windows 10/11 (64-bit) or macOS 12.0 or later (Intel / Apple silicon)</td></tr>
+    <tr><td>Processor</td><td>Intel Core i5 or an equivalent AMD processor</td></tr>
     <tr><td>Memory</td><td>8 GB RAM</td></tr>
-    <tr><td>Storage</td><td>500 MB free space (including AI models)</td></tr>
-    <tr><td>Sound Card</td><td>Audio device supporting ASIO or WASAPI</td></tr>
+    <tr><td>Storage</td><td>500 MB free space (including AI models and the demo project)</td></tr>
+    <tr><td>Sound Card</td><td>Audio device supporting ASIO or WASAPI (Standalone only)</td></tr>
 </table>
 
 <h3>Recommended Requirements</h3>
@@ -171,68 +198,94 @@
     <tr><th width="25%">Item</th><th>Requirement</th></tr>
     <tr><td>Processor</td><td>Intel Core i7 / Apple M1 or higher</td></tr>
     <tr><td>Memory</td><td>16 GB RAM or higher</td></tr>
-    <tr><td>Graphics</td><td>DirectML-compatible GPU (NVIDIA / AMD / Intel) for accelerated vocoder inference</td></tr>
+    <tr><td>Graphics</td><td>DirectML-compatible GPU (NVIDIA / AMD / Intel) that accelerates pitch analysis and resynthesis</td></tr>
 </table>
 
 <div class="note">
-    <div class="note-title">GPU Acceleration Notes</div>
-    <p>OpenTune supports DirectML (Windows) or CoreML (macOS) GPU acceleration. If no compatible GPU is available, it automatically falls back to CPU — normal operation is unaffected. You can manually switch to "CPU Preferred" in Preferences.</p>
+    <div class="note-title">GPU Notes</div>
+    <p>Windows uses DirectML for GPU acceleration and macOS uses CoreML for Apple silicon acceleration. When no GPU is available, processing switches to the CPU with no loss of features. You can also choose CPU First in Preferences.</p>
 </div>
 
 <h2 id="install">3. Installation &amp; Launch</h2>
 
 <h3>3.1 Download</h3>
-<p>Download the latest version from the GitHub Releases page.</p>
+<p>Download the latest installer from the GitHub Releases page. Windows uses an installer and macOS uses a PKG package.</p>
 
 <h3>3.2 File Structure</h3>
+<p>After installation on Windows, the main files are laid out as follows:</p>
+<table>
+    <tr><th width="42%">File or Folder</th><th>Purpose</th></tr>
+    <tr><td><code>OpenTune.exe</code></td><td>Main program (Standalone)</td></tr>
+    <tr><td><code>OpenTune.vst3</code></td><td>VST3 plugin (with ARA2 support) for DAW use</td></tr>
+    <tr><td><code>OpenTuneOnnxRuntime_1_24_4.dll</code></td><td>AI inference runtime</td></tr>
+    <tr><td><code>DirectML.dll</code>, <code>D3D12\</code></td><td>GPU acceleration components</td></tr>
+    <tr><td><code>docs\UserGuide.html</code></td><td>This user guide</td></tr>
+    <tr><td><code>Demo\Demo.otproj</code>, <code>Demo\Demo.wav</code></td><td>Demo project and demo song</td></tr>
+    <tr><td><code>C:\ProgramData\OpenTune\Models\fcpe.onnx</code></td><td>Pitch analysis model (about 43 MB)</td></tr>
+    <tr><td><code>C:\ProgramData\OpenTune\Models\hifigan.onnx</code></td><td>Vocoder model (about 56 MB)</td></tr>
+</table>
+
+<div class="warning">
+    <div class="warning-title">Model Location</div>
+    AI models live in the system's public program data directory (<code>C:\ProgramData\OpenTune\Models</code> on Windows), and the standalone app and the plugin share the same model files. Moving or deleting this directory stops pitch correction from working.
+</div>
+
+<h3>3.3 Launching the App</h3>
+<p>Double-click <code>OpenTune.exe</code> to start the standalone app; AI models initialize automatically on first launch. For the plugin, place <code>OpenTune.vst3</code> in your DAW's VST3 scan folder, or select the plugin component during installation so the installer registers it.</p>
+
+<h3>3.4 First Launch: Onboarding and Demo Project</h3>
+<p>The first launch opens <strong>Onboarding</strong> automatically. The guide starts by confirming your editing workflow:</p>
 <ul>
-    <li><code>OpenTune.exe</code> — Main program (Standalone)</li>
-    <li><code>OpenTune.vst3</code> — VST3 plugin (for DAW use)</li>
-    <li><code>OpenTuneOnnxRuntime_1_24_4.dll</code> — ONNX Runtime</li>
-    <li><code>DirectML.dll</code> — DirectML Runtime (GPU acceleration)</li>
-    <li><code>models/</code> — AI model folder
-        <ul>
-            <li><code>rmvpe.onnx</code> — Pitch extraction model (~28MB)</li>
-            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> — Vocoder model</li>
-        </ul>
-    </li>
-    <li><code>docs/UserGuide.html</code> — This user guide</li>
+    <li><strong>OpenTune</strong> — edit notes; ideal for refining note by note.</li>
+    <li><strong>OpenDyne</strong> — edit waveform blobs; ideal for shaping the performance as a whole.</li>
+    <li><strong>Not now</strong> — skip the choice and go straight to the tour.</li>
 </ul>
+<p>The guide then points in turn to the File, Edit, and View menus, the audio entry, the track view, the piano roll, the editing tools, the Retune Speed and vibrato parameters, AUTO / SNAP, the scale, the overview strip, the transport buttons, and Help and options. The guide card shows the current step (for example “4 / 12”), with Previous and Next buttons and Exit guide at any time. Steps adapt to the running environment: Standalone, ARA plugin, and capture mode each show different tips.</p>
 
-<h3>3.3 Launching</h3>
-<p>Double-click <code>OpenTune.exe</code> to start the standalone version. AI models are automatically initialized on first launch. For VST3 plugin use, copy the <code>OpenTune.vst3</code> folder to your DAW's VST3 scan directory.</p>
+<p>When the guide ends and the project is still empty, the app loads the <strong>Demo project</strong> automatically and shows three tips in order:</p>
+<ol>
+    <li><strong>Demo project</strong> — the demo song is loaded on the track; double-click the audio clip to edit its pitch in the piano roll.</li>
+    <li><strong>Rendering audio</strong> — loading a project, editing pitch, or transposing starts rendering; during rendering you hear the original pitch.</li>
+    <li><strong>Editing tools</strong> — the tools on the right correct pitch; hover over a tool to see its name and usage.</li>
+</ol>
+<p>Each step offers Skip Tour. The demo project appears automatically only on the first launch and never overwrites an existing project.</p>
 
-<h3>3.4 First-Run Onboarding</h3>
-<p>On first launch, OpenTune automatically opens the <strong>onboarding guide</strong>: after choosing an editing scheme, it introduces the File/Edit/View menus, audio import, the piano roll and toolbars, the core editing tools, and the parameter panel. The steps adapt to the environment (Standalone / ARA plug-in / live capture), and the guide can be exited at any time.</p>
-<p>To view it again, open <strong>Help → Onboarding...</strong> or click <strong>Replay onboarding</strong> in Preferences.</p>
+<div class="tip">
+    <div class="tip-title">Viewing the Guide Again</div>
+    Reopen the guide from the File menu through <strong>Help → Onboarding...</strong>, or click <strong>Replay onboarding</strong> on the Preferences → Audio page.
+</div>
 
 <div class="page-break"></div>
 <h2 id="interface">4. Interface Overview</h2>
 
-<p>The OpenTune Standalone interface features a modern multi-panel design. Each panel can be collapsed to hide:</p>
+<p>The OpenTune Standalone app uses a multi-panel layout, and each area can be collapsed and hidden.</p>
 
 <h3>4.1 Interface Layout</h3>
 <table>
     <tr><th width="20%">Area</th><th>Function</th></tr>
-    <tr><td><strong>Top Toolbar</strong></td><td>Menu buttons (File/Edit/View), transport controls, BPM/Scale settings, Tap Tempo, view switching</td></tr>
-    <tr><td><strong>Left Track Panel</strong></td><td>Multi-track management (up to 12 tracks), volume knobs, Solo/Mute, circular level meters, add-track button</td></tr>
-    <tr><td><strong>Center Arrange View</strong></td><td>Audio clip arrangement, waveform preview, timeline, clip drag/split/merge/delete</td></tr>
-    <tr><td><strong>Center Piano Roll</strong></td>    <td>Pitch curve editing, note drawing/selection, pitch curve visualization, playhead, piano key audition (click the keyboard to preview pitch); in TimeTool view, piano keys and notes/pitch curves are hidden and draggable time handles are shown</td></tr>
-    <tr><td><strong>Right Parameter Panel</strong></td><td>Retune Speed / Vibrato / Note Split knobs, tool selection buttons</td></tr>
-    <tr><td><strong>Render Status Badge</strong></td><td>Top-right floating indicator showing current render progress (e.g. "Rendering 3/8"); time-stretch progress shown separately (e.g. "+2")</td></tr>
+    <tr><td><strong>Top Toolbar</strong></td><td>File/Edit/View menu buttons, scale selection (root and scale), transport buttons (Play, Pause, Stop, Loop, Read Audio), Track View and Piano Roll View switching, tempo and time signature, Tap Tempo, time display, and panel collapse buttons at both ends</td></tr>
+    <tr><td><strong>Left Track Panel</strong></td><td>Multi-track management (up to 12 tracks), volume knobs, mute/solo, LED-style level meters around the knobs, and the Add Track entry</td></tr>
+    <tr><td><strong>Center Arrange View</strong></td><td>Audio clip arrangement, waveform preview, time ruler, and clip move/trim/fade/gain/split/merge/delete</td></tr>
+    <tr><td><strong>Center Piano Roll</strong></td><td>Pitch curve editing, note drawing and selection, pitch curve display, playhead, and piano key audition on the left</td></tr>
+    <tr><td><strong>Bottom of the Piano Roll</strong></td><td>Overview strip (drag to browse the whole audio) and the horizontal and vertical zoom sliders at the bottom left</td></tr>
+    <tr><td><strong>Right Parameter Panel</strong></td><td>Four knobs — Retune Speed, Vibrato Depth, Vibrato Rate, and Note Split — plus the tool area and the Pitch Shift button</td></tr>
+    <tr><td><strong>Render Status Badge</strong></td><td>Shows current render progress in the top right, for example “Rendering (3/8)”</td></tr>
 </table>
 
-<h3>4.2 Panel Toggle</h3>
-<p>Click the panel toggle buttons at the left and right ends of the top toolbar to show/hide the left track panel or right parameter panel, enabling an "immersive main canvas" mode.</p>
+<h3>4.2 Panel Collapse</h3>
+<p>Click the panel toggle buttons at the left and right ends of the top toolbar to hide or show the left track panel and the right parameter panel, giving the main canvas the full window width.</p>
 
 <h3>4.3 View Switching</h3>
 <ul>
-    <li><strong>Track View</strong>: Shows the arrange view + piano roll, ideal for managing multiple audio clips</li>
-    <li><strong>Piano Roll View</strong>: Full-screen piano roll editing for focused, fine-grained pitch work</li>
+    <li><strong>Track View</strong>: shows the arrange view and the piano roll; suits managing multiple audio clips.</li>
+    <li><strong>Piano Roll View</strong>: shows only the piano roll for focused pitch editing, with the overview strip and zoom sliders at the bottom.</li>
 </ul>
 
-<h3>4.4 Mouse Hover Tooltips</h3>
-<p>Hover over any control for approximately 0.6 seconds to reveal a dark-themed floating tooltip window, showing the control's function description and shortcut key (if any). Tooltip text automatically switches with the interface language.</p>
+<h3>4.4 Tooltips</h3>
+<p>Hover over any control for about 0.6 seconds to show a dark floating tooltip with the control's name, function, and shortcut. Tooltip text follows the interface language.</p>
+
+<h3>4.5 Empty State</h3>
+<p>Before audio is read, the piano roll has no pitch curve or notes; running auto correction at that point prompts you to finish audio analysis first. When no track exists, the arrange view shows the Add Track entry.</p>
 
 <h2 id="quickstart">5. Quick Start</h2>
 
@@ -241,44 +294,49 @@
         <div class="step-number">1</div>
         <div class="step-content">
             <h4>Import Audio</h4>
-            <p>Drag and drop audio files into the application window, or use File &rarr; Import Audio. Supported formats: WAV, MP3, FLAC, OGG, AIFF, and more.</p>
+            <p>Drag audio files into the window, or choose File → Import Audio. Supported formats include WAV, AIFF, FLAC, OGG, and MP3.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">2</div>
         <div class="step-content">
-            <h4>Automatic Pitch Extraction</h4>
-            <p>After import, the software automatically extracts the original pitch curve, displayed as a red curve in the piano roll.</p>
+            <h4>Wait for Pitch Analysis</h4>
+            <p>After import, the app analyzes the audio and extracts the original pitch, shown as a pitch curve in the piano roll. The interface shows “Processing audio” during analysis.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">3</div>
         <div class="step-content">
-            <h4>Scale Settings</h4>
-            <p>The software automatically detects the scale, or you can manually select the root note (C&ndash;B) and scale type (Major, Minor, Chromatic, etc. — 8 types).</p>
+            <h4>Confirm the Scale</h4>
+            <p>The app detects the scale automatically. You can also pick the root (C–B) and scale type (Major, Minor, Chromatic, and five more — 8 in total) in the top toolbar.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">4</div>
         <div class="step-content">
             <h4>Edit Pitch</h4>
-            <p>Use the AutoTune tool for one-click correction, or manually draw notes/anchors/freehand curves. Corrected pitch is displayed as a blue curve.</p>
+            <p>Use auto correction to snap to the scale in one click, or refine note by note with Line Anchor, Hand Draw, and Draw Note. The correction appears as a second curve above the original pitch.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">5</div>
         <div class="step-content">
             <h4>Adjust Parameters</h4>
-            <p>Adjust Retune Speed, Vibrato Depth/Rate, etc. in the parameter panel. Per-note vibrato settings are supported.</p>
+            <p>Adjust Retune Speed, Vibrato Depth, Vibrato Rate, and more in the parameter panel. With notes selected, changes apply only to those notes.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">6</div>
         <div class="step-content">
-            <h4>Preview &amp; Export</h4>
-            <p>Press Space to play and preview. When satisfied, export via File &rarr; Export. Supports exporting selected clips, individual tracks, or master bus mix.</p>
+            <h4>Audition and Export</h4>
+            <p>Press Space to play. Once rendering completes you hear the corrected audio; export it through File → Export Audio.</p>
         </div>
     </div>
+</div>
+
+<div class="note">
+    <div class="note-title">What You Hear During Rendering</div>
+    <p>After a pitch edit, the app resynthesizes audio in the background and shows Rendering (done/total) in the top right. Playback uses the original pitch until rendering ends, then switches to the corrected audio automatically.</p>
 </div>
 
 <div class="page-break"></div>
@@ -286,105 +344,136 @@
 
 <h3>6.1 Audio Import</h3>
 <ul>
-    <li>Supported formats: WAV, MP3, FLAC, OGG, AIFF, and more</li>
-    <li>Auto-resampled to 44.1kHz on import</li>
-    <li>Drag-and-drop import (drop directly into the window)</li>
-    <li>Multi-track support: up to 12 independent tracks, each capable of holding multiple clips</li>
-    <li>Batch import of multiple files (sequential layout or split by track)</li>
+    <li>Supported formats: WAV, AIFF, FLAC, OGG, and MP3, plus WMA on Windows.</li>
+    <li>Mono and stereo audio are supported; files with more than two channels cannot be imported.</li>
+    <li>Import by drag and drop, or through File → Import Audio; when you select several files at once, the app asks how to import them: Import Sequentially To Current Track or Import To Separate Tracks.</li>
+    <li>Multi-track support: up to 12 tracks, each holding multiple clips. When the import count exceeds the free tracks, the app notifies you and imports only what fits.</li>
+    <li>Import keeps the original sample rate, and editing and resynthesis use a unified 44.1 kHz working copy.</li>
+    <li>A progress display shows during import, and only one import task runs at a time.</li>
 </ul>
 
-<h3>6.2 Pitch Extraction (RMVPE)</h3>
+<h3>6.2 Pitch Analysis</h3>
 <ul>
-    <li>Automatically extracts the original pitch curve after importing audio (displayed in red)</li>
-    <li>Based on the RMVPE deep-learning model — high accuracy and strong noise immunity</li>
-    <li>Supports vocal detection in the 50Hz &ndash; 1100Hz frequency range</li>
+    <li>After import, the original pitch is extracted automatically and shown as a pitch curve whose color you can customize in Preferences.</li>
+    <li>The FCPE deep-learning model works especially well on vocals and monophonic melodies.</li>
+    <li>Each piece of audio is analyzed only once; re-importing it or reopening the project reuses the result.</li>
+    <li>If analysis fails, the interface reports it and notes that re-importing the audio regenerates the pitch.</li>
 </ul>
 
-<h3>6.3 Scale Detection &amp; Selection</h3>
-<p>Built-in automatic scale detection using the Krumhansl-Schmuckler algorithm, supporting 8 scale types:</p>
+<h3>6.3 Scale Detection and Selection</h3>
+<p>The app detects the scale automatically, and you can set it manually. A manual scale makes auto correction target the notes of that scale across the whole clip. The 8 supported scales:</p>
 <table>
     <tr><th>Scale</th><th>Abbrev.</th><th>Description</th></tr>
     <tr><td>Major</td><td>Maj.</td><td>Natural major scale</td></tr>
     <tr><td>Minor</td><td>Min.</td><td>Natural minor scale</td></tr>
-    <tr><td>Chromatic</td><td>Chr.</td><td>All 12 semitones available (no scale filtering)</td></tr>
-    <tr><td>Harmonic Minor</td><td>H.Min.</td><td>Minor scale with raised 7th degree</td></tr>
+    <tr><td>Chromatic</td><td>Chr.</td><td>All 12 semitones are available; auto correction snaps to the nearest semitone</td></tr>
+    <tr><td>Harmonic Minor</td><td>H.Min.</td><td>Minor scale with a raised 7th degree</td></tr>
     <tr><td>Dorian</td><td>Dor.</td><td>Common in jazz and blues</td></tr>
-    <tr><td>Mixolydian</td><td>Mix.</td><td>Major scale with lowered 7th degree</td></tr>
+    <tr><td>Mixolydian</td><td>Mix.</td><td>Major scale with a lowered 7th degree</td></tr>
     <tr><td>Major Pentatonic</td><td>Pent.</td><td>Five-note pentatonic scale</td></tr>
     <tr><td>Minor Pentatonic</td><td>m.Pent.</td><td>Blues pentatonic scale</td></tr>
 </table>
 
-<h3>6.4 AI Vocoder Resynthesis</h3>
+<h3>6.4 Pitch Correction and Resynthesis</h3>
 <ul>
-    <li>After pitch correction, the software uses the PC-NSF-HiFiGAN neural vocoder to resynthesize audio</li>
-    <li>Preserves original formants — wide transposition ranges sound natural</li>
-    <li>Output sample rate: 44.1kHz — clear, natural audio quality</li>
-    <li>GPU acceleration supported (configurable in Preferences)</li>
+    <li>After a pitch edit, the app chooses lightweight processing or AI resynthesis based on the size of the change, then produces playable audio.</li>
+    <li>Small corrections (up to about 75 cents) use lightweight processing when Hybrid Mode is on, which is fast and keeps the original detail.</li>
+    <li>Hand drawing, anchors, whole-clip pitch shifts, and corrections beyond about 75 cents always use AI resynthesis, preserving formants so wide transpositions stay clean.</li>
+    <li>The output sample rate is 44.1 kHz, with natural, clear sound.</li>
+    <li>Rendering runs in segments, so long audio can be edited while it renders; the top-right badge shows progress.</li>
 </ul>
 
 <h3>6.5 Multi-Track Management</h3>
 <ul>
-    <li>Up to 12 independent tracks</li>
-    <li>Each track supports multiple audio clips</li>
-    <li>Track operations: Solo, Mute, Volume (circular knob)</li>
-    <li>Circular LED level meters show real-time volume</li>
-    <li>Clip operations: drag to move, split, merge, delete</li>
+    <li>Up to 12 independent tracks, each supporting multiple clips.</li>
+    <li>Track controls: mute, solo, and a volume knob (0–4.0×) with a real-time level ring around it.</li>
+    <li>Track context menu: Add Track, Duplicate Track, Track Color (Custom Color / Random Color), Delete Track.</li>
+    <li>Clip operations: move, trim left and right, adjust fades, adjust gain, split, merge, duplicate in place, and delete.</li>
+    <li>Double-click a clip to open it in the piano roll for editing.</li>
 </ul>
 
-<h3>6.6 Undo/Redo</h3>
+<h3>6.6 Undo and Redo</h3>
 <ul>
-    <li>Preserves up to <strong>500 steps</strong> of operation history</li>
-    <li>Covers all editing operations: note drawing, parameter adjustments, clip operations, etc.</li>
-    <li>Shortcuts: <code>Ctrl+Z</code> (Undo), <code>Ctrl+Y</code> or <code>Ctrl+Shift+Z</code> (Redo)</li>
+    <li>Stores up to <strong>500 steps</strong> of operation history.</li>
+    <li>Covers every editing operation: note drawing, pitch edits, parameter changes, clip operations, track operations, and project changes.</li>
+    <li>Shortcuts: <code>Ctrl+Z</code> undo, <code>Ctrl+Y</code> or <code>Ctrl+Shift+Z</code> redo.</li>
 </ul>
 
 <div class="page-break"></div>
 <h2 id="tools">7. Editing Tools</h2>
 
-<p>OpenTune provides seven professional editing tools, switchable via the tool area in the parameter panel or by keyboard shortcut:</p>
+<p>Switch editing tools from the tool area in the right parameter panel or with keyboard shortcuts. Hover over a tool button to see its name, usage, and shortcut. Shortcuts in parentheses in this chapter are Windows defaults; macOS defaults are in Chapter 11.</p>
+
+<h3>7.1 Tools in the OpenTune Scheme</h3>
 
 <div class="tool-card">
-    <h4>AutoTune — Automatic Correction Tool (Shortcut: 6)</h4>
-    <p>Automatically corrects pitch to the nearest target note based on the current scale. Ideal for quick batch correction.</p>
+    <h4>Auto Correction AUTO (Shortcut: 6)</h4>
+    <p>Snaps pitch to the nearest note of the current scale. With notes, a selection, or a pitch range selected it processes only that part; with nothing selected it processes the whole clip. One pass is enough to hear the result, and running it again on already corrected material changes nothing.</p>
 </div>
 
 <div class="tool-card">
-    <h4>Select — Selection Tool (Shortcut: 3)</h4>
-    <p>Select notes or time regions. After selection, you can move, delete, adjust parameters, etc.</p>
-    <p><strong>Operations</strong>: Click to select, drag to marquee-select, Shift+click to multi-select, Delete to remove.</p>
+    <h4>Select Tool (Shortcut: 3)</h4>
+    <p>Select notes or time regions; after selecting you can move, delete, or adjust parameters.</p>
+    <p><strong>Operations</strong>: click to select, drag to marquee-select, Shift+click to multi-select, Delete to remove; drag a note edge to resize it and drag its middle to change pitch or position.</p>
 </div>
 
 <div class="tool-card">
-    <h4>DrawNote — Note Drawing Tool (Shortcut: 2)</h4>
-    <p>Manually draw note blocks. Drag in the piano roll to create notes with specified pitch and duration.</p>
-    <p><strong>Feature</strong>: Each note can have independent Retune Speed, Vibrato Depth/Rate settings.</p>
+    <h4>Draw Note (Shortcut: 2)</h4>
+    <p>Draw note blocks by hand: drag in the piano roll to create a note with a chosen pitch and duration.</p>
+    <p><strong>Feature</strong>: each note gets its own Retune Speed, Vibrato Depth, and Vibrato Rate.</p>
 </div>
 
 <div class="tool-card">
-    <h4>LineAnchor — Line Anchor Tool (Shortcut: 4)</h4>
-    <p>Place key anchor points on the pitch curve; the software automatically generates linear interpolation transitions between anchors. Ideal for precise control of glides and pitch bends.</p>
+    <h4>Line Anchor (Shortcut: 4)</h4>
+    <p>Place key anchors on the pitch curve; the app connects them with straight transitions, which suits precise control of glides and pitch bends. Anchor edits use AI resynthesis.</p>
 </div>
 
 <div class="tool-card">
-    <h4>HandDraw — Freehand Tool (Shortcut: 5)</h4>
-    <p>Draw the pitch curve directly by hand for fully customized pitch shaping. Ideal for drawing vibrato, glides, bends, and other ornamental effects.</p>
+    <h4>Hand Draw (Shortcut: 5)</h4>
+    <p>Draw the pitch curve directly for complete control of the pitch contour; suits vibrato, glides, and bends. Hand-drawn regions use AI resynthesis.</p>
 </div>
 
 <div class="tool-card">
     <h4>Eraser</h4>
-    <p>Brush tool: drag to erase both notes and pitch correction within the brush range. The whole stroke is committed as a single undo step.</p>
-    <p><strong>Usage</strong>: select the eraser in the parameter panel or from the tool palette opened with a right-click, then drag with the left mouse button; a circular brush shows the range. No default shortcut.</p>
+    <p>Brush erase: hold the left button and drag to remove notes and pitch correction inside the round brush in one stroke, recorded as a single undo step.</p>
+    <p><strong>Operations</strong>: pick the eraser in the parameter panel or the right-click toolbar, then hold the left button and drag; no default shortcut.</p>
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — Time Tool (Shortcut: T)</h4>
-    <p>Drag time handles to adjust the output time of audio, achieving time-stretch/compression effects. When entering TimeTool view, piano keys and notes/pitch curves are automatically hidden, focusing on time-based editing.</p>
-    <p><strong>Operations</strong>: Drag handles to adjust output time; Shift+click to multi-select handles; Alt+drag to relax the minimum-spacing constraint; double-click blank area to insert a new handle; Delete removes selected handles (endpoints protected); click blank area to reposition playhead.</p>
-    <p><strong>Endpoints &amp; Rendering</strong>: First and last endpoints are fixed, total duration stays unchanged. Editing does not re-run pitch correction; once the current processing pass completes, a one-off time-stretch rebuild is queued.</p>
+    <h4>EQ (Shortcut: E)</h4>
+    <p>Adds frequency equalization to individual notes. Switch to the EQ tool (or press E) and click a note to open its EQ editor, where you add, bypass, and remove bands on the spectrum; hold and drag to marquee-select several notes.</p>
+    <p><strong>Operations</strong>: up to 10 bands per note; filter types are low cut, low shelf, peak, high shelf, and high cut; peak bands cover 500 Hz–12 kHz and the other types 20 Hz–20 kHz; gain range is ±12 dB and Q range is 0.25–9. In the editor you can collapse to preview, bypass temporarily, or remove the whole chain. It asks for confirmation before removal, and you can choose Don't show again.</p>
 </div>
 
-<h3>7.1 Piano Key Audition</h3>
-<p>Click the piano keys on the left side of the piano roll to play the corresponding pitch as a piano sample in real time, making it easy to confirm target pitches. You can hold and drag across keys to glide between notes; releasing the mouse stops playback automatically. The pressed key is highlighted in blue.</p>
+<div class="tool-card">
+    <h4>Time Tool (Shortcut: T, Experimental)</h4>
+    <p>Drag time handles to adjust the audio's output timing for time-stretch effects. The tool appears only after you turn on Enable Experimental Features in Preferences → Audio, and it is available in the Standalone app only.</p>
+    <p><strong>Operations</strong>: entering the Time Tool hides piano keys and pitch curves and shows draggable time handles. Drag a handle to change timing; hold Alt while dragging to lift the minimum spacing limit; Shift+click to multi-select handles; double-click empty space to insert a handle; Delete removes selected handles; click empty space to reposition the playhead.</p>
+    <p><strong>Limits</strong>: the first and last endpoints are fixed and total duration stays the same; endpoints cannot be selected or deleted; handles keep a minimum spacing and stay in place when an insert or drag breaks it. Each adjustment requires resynthesis, and the new timing plays after rendering finishes.</p>
+</div>
+
+<h3>7.2 Tools in the OpenDyne Scheme</h3>
+<table>
+    <tr><th width="22%">Tool</th><th width="14%">Shortcut</th><th>Function</th></tr>
+    <tr><td><strong>Select</strong></td><td>F1</td><td>Select waveform blobs (note blobs) with single, multiple, and marquee selection</td></tr>
+    <tr><td><strong>Pitch</strong></td><td>F2</td><td>Drag the pitch of selected waveform blobs, snapping to the Pitch Grid</td></tr>
+    <tr><td><strong>Modulation</strong></td><td>F3</td><td>Adjust the amount of pitch movement inside a blob — the depth of vibrato</td></tr>
+    <tr><td><strong>Volume Envelope</strong></td><td>F4</td><td>Adjust how level changes over time inside a blob</td></tr>
+    <tr><td><strong>Drift</strong></td><td>F5</td><td>Correct slower pitch drift inside a blob</td></tr>
+    <tr><td><strong>Scissors</strong></td><td>F6</td><td>Cut a blob into independently editable parts; double-click a split line to merge adjacent notes</td></tr>
+</table>
+<p>On macOS, OpenDyne tools use the number keys 1–6 in the same order as the table above. The Time Tool and EQ use the same shortcuts in both schemes.</p>
+
+<div class="note">
+    <div class="note-title">AUTO / SNAP in OpenDyne</div>
+    <p>In the OpenDyne scheme the same button in the parameter panel reads <strong>SNAP</strong>: press it to snap selected notes in one click, or all notes when nothing is selected. The Pitch Grid decides how dragging snaps: No Snap, Chromatic, or Key Scale.</p>
+</div>
+
+<h3>7.3 Piano Key Audition</h3>
+<p>Click a piano key on the left of the piano roll to hear that pitch as a piano note; hold and drag to glide across keys, and release to stop. The pressed key is highlighted.</p>
+
+<h3>7.4 Note Drag Audition</h3>
+<p>With Preview transposition while dragging notes enabled in Preferences → Editing, dragging a note to a new pitch plays the target pitch immediately, which is a fast way to find a note. The same option controls audition after keyboard edits. With it off, dragging only changes the display and makes no sound.</p>
 
 <h2 id="parameters">8. Parameter Reference</h2>
 
@@ -392,208 +481,344 @@
 
 <div class="param-item">
     <div class="param-name">Retune Speed</div>
-    <div class="param-range">Range: 0% &ndash; 100% | Default: 15%</div>
-    <p>Controls the speed and intensity of pitch correction. Higher values yield faster, more precise correction; lower values preserve more of the original pitch fluctuation.</p>
+    <div class="param-range">Range: 0% – 100% | Default: 15%</div>
+    <p>Controls the speed and strength of pitch correction. Higher values correct faster and more precisely; lower values keep more of the original pitch movement.</p>
     <ul>
-        <li><strong>Low (0&ndash;30%)</strong>: Preserves natural vibrato — ideal for a realistic feel</li>
-        <li><strong>Medium (30&ndash;70%)</strong>: Balances precision and naturalness</li>
-        <li><strong>High (70&ndash;100%)</strong>: Precise correction — produces the distinct Auto-Tune effect; at the full 100% setting, note boundaries switch instantly with no transition</li>
+        <li><strong>Low (0–30%)</strong>: preserves natural vibrato, ideal for a realistic feel</li>
+        <li><strong>Medium (30–70%)</strong>: balances precision and naturalness</li>
+        <li><strong>High (70–100%)</strong>: precise correction with a clear Auto-Tune effect; at 100% note boundaries switch instantly with no transition</li>
     </ul>
-    <p><strong>Per-note</strong>: Select a note before adjusting to affect only that note.</p>
+    <p><strong>Per-note</strong>: select notes before adjusting to affect only those notes.</p>
 </div>
 
 <div class="param-item">
     <div class="param-name">Vibrato Depth</div>
-    <div class="param-range">Range: 0 &ndash; 1 | Default: 0</div>
-    <p>Adds artificial vibrato amplitude to notes. 0 = no addition, 1 = maximum depth. Supports per-note setting.</p>
+    <div class="param-range">Range: 0% – 100% | Default: 0%</div>
+    <p>Sets the amplitude of artificial vibrato added to notes. 0 adds none and 100% is the maximum depth. Supports per-note settings.</p>
 </div>
 
 <div class="param-item">
     <div class="param-name">Vibrato Rate</div>
-    <div class="param-range">Range: 0 &ndash; 15 Hz | Default: 7.5 Hz</div>
-    <p>Controls the oscillation frequency of artificial vibrato. Natural vocal vibrato typically falls in the 5&ndash;8 Hz range. Supports per-note setting.</p>
+    <div class="param-range">Range: 3 – 12 Hz | Default: 7.5 Hz</div>
+    <p>Controls the oscillation frequency of artificial vibrato. Natural vocal vibrato usually falls between 5 and 8 Hz. Supports per-note settings.</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Note Split Threshold</div>
-    <div class="param-range">Range: 0 &ndash; 100 cents | Default: 80 cents</div>
-    <p>Controls the split sensitivity during automatic note generation. Lower values make it easier to split into independent notes.</p>
+    <div class="param-name">Note Split</div>
+    <div class="param-range">Range: 0 – 200 cents | Default: 80 cents</div>
+    <p>Controls sensitivity when notes are divided automatically: lower values split a continuous performance into more independent notes. Releasing the mouse after an adjustment re-divides the notes as one undo step.</p>
 </div>
 
-<h3>8.2 Track Parameters</h3>
-<div class="param-item">
-    <div class="param-name">Volume</div>
-    <div class="param-range">Range: 0 &ndash; 4.0&times; | Default: 1.0</div>
-    <p>Track volume knob, supports gain amplification beyond 1.0.</p>
+<div class="note">
+    <div class="note-title">Common Knob Controls</div>
+    <p>Drag a knob to change the value and use the wheel to fine-tune. When a knob has focus: arrow keys nudge, holding Alt uses fine steps, PageUp/PageDown make large changes, Home sets the maximum and End the minimum, Backspace restores the default, and Enter types a value directly (Enter confirms, Esc cancels).</p>
 </div>
 
-<h3>8.3 Playback Parameters</h3>
+<h3>8.2 Pitch Shift</h3>
 <div class="param-item">
-    <div class="param-name">BPM (Beats Per Minute)</div>
-    <div class="param-range">Range: 20 &ndash; 300 BPM | Default: 120</div>
-    <p>Controls the project tempo and timeline grid. Double-click the number to enter an exact value directly.</p>
+    <div class="param-name">Pitch Shift (parameter panel button)</div>
+    <div class="param-range">Range: ±24 semitones, ±99 cents</div>
+    <p>Shifts the current clip up or down as a whole. Click the button to open a dialog and set semitones and cents separately; confirming resynthesizes the whole clip at the new pitch. The button shows the current shift so you can check it at any time. Pitch Shift always uses AI resynthesis.</p>
+</div>
+
+<h3>8.3 Pitch Grid (OpenDyne)</h3>
+<div class="param-item">
+    <div class="param-name">Pitch Grid</div>
+    <div class="param-range">Options: No Snap / Chromatic / Key Scale | Default: Key Scale</div>
+    <p>Sets how pitch dragging snaps in the OpenDyne scheme. No Snap drags freely in cents; Chromatic snaps to the nearest semitone; Key Scale snaps to the notes of the current root and scale.</p>
+</div>
+
+<h3>8.4 Track and Transport Parameters</h3>
+<div class="param-item">
+    <div class="param-name">Track Volume</div>
+    <div class="param-range">Range: 0 – 4.0× | Default: 1.0</div>
+    <p>The track volume knob supports gain above 1.0, with a real-time level ring around it.</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Tempo and Time Signature</div>
+    <div class="param-range">Tempo range: 1 – 999 BPM | Default: 120 BPM, 4/4</div>
+    <p>Controls project tempo, timeline grid, and beat display. Click the number to type a tempo; click the time signature digits on the right to choose beats per bar (1–64) and the beat value (1, 2, 4, 8, 16, 32, 64).</p>
 </div>
 <div class="param-item">
     <div class="param-name">Tap Tempo</div>
-    <p>Continuously tap the Tap button; the software automatically calculates the average interval to derive BPM. Up to 5 taps are recorded.</p>
+    <p>Tap the Tap Tempo button repeatedly; the app averages the intervals of the latest taps and fills in the tempo, rounded to one decimal. A gap of more than 2 seconds restarts the calculation.</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Time Display and Scroll Mode</div>
+    <p>The ruler switches between time (minutes and seconds) and bars/beats; Scroll Mode switches between Cont and Page.</p>
 </div>
 
 <div class="page-break"></div>
 <h2 id="schemes">9. Editing Schemes</h2>
 
-<p>OpenTune provides two editing schemes. Switch via Preferences → Editing Scheme.</p>
+<p>OpenTune provides two editing schemes, switched under Preferences → Editing → Audio Editing Scheme; the interface changes immediately.</p>
 
 <h3>9.1 OpenTune Editing (Default)</h3>
 <ul>
-    <li>Traditional waveform + note editing mode</li>
-    <li>Note dragging snaps to the pitch grid (same behavior as the OpenDyne scheme)</li>
-    <li>Wheel: Vertical scroll / Shift+Wheel vertical zoom / Ctrl+Wheel horizontal zoom / Alt+Wheel horizontal scroll</li>
-    <li>Horizontal toolbar layout</li>
+    <li>Works note by note: note blocks, the original pitch curve, and the correction curve are visible together.</li>
+    <li>Tools: Auto Correction, Select, Draw Note, Line Anchor, Hand Draw, Eraser, EQ, and the Time Tool.</li>
+    <li>Dragging notes snaps according to Move Snap: Follow Global Scale or Snap to Semitones.</li>
+    <li>Default wheel mapping: wheel scrolls vertically / Shift + wheel zooms vertically / Ctrl + wheel zooms horizontally / Alt + wheel scrolls horizontally.</li>
 </ul>
 
 <h3>9.2 OpenDyne Editing</h3>
 <ul>
-    <li>Melodyne-style neural editing: waveform visualization, selected highlight overlay</li>
-    <li>Wheel: Vertical scroll / Shift+Wheel horizontal scroll / Ctrl+Wheel dual-axis zoom / Alt+Wheel vertical zoom</li>
-    <li>Right-click vertical icon toolbar layout</li>
-    <li>Pitch Modulation tool</li>
-    <li>Pitch Drift tool</li>
-    <li>Volume Envelope tool</li>
-    <li>Scissors tool (Melodyne behavior: cuts when the vertical line passes through; double-click a split line to merge adjacent notes)</li>
-    <li>Pitch grid snap + one-click snap</li>
-    <li>Melodyne-style overview navigation strip</li>
-    <li>Melodyne-style zoom: Cmd+Alt double-click focus/restore, arrow key precise zoom</li>
+    <li>Works in waveform blobs, suited to whole-performance shaping and a Melodyne-style workflow.</li>
+    <li>Tools: Select, Pitch, Modulation, Drift, Volume Envelope, and Scissors, plus the Time Tool and EQ.</li>
+    <li>The right-click toolbar is an icon strip; the Pitch tool has a dropdown arrow that opens the Modulation and Drift sub-tools. The auto correction button in the parameter panel reads SNAP and snaps in one click.</li>
+    <li>Offers Pitch Grid selection and one-click snapping.</li>
+    <li>Ctrl (Windows) or Cmd (macOS) + Alt double-click a note to zoom to it; the same action on empty space restores the previous zoom.</li>
 </ul>
 
 <div class="note">
-    <div class="note-title">Editing Scheme and Wheel Mapping</div>
-    <p>Switching editing scheme also switches wheel navigation mapping and tool set. OpenTune uses traditional note editing, OpenDyne uses Melodyne-style waveform block editing.</p>
+    <div class="note-title">View Operations Common to Both Schemes</div>
+    <p>Double-click the vertical scrollbar to fit all notes; the overview strip at the bottom browses the whole clip while keeping the current zoom.</p>
 </div>
+
+<div class="note">
+    <div class="note-title">Wheel Mappings Are Customizable</div>
+    <p>Change wheel and key mappings for both schemes in Preferences → Shortcuts under OpenTune Mode and OpenDyne Mode; defaults are listed above. Changes apply immediately.</p>
+</div>
+
+<h3>9.3 Grid Style and Move Snap</h3>
+<table>
+    <tr><th width="26%">Setting</th><th>Description</th></tr>
+    <tr><td><strong>Grid Style</strong></td><td>Piano Lanes: the pitch axis follows piano keys with clear black and white keys. Equal Spacing: all semitones are evenly spaced, which makes curves easier to inspect.</td></tr>
+    <tr><td><strong>Move Snap</strong></td><td>Follow Global Scale: dragging notes snaps to the notes of the current scale. Snap to Semitones: snaps to the nearest semitone.</td></tr>
+</table>
 
 <h2 id="preferences">10. Preferences</h2>
 
-<p>Open the Preferences dialog via <strong>File &rarr; Options</strong> or <strong>Edit &rarr; Preferences</strong>.</p>
+<p>Open Preferences through the File menu → <strong>Options</strong>. The window is divided into pages; switch pages with Ctrl+Tab and move between controls with Tab.</p>
 
-<h3>10.1 Shared Settings (common to Standalone and VST3)</h3>
+<h3>10.1 Audio</h3>
+<p>The Audio page collects settings related to sound processing. In the Standalone app this page also contains the audio device section (see 10.7).</p>
 <table>
-    <tr><th>Setting</th><th>Description</th><th>Default</th></tr>
-    <tr><td>Interface Language</td><td>Chinese / English / Japanese / Russian / Spanish</td><td>Chinese</td></tr>
-    <tr><td>Theme</td><td>Aurora</td><td>Aurora</td></tr>
-    <tr><td>Editing Scheme</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
-    <tr><td>Whole Note Move Snap</td><td>Snap mode when transposing notes as a whole: Follow Global Scale / Nearest Standard Pitch (Whole-Note Equal Steps); available in the OpenTune scheme only</td><td>Follow Global Scale</td></tr>
-    <tr><td>Render Priority</td><td>GPU Preferred / CPU Preferred</td><td>GPU Preferred</td></tr>
-    <tr><td>Horizontal Zoom Sensitivity</td><td>Controls mouse wheel horizontal zoom speed</td><td>1.0</td></tr>
-    <tr><td>Vertical Zoom Sensitivity</td><td>Controls mouse wheel vertical zoom speed</td><td>1.0</td></tr>
-    <tr><td>Scroll Speed</td><td>View scrolling speed</td><td>1.0</td></tr>
-    <tr><td>Note Name Display</td><td>Show All / C Only / Hidden</td><td>C Only</td></tr>
-    <tr><td>Show Chunk Boundaries</td><td>Visualize render chunk boundaries</td><td>Off</td></tr>
-    <tr><td>Show Unvoiced Frames</td><td>Display pitch data for unvoiced frames</td><td>Off</td></tr>
-    <tr><td>Mouse Cursor Style</td><td>Adwaita / Capitaine / Breeze</td><td>System Default</td></tr>
+    <tr><th width="34%">Setting</th><th>Description</th><th width="16%">Default</th></tr>
+    <tr><td>Replay onboarding</td><td>Closes settings and plays the interface guide again</td><td>—</td></tr>
+    <tr><td>Rendering Priority</td><td>GPU First or CPU First, which decides whether pitch analysis and resynthesis use the GPU or the CPU</td><td>GPU First</td></tr>
+    <tr><td>Pitch Detection Model</td><td>Selects the pitch analysis model; currently FCPE</td><td>FCPE</td></tr>
+    <tr><td>Enable Experimental Features (Time Stretch Tool)</td><td>Shows the Time Tool in the tool area. Standalone only</td><td>Off</td></tr>
+    <tr><td>Hybrid Mode</td><td>Small corrections use lightweight processing and large corrections use AI resynthesis</td><td>On</td></tr>
 </table>
 
-<h3>10.2 Standalone-Specific Settings</h3>
+<h3>10.2 Theme</h3>
 <table>
-    <tr><th>Setting</th><th>Description</th></tr>
-    <tr><td>Audio Device</td><td>Driver type, device selection, sample rate, buffer size</td></tr>
-    <tr><td>Keyboard Shortcuts</td><td>10 customizable shortcut bindings (supports conflict detection and reset)</td></tr>
-    <tr><td>Mouse Trail</td><td>8 mouse trail effect theme choices</td></tr>
+    <tr><th width="34%">Setting</th><th>Description</th><th width="16%">Default</th></tr>
+    <tr><td>Theme</td><td>Interface color theme</td><td>Aurora Glass</td></tr>
+    <tr><td>Interface Language</td><td>English / 中文 / 日本語 / Русский / Español; the interface updates immediately</td><td>中文</td></tr>
 </table>
 
-<h3>10.3 View Menu Quick Settings</h3>
-<p>The following visual settings can also be toggled directly via the <strong>View</strong> menu:</p>
+<h3>10.3 Editing</h3>
+<table>
+    <tr><th width="34%">Setting</th><th>Description</th><th width="16%">Default</th></tr>
+    <tr><td>Audio Editing Scheme</td><td>OpenTune or OpenDyne; switching also switches the editor and toolset</td><td>OpenTune</td></tr>
+    <tr><td>Horizontal Zoom Sensitivity</td><td>Sensitivity of Ctrl + wheel horizontal zoom, range 0.10–1.00</td><td>0.35</td></tr>
+    <tr><td>Vertical Zoom Sensitivity</td><td>Sensitivity of Shift + wheel vertical zoom, range 0.10–1.00</td><td>0.35</td></tr>
+    <tr><td>Scroll Speed</td><td>Speed of wheel scrolling through the view, range 30–300</td><td>90</td></tr>
+    <tr><td>Tuning Hz</td><td>Reference pitch frequency, range 400–500 Hz, affecting note name conversion and the automatic correction target</td><td>440 Hz</td></tr>
+    <tr><td>Grid Style</td><td>Piano Lanes / Equal Spacing</td><td>Piano Lanes</td></tr>
+    <tr><td>Move Snap</td><td>Follow Global Scale / Snap to Semitones; OpenTune scheme only</td><td>Follow Global Scale</td></tr>
+    <tr><td>Preview transposition while dragging notes</td><td>Auditions the target pitch while dragging a note, and controls audition after keyboard edits</td><td>Off</td></tr>
+    <tr><td>Accessibility mode</td><td>Enables screen reader announcements and keyboard note editing</td><td>Off</td></tr>
+    <tr><td>Reset to Defaults</td><td>Restores zoom sensitivity and scroll speed to their defaults</td><td>—</td></tr>
+</table>
+
+<h3>10.4 View</h3>
+<table>
+    <tr><th width="34%">Setting</th><th>Description</th><th width="16%">Default</th></tr>
+    <tr><td>Note Labels</td><td>Show All / C Only / Hide</td><td>C Only</td></tr>
+    <tr><td>Show Unvoiced Frames</td><td>Shows pitch data on unvoiced passages</td><td>Off</td></tr>
+    <tr><td>Background Brightness</td><td>Piano roll background lightness, range 0%–200%</td><td>100%</td></tr>
+    <tr><td>Pitch Correction Curve Color</td><td>Click the swatch to choose the corrected curve color</td><td>Blue</td></tr>
+    <tr><td>Original Pitch Curve Color</td><td>Click the swatch to choose the original pitch curve color</td><td>Red</td></tr>
+</table>
+
+<h3>10.5 Shortcuts</h3>
+<p>Lists customizable actions in three sections: General, OpenTune Mode, and OpenDyne Mode. Click an entry and then press a key, roll the wheel, or click the middle or a side button to bind it; one action can hold several inputs; a conflict names the action that owns the existing binding and lets you reassign it directly.</p>
+<p>The page provides Reset All to Defaults to return every binding to its factory setting.</p>
+
+<h3>10.6 Mouse Trail (Standalone Only)</h3>
+<table>
+    <tr><th width="34%">Setting</th><th>Description</th><th width="16%">Default</th></tr>
+    <tr><td>Mouse Trail</td><td>Off / Classic / Neon / Fire / Ocean / Galaxy / Cherry Blossom / Matrix</td><td>Classic</td></tr>
+</table>
+
+<h3>10.7 Audio Device (Lower Part of the Audio Page in Standalone)</h3>
+<p>These controls sit in the audio device section of the Audio page in the Standalone app; the plugin gets audio output from the host, so it does not show them.</p>
+<table>
+    <tr><th width="34%">Control</th><th>Description</th></tr>
+    <tr><td>Browse Device Type</td><td>Selects the driver type, such as ASIO, WASAPI, or DirectSound</td></tr>
+    <tr><td>Output</td><td>Selects the output device</td></tr>
+    <tr><td>Sample Rate</td><td>Sets the device sample rate</td></tr>
+    <tr><td>Buffer Size</td><td>Sets the buffer; smaller values lower latency and raise CPU load</td></tr>
+    <tr><td>Active Output Channels</td><td>Check the output channels to use</td></tr>
+    <tr><td>Test</td><td>Plays a test tone to confirm the selected device and channels work</td></tr>
+</table>
+
+<h3>10.8 View Menu Toggles</h3>
+<p>These display settings also switch directly from the View menu, with the same effect as in Preferences:</p>
 <ul>
-    <li>Show Waveform — Show/hide waveform</li>
-    <li>Piano Key Lanes — Checked shows piano key lanes; unchecked switches to scale assist</li>
-    <li>Note Labels — Note name display mode</li>
-    <li>Show Chunk Boundaries — Chunk boundaries</li>
-    <li>Show Unvoiced Frames — Unvoiced frames</li>
-    <li>Theme — Theme switching</li>
-    <li>Mouse Trail — Mouse trail theme</li>
+    <li>Show Waveform — show or hide the audio waveform</li>
+    <li>Piano Keyboard — show or hide the piano keys on the left</li>
+    <li>Scale Brightness — shades piano keys by the current scale</li>
+    <li>Note Labels — Show All / C Only / Hide</li>
+    <li>Show Unvoiced Frames — shows pitch data on unvoiced passages</li>
+    <li>Theme, UI Zoom, Mouse Trail, Mouse Cursor Style, Track Colors</li>
 </ul>
 
+<div class="page-break"></div>
 <h2 id="shortcuts">11. Keyboard Shortcuts</h2>
 
-<h3>11.1 Playback Controls</h3>
+<p>The shortcuts in the tables below are editable in Preferences → Shortcuts, with macOS defaults listed separately. In the plugin, play, pause, and stop are controlled by the host DAW, so the app no longer responds to those three transport shortcuts.</p>
+
+<h3>11.1 Playback and Transport</h3>
 <table class="shortcut-table">
-    <tr><th>Shortcut</th><th>Function</th><th>macOS Default</th></tr>
-    <tr><td>Space</td><td>Play / Pause</td><td>Space</td></tr>
-    <tr><td>Enter</td><td>Stop playback</td><td>. (period)</td></tr>
-    <tr><td>A</td><td>Play from beginning</td><td>&#8984;.</td></tr>
-    <tr><td>Escape</td><td>Cancel current operation / Stop</td><td>Esc</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS Default</th><th>Function</th></tr>
+    <tr><td>Space</td><td>Space</td><td>Play / Pause</td></tr>
+    <tr><td>Enter</td><td>⌘⌥⇧.</td><td>Stop playback</td></tr>
+    <tr><td>A</td><td>⌘⌥⇧Return</td><td>Play from the start; pressing it during playback pauses and returns to the start</td></tr>
 </table>
 
 <h3>11.2 Editing Operations</h3>
 <table class="shortcut-table">
-    <tr><th>Shortcut</th><th>Function</th></tr>
+    <tr><th width="30%">Shortcut</th><th>Function</th></tr>
     <tr><td>Ctrl + Z</td><td>Undo</td></tr>
     <tr><td>Ctrl + Y / Ctrl + Shift + Z</td><td>Redo</td></tr>
     <tr><td>Ctrl + X</td><td>Cut</td></tr>
     <tr><td>Ctrl + C</td><td>Copy</td></tr>
     <tr><td>Ctrl + V</td><td>Paste</td></tr>
     <tr><td>Ctrl + A</td><td>Select All</td></tr>
-    <tr><td>Delete / Backspace</td><td>Delete selected content</td></tr>
+    <tr><td>Ctrl + D</td><td>Duplicate in Place</td></tr>
+    <tr><td>Delete / Backspace / 1</td><td>Delete selected content</td></tr>
+    <tr><td>Esc</td><td>Cancel selection / current operation</td></tr>
 </table>
 
-<h3>11.3 Tool Switching</h3>
-<p><strong>OpenTune Tools</strong></p>
+<h3>11.3 Clip Operations in the Arrange View</h3>
 <table class="shortcut-table">
-    <tr><th>Shortcut</th><th>Tool</th></tr>
-    <tr><td>2</td><td>Draw Note</td></tr>
-    <tr><td>3</td><td>Select</td></tr>
-    <tr><td>4</td><td>Anchor (LineAnchor)</td></tr>
-    <tr><td>5</td><td>Freehand Draw (HandDraw)</td></tr>
-    <tr><td>6</td><td>Auto-Tune</td></tr>
-    <tr><td>T</td><td>Time Tool</td></tr>
+    <tr><th width="30%">Windows</th><th width="24%">macOS Default</th><th>Function</th></tr>
+    <tr><td>S</td><td>⌘E</td><td>Split the selected clip at the playhead</td></tr>
+    <tr><td>M</td><td>⌘J</td><td>Merge with the adjacent clip</td></tr>
+    <tr><td>← / →</td><td>← / →</td><td>Nudge the clip left / right</td></tr>
+    <tr><td>Ctrl + Shift + S</td><td>Ctrl + Shift + S</td><td>Toggle snap</td></tr>
 </table>
 
-<p><strong>OpenDyne Tools</strong></p>
-<table class="shortcut-table">
-    <tr><th>Shortcut</th><th>Tool</th></tr>
-    <tr><td>2</td><td>Draw Note</td></tr>
-    <tr><td>3</td><td>Select</td></tr>
-    <tr><td>4</td><td>Pitch Modulation</td></tr>
-    <tr><td>5</td><td>Pitch Drift</td></tr>
-    <tr><td>6</td><td>Volume Envelope</td></tr>
-    <tr><td>7</td><td>Scissors</td></tr>
-    <tr><td>T</td><td>Time Tool</td></tr>
-</table>
-
-<h3>11.4 View Operations</h3>
+<h3>11.4 Tool Switching</h3>
 <p><strong>OpenTune Mode</strong></p>
 <table class="shortcut-table">
-    <tr><th>Shortcut</th><th>Function</th></tr>
-    <tr><td>Mouse Wheel</td><td>Vertical scrolling</td></tr>
-    <tr><td>Shift + Mouse Wheel</td><td>Vertical zoom (pitch axis)</td></tr>
-    <tr><td>Ctrl + Mouse Wheel</td><td>Horizontal zoom (timeline)</td></tr>
-    <tr><td>Alt + Mouse Wheel</td><td>Horizontal scrolling</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS Default</th><th>Tool</th></tr>
+    <tr><td>2</td><td>2</td><td>Draw Note</td></tr>
+    <tr><td>3</td><td>3</td><td>Select</td></tr>
+    <tr><td>4</td><td>4</td><td>Line Anchor</td></tr>
+    <tr><td>5</td><td>H</td><td>Hand Draw</td></tr>
+    <tr><td>6</td><td>A</td><td>Auto Correction</td></tr>
+    <tr><td>E</td><td>E</td><td>EQ</td></tr>
+    <tr><td>T</td><td>T</td><td>Time Tool (requires experimental features)</td></tr>
 </table>
 
-<p><strong>OpenDyne Mode</strong>: wheel navigation is a fixed mapping and cannot be customized. For Ctrl + Mouse Wheel, use Ctrl on Windows/Linux and Command (&#8984;) on macOS.</p>
+<p><strong>OpenDyne Mode</strong></p>
 <table class="shortcut-table">
-    <tr><th>Shortcut</th><th>Function</th></tr>
-    <tr><td>Mouse Wheel</td><td>Vertical scrolling</td></tr>
-    <tr><td>Shift + Mouse Wheel</td><td>Horizontal scrolling</td></tr>
-    <tr><td>Ctrl + Mouse Wheel</td><td>Synchronous horizontal and vertical zoom</td></tr>
-    <tr><td>Alt + Mouse Wheel</td><td>Vertical zoom (pitch axis)</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS Default</th><th>Tool</th></tr>
+    <tr><td>F1</td><td>1</td><td>Select</td></tr>
+    <tr><td>F2</td><td>2</td><td>Pitch</td></tr>
+    <tr><td>F3</td><td>3</td><td>Modulation</td></tr>
+    <tr><td>F4</td><td>5</td><td>Volume Envelope</td></tr>
+    <tr><td>F5</td><td>4</td><td>Drift</td></tr>
+    <tr><td>F6</td><td>6</td><td>Scissors</td></tr>
+    <tr><td>E</td><td>E</td><td>EQ</td></tr>
+    <tr><td>T</td><td>T</td><td>Time Tool (requires experimental features)</td></tr>
 </table>
 
-<div class="tip">
-    <div class="tip-title">Customizable Shortcuts</div>
-    Configurable editing and tool shortcuts can be customized in Preferences &rarr; Shortcuts. Supports multiple bindings, conflict detection, and one-click reset. macOS displays keys using &#8984;/&#8997;/&#8679; symbols automatically.
-</div>
+<h3>11.5 View Navigation and Zoom</h3>
+<table class="shortcut-table">
+    <tr><th width="30%">Windows</th><th width="26%">macOS Default</th><th>Function</th></tr>
+    <tr><td>Mouse Wheel</td><td>Mouse Wheel</td><td>Vertical scrolling</td></tr>
+    <tr><td>Shift + Wheel</td><td>Shift + Wheel</td><td>Vertical zoom (pitch axis) centered on the pointer</td></tr>
+    <tr><td>Ctrl + Wheel</td><td>Control + Wheel</td><td>Horizontal zoom (time axis) centered on the pointer</td></tr>
+    <tr><td>Alt + Wheel</td><td>Option + Wheel</td><td>Horizontal scrolling</td></tr>
+    <tr><td>Ctrl + Alt + ← / →</td><td>⌘⌥⇧← / →</td><td>Horizontal zoom out / in</td></tr>
+    <tr><td>Ctrl + Alt + ↑ / ↓</td><td>⌘⌥⇧↑ / ↓</td><td>Vertical zoom in / out</td></tr>
+    <tr><td>Alt + ← / →</td><td>Option + ← / →</td><td>Horizontal scroll left / right</td></tr>
+    <tr><td>Ctrl + 0</td><td>⌘0</td><td>Fit selected notes</td></tr>
+    <tr><td>Ctrl + Shift + 0</td><td>⌘⇧0</td><td>Fit all notes</td></tr>
+</table>
+
+<h3>11.6 Custom Shortcuts</h3>
+<ul>
+    <li>All configurable actions live in Preferences → Shortcuts, grouped by scheme.</li>
+    <li>Bindings accept keyboard keys, the four wheel directions, the middle button, and both side buttons.</li>
+    <li>On a conflict, a dialog names the action the input is assigned to; confirming replaces the old binding.</li>
+    <li>Reset All to Defaults restores every binding at once.</li>
+</ul>
 
 <div class="page-break"></div>
-<h2 id="themes">12. Themes &amp; Visuals</h2>
+<h2 id="accessibility">12. Accessibility Mode and Keyboard Editing</h2>
 
-<h3>12.1 Interface Themes</h3>
-<table>
-    <tr><th>Theme</th><th>Style</th><th>Best For</th></tr>
-    <tr><td><strong>Aurora Glass</strong></td><td>Dark background, neon glow, frosted glass, skeuomorphic knobs (metallic silver + heart center), refined module borders</td><td>Tech-forward aesthetic, personal expression</td></tr>
+<p>With <strong>Accessibility mode</strong> enabled in Preferences → Editing, the interface supports screen reader announcements and notes can be edited entirely from the keyboard. With it off, the arrow keys only perform basic pitch moves and note switching.</p>
+
+<h3>12.1 Screen Reader Announcements</h3>
+<ul>
+    <li>Control names and current values: knobs, dropdowns, checkboxes, and tabs.</li>
+    <li>Operation results: the item undone or redone, the number of notes removed, split and merge results, and whether auto correction was applied.</li>
+    <li>Note information: note name, pitch change, start and end time, modulation, drift, and volume.</li>
+    <li>Playback position and current state: the position when paused, and an explanation when the position cannot be obtained during playback.</li>
+    <li>Render status and render progress.</li>
+</ul>
+
+<h3>12.2 Keyboard Note Editing</h3>
+<p>In the piano roll, select a note with the left and right arrow keys, then edit it from the keyboard. When shortcuts conflict, the bindings in Preferences take precedence.</p>
+<table class="shortcut-table">
+    <tr><th width="34%">Key</th><th>Result</th></tr>
+    <tr><td>← / →</td><td>Select the previous / next note</td></tr>
+    <tr><td>Shift + ← / →</td><td>Extend the selection</td></tr>
+    <tr><td>Home / End</td><td>Select the first / last note</td></tr>
+    <tr><td>↑ / ↓</td><td>Announce the available edit keys without changing content</td></tr>
+    <tr><td>Ctrl + ↑ / ↓</td><td>Raise / lower pitch by the Pitch Grid step</td></tr>
+    <tr><td>Ctrl + Shift + ↑ / ↓</td><td>Adjust pitch finely in 1-cent steps</td></tr>
+    <tr><td>Alt + ↑ / ↓</td><td>Move pitch by semitones even when the target is outside the scale</td></tr>
+    <tr><td>Ctrl + ← / →</td><td>Adjust the note end</td></tr>
+    <tr><td>Ctrl + Shift + ← / →</td><td>Adjust the note start</td></tr>
+    <tr><td>X</td><td>Split the selected note at a pitch change, or in the middle when there is no clear change</td></tr>
+    <tr><td>Shift + X</td><td>Split the selected note at the playhead</td></tr>
+    <tr><td>J</td><td>Merge with the next adjacent note</td></tr>
+    <tr><td>R</td><td>Restore the original sung pitch</td></tr>
+    <tr><td>I</td><td>Announce information about the selected note</td></tr>
+    <tr><td>Shift + I</td><td>Announce the current playback position</td></tr>
+    <tr><td>Enter</td><td>Run the note's default action: in the OpenDyne scheme it opens the selected note's edit actions, and with the EQ tool it opens that note's EQ</td></tr>
+    <tr><td>Shift + F10</td><td>Open the tool menu, the same as right-clicking</td></tr>
 </table>
 
-<h3>12.2 Mouse Trail Effects (Standalone Only)</h3>
+<p>In the OpenDyne scheme, with the Modulation, Drift, or Volume Envelope tool selected, Ctrl + ↑ / ↓ adjust the matching parameter: modulation and drift in steps of about 5% and volume in steps of 1 dB; adding Shift uses fine steps.</p>
+
+<div class="note">
+    <div class="note-title">Where the Position Comes From in the Plugin</div>
+    <p>In ARA hosts the playhead position comes from the host; after playback stops, the host's current edit cursor position is used. When the host provides no position, operations that depend on the cursor, such as Shift + X, announce that the position is unknown.</p>
+</div>
+
+<h2 id="themes">13. Themes &amp; Visuals</h2>
+
+<h3>13.1 Interface Themes</h3>
 <table>
-    <tr><th>Effect</th><th>Style</th></tr>
+    <tr><th width="18%">Theme</th><th>Style</th><th>Best For</th></tr>
+    <tr><td><strong>Aurora Glass</strong></td><td>Dark background, neon glow, frosted glass, skeuomorphic knobs, and refined module borders</td><td>Long correction sessions and a tech-forward look</td></tr>
+</table>
+
+<h3>13.2 UI Zoom</h3>
+<p>View menu → UI Zoom offers six levels: 75%, 90%, 100%, 110%, 125%, and 150%. Zooming scales the whole interface and its fonts together, and the window content reflows.</p>
+
+<h3>13.3 Background Brightness and Curve Colors</h3>
+<ul>
+    <li><strong>Background Brightness</strong>: 0%–200%, default 100%, for adjusting contrast in bright or dark rooms.</li>
+    <li><strong>Original Pitch Curve Color</strong>: the display color of the original sung pitch, red by default.</li>
+    <li><strong>Pitch Correction Curve Color</strong>: the display color of the correction, blue by default.</li>
+</ul>
+
+<h3>13.4 Note Colors</h3>
+<p>Note block colors distinguish tracks and also reflect the size of the edit: as the change grows, upward-shifted notes lean cool blue and downward-shifted notes lean warm orange. Notes with EQ processing are slightly darker. This makes notes that need resynthesis easy to find.</p>
+
+<h3>13.5 Mouse Trail Effects (Standalone Only)</h3>
+<table>
+    <tr><th width="20%">Effect</th><th>Style</th></tr>
     <tr><td>Off</td><td>No trail</td></tr>
     <tr><td>Classic</td><td>Blue classic trail (default)</td></tr>
     <tr><td>Neon</td><td>Magenta/cyan neon gradient</td></tr>
@@ -604,131 +829,171 @@
     <tr><td>Matrix</td><td>Green matrix digital rain</td></tr>
 </table>
 
-<h3>12.3 Hover Animations</h3>
-<p>All toolbar buttons provide subtle visual feedback on mouse hover: icons slightly enlarge (1.08&times;) and brighten by 15%, delivering instant interactive confirmation.</p>
+<h3>13.6 Mouse Cursor Style</h3>
+<p>The View menu offers four cursor styles: System, Adwaita, Capitaine, and Breeze.</p>
 
-<h2 id="gpu">13. GPU Acceleration</h2>
+<h3>13.7 Hover Animations</h3>
+<p>Toolbar button icons enlarge slightly and brighten on hover, giving instant interaction feedback.</p>
 
-<p>OpenTune supports GPU-accelerated vocoder inference, significantly improving rendering speed.</p>
+<h2 id="gpu">14. GPU Acceleration</h2>
 
-<h3>13.1 Supported Platforms</h3>
+<p>OpenTune accelerates pitch analysis and vocoder inference on the GPU, significantly speeding up processing.</p>
+
+<h3>14.1 Supported Platforms</h3>
 <ul>
-    <li><strong>Windows</strong>: Supports NVIDIA / AMD / Intel GPUs via DirectML</li>
-    <li><strong>macOS</strong>: Supports Apple GPU via CoreML</li>
-    <li>Automatically falls back to CPU if no discrete GPU is present or GPU is incompatible — normal usage unaffected</li>
+    <li><strong>Windows</strong>: NVIDIA / AMD / Intel GPUs through DirectML</li>
+    <li><strong>macOS</strong>: system graphics acceleration through CoreML</li>
+    <li>When no GPU is available or the GPU is unsupported, processing switches to the CPU with no loss of features</li>
 </ul>
 
-<h3>13.2 Configuration</h3>
-<p>In Preferences &rarr; Shared &rarr; Render Priority, select:</p>
+<h3>14.2 Configuration</h3>
+<p>In Preferences → Audio → Rendering Priority, choose:</p>
 <ul>
-    <li><strong>GPU Preferred</strong> (default): Automatically use GPU acceleration</li>
-    <li><strong>CPU Preferred</strong>: Force CPU usage — suitable when GPU compatibility issues arise</li>
+    <li><strong>GPU First</strong> (default): uses GPU acceleration first</li>
+    <li><strong>CPU First</strong>: uses the CPU entirely, suitable when GPU drivers are unstable</li>
 </ul>
 
-<h2 id="vst3">14. VST3/ARA Plugin Mode</h2>
-
-<p>The OpenTune VST3 plugin integrates deeply with DAWs via the ARA2 protocol, enabling non-destructive editing.</p>
-
-<h3>14.1 How It Works</h3>
-<ul>
-    <li>Loaded as a VST3 + ARA2 extension in compatible DAWs (e.g., Studio One, Cubase, Logic Pro)</li>
-    <li>The DAW provides audio source data via the ARA protocol — no file import/export needed</li>
-    <li>Editing results are reflected in real time during DAW timeline playback</li>
-    <li>Supports host transport sync (Play/Stop/Seek) and BPM following; seeking and playback follow steadily, with no playhead jitter</li>
-    <li>Stable continuous playback in hosts: no more stutter or repeated fragments (e.g. in Cubase 13 Pro); the output is cleared immediately when playback stops</li>
-    <li>Supports ARA multi-region binding; multiple regions on the same source share editing state</li>
-    <li>Reference auto-alignment: reference pitch is automatically aligned across ARA regions, improving multi-track editing consistency</li>
-    <li>Reading and editing apply only to the currently selected audio clip — multiple clips no longer interfere with each other; the read button is temporarily unavailable until the focused clip is ready</li>
-    <li>The original pitch curve refreshes automatically when the input audio changes</li>
-    <li>Audio clips captured in the host render automatically once pitch analysis is ready — clips are no longer missing or delayed</li>
-    <li>VST3 plugin mode hides Standalone-exclusive menu items such as project / import / export</li>
-</ul>
-
-<h3>14.2 Differences from Standalone</h3>
-<table>
-    <tr><th>Feature</th><th>Standalone</th><th>VST3/ARA</th></tr>
-    <tr><td>Multi-track editing</td><td>&#10003; Up to 12 tracks</td><td>&#10007; Single clip editing</td></tr>
-    <tr><td>File import/export</td><td>&#10003;</td><td>&#10007; (Managed by DAW)</td></tr>
-    <tr><td>Mouse trail effects</td><td>&#10003; 8 themes</td><td>&#10007;</td></tr>
-    <tr><td>Custom shortcuts</td><td>&#10003;</td><td>&#10007; (Uses DAW shortcuts)</td></tr>
-    <tr><td>Audio device settings</td><td>&#10003;</td><td>&#10007; (Uses DAW audio engine)</td></tr>
-    <tr><td>Host transport sync</td><td>&#10007;</td><td>&#10003;</td></tr>
-    <tr><td>ARA non-destructive editing</td><td>&#10007;</td><td>&#10003;</td></tr>
-    <tr><td>Piano roll editing</td><td>&#10003;</td><td>&#10003;</td></tr>
-    <tr><td>Parameter panel</td><td>&#10003;</td><td>&#10003;</td></tr>
-    <tr><td>Undo/Redo</td><td>&#10003;</td><td>&#10003;</td></tr>
-    <tr><td>Theme switching</td><td>&#10003;</td><td>&#10003;</td></tr>
-    <tr><td>Multi-language UI</td><td>&#10003;</td><td>&#10003;</td></tr>
-</table>
+<div class="warning">
+    <div class="warning-title">What Happens After a Switch</div>
+    <p>Switching Rendering Priority reloads the processing engine; switching Hybrid Mode resynthesizes existing clips the new way with progress in the top-right badge; switching Pitch Detection Model affects later pitch analysis and leaves analyzed clips as they are.</p>
+</div>
 
 <div class="page-break"></div>
-<h2 id="export">15. Audio Export</h2>
+<h2 id="vst3">15. VST3/ARA Plugin Mode</h2>
 
-<h3>15.1 Export Format</h3>
+<p>The OpenTune plugin loads into a DAW in VST3 format and supports non-destructive editing through the ARA2 extension. The macOS version also provides an AU component.</p>
+
+<h3>15.1 How It Works</h3>
 <ul>
-    <li><strong>Format</strong>: WAV</li>
-    <li><strong>Sample Rate</strong>: 44.1kHz</li>
-    <li><strong>Bit Depth</strong>: 32-bit Float</li>
-    <li><strong>Channels</strong>: Mono (Clip/Track) / Stereo (Master Mix)</li>
+    <li>Once loaded in a compatible host (such as Studio One, Cubase, REAPER, or Logic Pro), all pitch work happens inside the plugin window.</li>
+    <li>ARA hosts supply audio data directly, with no file import or export; edits show up in host timeline playback in real time.</li>
+    <li>Supports host transport sync (play/stop/locate) and tempo following.</li>
+    <li>Reading and editing apply only to the currently selected region, and regions in a multi-region project stay independent.</li>
+    <li>When the input audio changes, the original pitch refreshes automatically.</li>
+    <li>Playback uses the original pitch until rendering completes, then switches to the corrected audio automatically.</li>
 </ul>
 
-<h3>15.2 Export Options</h3>
+<h3>15.2 Reading Audio</h3>
+<p>All audio reading in the plugin goes through the <strong>Read Audio</strong> button (red round icon) in the top toolbar, and the two host types behave differently:</p>
 <table>
-    <tr><th>Option</th><th>Description</th></tr>
-    <tr><td>Export Selected Clip</td><td>Export only the currently selected audio clip</td></tr>
-    <tr><td>Export Track</td><td>Export the mix of all clips on a specified track</td></tr>
-    <tr><td>Export Bus (Master Mix)</td><td>Export the final mixdown of all tracks</td></tr>
+    <tr><th width="22%">Host Type</th><th>Action</th><th>Result</th></tr>
+    <tr><td><strong>ARA</strong></td><td>Select the audio event in the host and click Read Audio once</td><td>Reads the selected region and starts analysis; the piano roll then shows the pitch curve. If it was already read, the app reports “Audio already read”.</td></tr>
+    <tr><td><strong>No ARA</strong></td><td>Click Read Audio to start capture, start host playback, then click again when you reach the position you need</td><td>The button stays lit during capture; when it ends, the app analyzes the audio automatically and makes it editable. Each capture creates a new recording region and leaves existing regions unchanged; overlaps caused by locating back and forth during capture merge automatically, so no sound is duplicated.</td></tr>
 </table>
 
-<h3>15.3 Export Workflow</h3>
+<h3>15.3 External Edit</h3>
+<p>The “External Edit” button in the plugin hands the current pitch curve to the OpenTune standalone app for detailed work:</p>
 <ol>
-    <li>Menu <strong>File &rarr; Export Audio</strong></li>
-    <li>Select export range</li>
-    <li>Choose save location and filename</li>
-    <li>Wait for background rendering to complete (progress shown in render badge)</li>
+    <li>Click <strong>External Edit</strong>; the standalone app starts and opens the editor for that audio.</li>
+    <li>Edit the pitch in the standalone app and click <strong>Save and Return</strong>.</li>
+    <li>The plugin reads the result back automatically and announces “External edit applied”.</li>
+</ol>
+<p>Clicking before audio is read prompts you to read audio first; if the returned curve file is corrupt, the session stays open so you can fix it in the standalone app and save again.</p>
+
+<h3>15.4 Differences from the Standalone App</h3>
+<table>
+    <tr><th width="30%">Feature</th><th width="26%">Standalone</th><th>Plugin</th></tr>
+    <tr><td>Multi-track editing</td><td>✓ Up to 12 tracks</td><td>✗ Tracks managed by the host</td></tr>
+    <tr><td>File import/export</td><td>✓</td><td>✗ Managed by the host</td></tr>
+    <tr><td>Save/open project</td><td>✓</td><td>✗ Saved with the host project</td></tr>
+    <tr><td>Audio device settings</td><td>✓</td><td>✗ Uses the host audio engine</td></tr>
+    <tr><td>Mouse trail</td><td>✓ 8 styles</td><td>✗</td></tr>
+    <tr><td>Experimental features (Time Tool)</td><td>✓</td><td>✗</td></tr>
+    <tr><td>Transport control (play/stop)</td><td>✓</td><td>✗ Uses host transport</td></tr>
+    <tr><td>ARA non-destructive editing</td><td>✗</td><td>✓</td></tr>
+    <tr><td>External Edit</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Piano roll, parameter panel, undo/redo, themes, languages</td><td>✓</td><td>✓</td></tr>
+</table>
+
+<div class="note">
+    <div class="note-title">Menu and Transport Differences</div>
+    <p>In plugin mode, project and file items are hidden from the File menu; clicking import or export tells you to do it in the host. The plugin header has no play, pause, or stop buttons and keeps only the menus, time display, Read Audio, tempo display, and the more menu; playback follows the host transport and the related shortcuts do nothing inside the plugin.</p>
+</div>
+
+<h2 id="export">16. Audio Export</h2>
+
+<h3>16.1 Export Format</h3>
+<ul>
+    <li><strong>Format</strong>: WAV</li>
+    <li><strong>Sample Rate</strong>: 44.1 kHz</li>
+    <li><strong>Bit Depth</strong>: 32-bit Float</li>
+    <li><strong>Channels</strong>: mono for clips and tracks, stereo for the bus mix</li>
+</ul>
+
+<h3>16.2 Export Range</h3>
+<table>
+    <tr><th width="30%">Option</th><th>Description</th></tr>
+    <tr><td>Export Selected Clip</td><td>Exports only the selected audio clip, with the pitch correction applied to it</td></tr>
+    <tr><td>Export Track</td><td>Exports the mixed result of all clips on the chosen track</td></tr>
+    <tr><td>Export Bus (Master Mix)</td><td>Exports the final mix of all tracks</td></tr>
+</table>
+
+<h3>16.3 Export Workflow</h3>
+<ol>
+    <li>Choose the menu <strong>File → Export Audio</strong> and pick the export range.</li>
+    <li>Choose the save location and file name.</li>
+    <li>If the target file exists, the app asks whether to overwrite it.</li>
+    <li>Wait for background rendering to finish; the app then reports the full path of the exported file, and reports the reason if it fails.</li>
 </ol>
 
-<h2 id="faq">16. FAQ</h2>
+<div class="tip">
+    <div class="tip-title">Let Rendering Finish Before Exporting</div>
+    <p>Export waits for all clips to become ready and then writes the file; while rendering is in progress the export queues, so seeing the Rendering badge beforehand is normal. Only one export task runs at a time.</p>
+</div>
+
+<h2 id="faq">17. FAQ</h2>
 
 <h3>Q1: No pitch curve after importing audio?</h3>
-<p><strong>A:</strong> Ensure <code>models/rmvpe.onnx</code> exists and is intact. The audio must contain clear vocal melodic content. Pure accompaniment/percussion contains no extractable pitch.</p>
+<p><strong>A:</strong> Make sure <code>C:\ProgramData\OpenTune\Models\fcpe.onnx</code> exists and is intact. The audio needs a clear vocal melody; pure accompaniment or percussion yields no usable pitch data. If analysis fails, the interface reports it, and re-importing the audio runs the analysis again.</p>
 
-<h3>Q2: GPU acceleration not working?</h3>
-<p><strong>A:</strong> Check the following:</p>
+<h3>Q2: GPU acceleration is not working?</h3>
+<p><strong>A:</strong> Check each of the following:</p>
 <ul>
-    <li>Ensure <code>DirectML.dll</code> is in the program directory</li>
-    <li>Confirm GPU drivers are updated to the latest version</li>
-    <li>Verify "Render Priority" is set to GPU Preferred in Preferences</li>
-    <li>Check log files to confirm GPU acceleration loaded successfully</li>
+    <li>The program directory contains <code>DirectML.dll</code> and a complete <code>D3D12</code> folder</li>
+    <li>The GPU driver is up to date</li>
+    <li>Preferences → Audio → Rendering Priority is GPU First</li>
+    <li>The log directory shows that GPU acceleration loaded</li>
 </ul>
 
-<h3>Q3: High memory usage?</h3>
-<p><strong>A:</strong> v1.7 has optimized memory management — the pitch-extraction model is automatically released after use. If usage remains high, try: disabling GPU acceleration (GPU rendering consumes additional memory), reducing the number of simultaneously open tracks.</p>
+<h3>Q3: Playback during rendering still uses the original pitch?</h3>
+<p><strong>A:</strong> This is the expected state. Editing pitch, transposing, or opening a project requires resynthesis; until rendering completes, playback uses the original pitch and the top-right badge shows Rendering (done/total). Once the badge disappears, playback uses the corrected audio.</p>
 
-<h3>Q4: Abnormal audio quality after correction?</h3>
-<p><strong>A:</strong> Possible causes: corrupted vocoder model files (re-download), Retune Speed set too high (try lowering below 30%), poor original recording quality.</p>
+<h3>Q4: The Time Tool is missing?</h3>
+<p><strong>A:</strong> The Time Tool is experimental: select Enable Experimental Features (Time Stretch Tool) in Preferences → Audio and the Time Tool button appears in the tool area. The plugin does not include this feature.</p>
 
-<h3>Q5: How to achieve a natural tuning effect?</h3>
+<h3>Q5: Corrected audio sounds wrong?</h3>
+<p><strong>A:</strong> Typical causes: corrupt model files (a reinstall restores them), Retune Speed set too high (lower it below 30%), and poor source recordings. Lower Retune Speed and fewer edits bring the sound closer to the original performance.</p>
+
+<h3>Q6: How do I get a natural correction?</h3>
 <ul>
-    <li>Use a lower Retune Speed (10&ndash;30%)</li>
-    <li>Preserve original vibrato; do not add artificial Vibrato</li>
-    <li>Use the LineAnchor tool for fine adjustments at key points</li>
-    <li>Choose the "OpenTune editing" scheme for more refined control</li>
+    <li>Use a low Retune Speed (10%–30%)</li>
+    <li>Keep the original vibrato and add no artificial vibrato</li>
+    <li>Use the Line Anchor tool to fine-tune key moments and change only what needs changing</li>
+    <li>Turn on Hybrid Mode so small corrections keep the original texture</li>
 </ul>
 
-<h3>Q6: VST3 plugin won't load in DAW?</h3>
-<p><strong>A:</strong> Ensure the <code>OpenTune.vst3</code> folder is complete (contains Contents/x86_64-win/ subdirectory), and the ONNX Runtime DLLs and model files are in the correct locations. Re-scan the VST3 directory in your DAW.</p>
+<h3>Q7: The plugin does not load in my DAW?</h3>
+<p><strong>A:</strong> Make sure the <code>OpenTune.vst3</code> folder is complete (it contains the <code>Contents\x86_64-win\</code> subdirectory) and the model files are in <code>C:\ProgramData\OpenTune\Models</code>. Rescan the host's VST3 folder after installation; using ARA requires an ARA2-capable host version.</p>
 
-<h3>Q7: How to switch the interface language?</h3>
-<p><strong>A:</strong> Preferences &rarr; Language — select your target language and the interface updates immediately. Supports Chinese, English, Japanese, Russian, and Spanish.</p>
+<h3>Q8: Read Audio does nothing in the plugin?</h3>
+<p><strong>A:</strong> In an ARA host, select an audio event in the host first; with nothing selected or the event not yet ready, the app asks you to select again. In a host without ARA, click Read Audio, start host playback, and click again to stop capture when playback ends.</p>
 
-<h3>Q8: What should I do when rendering or pitch analysis fails?</h3>
-<p><strong>A:</strong> A diagnostic dialog appears (for example "Render failed, dry signal may be used") with the log file path and the latest log contents for easy copying. Log folders: Windows <code>%APPDATA%\OpenTune\Logs</code>, macOS <code>~/Library/OpenTune/Logs/</code>.</p>
+<h3>Q9: How do I change the interface language?</h3>
+<p><strong>A:</strong> Preferences → Theme → Interface Language; the interface switches as soon as you pick a language. Chinese, English, Japanese, Russian, and Spanish are supported.</p>
+
+<h3>Q10: What do I do when rendering or pitch analysis fails?</h3>
+<p><strong>A:</strong> The app shows a diagnostic message (for example “Render failed; dry audio may be used. Reason: …”) with the log file path and the latest log content, ready to copy into a report. Log folders: Windows <code>%APPDATA%\OpenTune\Logs</code>, macOS <code>~/Library/OpenTune/Logs/</code>.</p>
+
+<h3>Q11: A saved project has no audio on another computer?</h3>
+<p><strong>A:</strong> Saving a project creates a matching “ProjectName_Media” folder next to the project file and copies the audio it uses. When moving the project, copy the <code>.otproj</code> file together with the matching <code>_Media</code> folder.</p>
+
+<h3>Q12: Shortcuts do nothing?</h3>
+<p><strong>A:</strong> First make sure focus is in the piano roll or the arrange view; inside the plugin, play, pause, and stop belong to the host and those three shortcuts do not respond. If a key conflicts with the system or another app, use the wheel or a mouse side button in Preferences → Shortcuts.</p>
 
 <hr>
 
 <footer>
-    <p>OpenTune v1.7 &mdash; AI-Powered Pitch Correction Software | Open Source &amp; Free | AGPL v3.0 License</p>
+    <p>OpenTune v1.8.3 — AI-Powered Pitch Correction Software | Open Source &amp; Free | AGPL v3.0 License</p>
     <p>Thanks to the DiffSinger open-source community and all contributors</p>
 </footer>
 

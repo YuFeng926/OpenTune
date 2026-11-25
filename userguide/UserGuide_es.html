@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenTune — Guía del usuario</title>
+    <title>Guía del usuario de OpenTune</title>
     <style>
         @page { size: A4; margin: 2cm; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -68,14 +68,14 @@
     <h1>OpenTune</h1>
     <div class="subtitle">Software de corrección de tono con IA</div>
     <div class="tagline">Preserva los formantes, transpone sin distorsión</div>
-    <div class="version">Guía del usuario v1.7</div>
-    <div class="version" style="margin-top: 10px;">Agosto 2026</div>
+    <div class="version">Guía del usuario v1.8.3</div>
+    <div class="version" style="margin-top: 10px;">Noviembre de 2026</div>
 </div>
 
 <div class="toc">
     <h2>Índice</h2>
     <ul>
-        <li><a href="#whats-new">★ Novedades de v1.7</a></li>
+        <li><a href="#whats-new">★ Novedades y mejoras de v1.8.3</a></li>
         <li><a href="#intro">1. Introducción al producto</a></li>
         <li><a href="#requirements">2. Requisitos del sistema</a></li>
         <li><a href="#install">3. Instalación e inicio</a></li>
@@ -84,73 +84,101 @@
         <li><a href="#features">6. Funciones principales</a></li>
         <li><a href="#tools">7. Herramientas de edición</a></li>
         <li><a href="#parameters">8. Parámetros detallados</a></li>
-        <li><a href="#schemes">9. Modos de edición</a></li>
+        <li><a href="#schemes">9. Esquemas de edición</a></li>
         <li><a href="#preferences">10. Preferencias</a></li>
         <li><a href="#shortcuts">11. Atajos de teclado</a></li>
-        <li><a href="#themes">12. Temas y apariencia</a></li>
-        <li><a href="#gpu">13. Aceleración GPU</a></li>
-        <li><a href="#vst3">14. Modo plugin VST3/ARA</a></li>
-        <li><a href="#export">15. Exportar audio</a></li>
-        <li><a href="#faq">16. Preguntas frecuentes</a></li>
+        <li><a href="#accessibility">12. Modo de accesibilidad y edición con el teclado</a></li>
+        <li><a href="#themes">13. Temas y apariencia</a></li>
+        <li><a href="#gpu">14. Aceleración GPU</a></li>
+        <li><a href="#vst3">15. Modo plugin VST3/ARA</a></li>
+        <li><a href="#export">16. Exportar audio</a></li>
+        <li><a href="#faq">17. Preguntas frecuentes</a></li>
     </ul>
 </div>
 
 <div class="page-break"></div>
-<h2 id="whats-new">★ Novedades de v1.7</h2>
+<h2 id="whats-new">★ Novedades y mejoras de v1.8.3</h2>
+
+<p>Este capítulo reúne los cambios que el usuario percibe directamente entre v1.8.0 y v1.8.3. Las operaciones del manual anterior que ya no se aplican están reescritas en el capítulo correspondiente de este manual.</p>
 
 <h3>🎉 Nuevas funciones</h3>
 <table>
-    <tr><th width="25%">Función</th><th>Descripción</th></tr>
-    <tr><td><strong>Modo de edición OpenDyne</strong></td><td>Modo de edición neuronal con flujo de trabajo estilo Melodyne: visualización de forma de onda, herramientas de modulación/deriva de tono, envolvente de volumen, corte con tijeras, barra de navegación de vista general</td></tr>
-    <tr><td><strong>Vista general estilo Melodyne</strong></td><td>Barra de previsualización de forma de onda fusionada con la barra de desplazamiento, navegación de la vista</td></tr>
-    <tr><td><strong>Navegación con rueda (OpenDyne)</strong></td><td>Ctrl+rueda zoom de doble eje, Alt+rueda zoom vertical, Shift+rueda desplazamiento horizontal</td></tr>
-    <tr><td><strong>Zoom estilo Melodyne</strong></td><td>Cmd+Alt doble clic enfoque/restaurar, flechas zoom preciso, cursor lupa temporal</td></tr>
-    <tr><td><strong>Ajuste a la cuadrícula de tono</strong></td><td>Ajuste a la cuadrícula de tono conmutable, ajuste a la nota más cercana con un clic</td></tr>
-    <tr><td><strong>Retracción de bordes de nota</strong></td><td>Retracción automática de bordes al arrastrar notas, evita ocultar elementos adyacentes</td></tr>
-    <tr><td><strong>Barra de herramientas de clic derecho (OpenDyne)</strong></td><td>La selección de herramienta con clic derecho cambió a una barra vertical de iconos</td></tr>
-    <tr><td><strong>Barra de vista general de la línea de tiempo</strong></td><td>Nueva barra de vista general con memoria de la vista del rollo de piano</td></tr>
-    <tr><td><strong>Temas de cursor del ratón</strong></td><td>3 estilos de cursor: Adwaita, Capitaine, Breeze</td></tr>
-    <tr><td><strong>Diseño de atajos en tres secciones</strong></td><td>La página de configuración de atajos se divide en secciones General/OpenTune/OpenDyne</td></tr>
-    <tr><td><strong>Edición EQ a nivel de nota</strong></td><td>Nueva función de edición EQ a nivel de nota, con filtros dinámicos y cadena de espectro real</td></tr>
-    <tr><td><strong>Cambio de estilo de cuadrícula</strong></td><td>Cambio de estilo de cuadrícula del piano roll (PianoLanes/EqualSpacing)</td></tr>
-    <tr><td><strong>Brillo de fondo del piano roll</strong></td><td>Deslizador de brillo de fondo del piano roll en la página de vista de configuración (0%-200%, predeterminado 100%)</td></tr>
-    <tr><td><strong>Frecuencia de tono de referencia configurable</strong></td><td>El usuario puede configurar la frecuencia de referencia (400-500Hz), reemplazando los 440Hz codificados</td></tr>
-    <tr><td><strong>Modo de captura VST3 sin ARA</strong></td><td>Nuevo modo de captura VST3 sin ARA, compatible con flujo de trabajo de captura→renderizado→reproducción estilo Melodyne Transfer</td></tr>
-    <tr><td><strong>Doble clic de tijeras para fusionar</strong></td><td>Doble clic en la línea de separación para fusionar notas adyacentes, compatible con fusión en cadena de notas múltiples seleccionadas</td></tr>
+    <tr><th width="26%">Función</th><th>Descripción</th></tr>
+    <tr><td><strong>Deslizadores de zoom del piano roll</strong></td><td>En la esquina inferior izquierda de la vista se añade un grupo de deslizadores de zoom: la barra vertical controla el zoom del eje de tono y la horizontal el zoom del eje de tiempo. Los dos deslizadores tienen el mismo recorrido y el mismo factor, y al arrastrarlos el zoom se ancla en el centro de la vista; el zoom con la rueda sigue centrado en la posición del puntero.</td></tr>
+    <tr><td><strong>Color de las notas según la transposición</strong></td><td>Las notas con cambios grandes llevan color automáticamente: las subidas tiran a azul frío y las bajadas a naranja cálido, y cuanto mayor es el cambio más visible es el color. Las notas que necesitan resíntesis se identifican de un vistazo.</td></tr>
+    <tr><td><strong>Color personalizado de las curvas de tono</strong></td><td>En Preferencias → Ver se eligen por separado «Color de la curva de tono original» y «Color de la curva de corrección de tono».</td></tr>
+    <tr><td><strong>Zoom de la interfaz</strong></td><td>El menú Ver incorpora seis niveles de zoom de interfaz: 75%, 90%, 100%, 110%, 125% y 150%. Las pantallas pequeñas y las pantallas de alta densidad encuentran el tamaño adecuado.</td></tr>
+    <tr><td><strong>Interruptores centralizados en el menú Ver</strong></td><td>El menú Ver muestra u oculta la forma de onda, el teclado de piano, el brillo de escala, las etiquetas de notas y los cuadros sordos, y cambia el tema, el ratón y el estilo del cursor.</td></tr>
+    <tr><td><strong>Color pista</strong></td><td>El menú contextual de la pista incorpora «Color pista», que asigna un color personalizado o un color aleatorio. En el menú Ver se cambia el modo de color de todas las pistas nuevas: color aleatorio o color personalizado.</td></tr>
+    <tr><td><strong>Preferencias reorganizadas</strong></td><td>Los ajustes se reparten en seis páginas: Audio, Tema, Edicion, Ver, Atajos de teclado y Ratón. Ctrl + Tab cambia de página y la tecla Tab recorre cada control.</td></tr>
+    <tr><td><strong>Modo de accesibilidad</strong></td><td>Con el modo activo, la interfaz anuncia los elementos con el lector de pantalla y permite seleccionar, mover, cambiar el zoom, dividir y unir notas con el teclado.</td></tr>
+    <tr><td><strong>Atajos vinculables al ratón</strong></td><td>La rueda arriba/abajo/izquierda/derecha, el botón central y los botones laterales del ratón se asignan como atajos. La página de ajustes se divide en «General / Modo OpenTune / Modo OpenDyne»; ante un conflicto, el aviso indica la asignación existente y permite reasignarla directamente.</td></tr>
+    <tr><td><strong>Escucha al arrastrar notas</strong></td><td>Con «Escuchar transposición al arrastrar notas» activado, al arrastrar una nota para cambiar su tono se escucha al instante el tono de destino.</td></tr>
+    <tr><td><strong>Guía de introducción y proyecto de demostración</strong></td><td>El primer inicio recorre la guía de la interfaz. Al terminar, se carga automáticamente una canción de demostración con tres consejos que permiten escuchar la corrección de tono de inmediato.</td></tr>
+    <tr><td><strong>Diálogo Acerca de</strong></td><td>El menú Archivo incorpora «Acerca de OpenTune», con la versión, los derechos de autor, la dirección del proyecto, el canal de comentarios y la lista de colaboradores.</td></tr>
+    <tr><td><strong>Proyectos recientes</strong></td><td>El menú Archivo recuerda los proyectos abiertos recientemente y los abre o limpia la lista con un solo clic.</td></tr>
+    <tr><td><strong>Dos modos de importación por lotes</strong></td><td>Al seleccionar varios archivos de audio a la vez se elige «Importar secuencialmente en la pista actual» o «Importar en pistas separadas».</td></tr>
+    <tr><td><strong>Herramienta de tiempo (experimental)</strong></td><td>La herramienta de tiempo pasa a ser una función experimental: aparece en la zona de herramientas al activar «Activar funciones experimentales (herramienta de estiramiento temporal)» en Preferencias → Audio.</td></tr>
+    <tr><td><strong>Modo híbrido</strong></td><td>Con «Modo híbrido» activado en Preferencias → Audio, las correcciones pequeñas usan el procesamiento ligero y solo las correcciones grandes recurren a la resíntesis por IA.</td></tr>
+    <tr><td><strong>Leer audio en el plugin</strong></td><td>En el plugin, la lectura de audio se hace siempre con el botón circular rojo de la barra superior: en los hosts con ARA se lee el segmento seleccionado y en los demás hosts se graba con inicio y fin de captura.</td></tr>
+    <tr><td><strong>Edición externa</strong></td><td>Desde el plugin, la curva de tono actual se envía a la versión independiente para un ajuste fino; al guardar y volver, el resultado llega automáticamente al plugin.</td></tr>
+    <tr><td><strong>Compatibilidad desde macOS 12</strong></td><td>La versión mínima de macOS es 12.0 y funciona en Intel y en Apple Silicon; macOS dispone además del componente AU.</td></tr>
+    <tr><td><strong>Regenerar notas</strong></td><td>El menú Editar incorpora «Regenerar notas», que vuelve a dividir los bloques de notas con el análisis existente sin analizar de nuevo el audio.</td></tr>
 </table>
 
-<h3>🐛 Correcciones y optimizaciones</h3>
+<h3>🛠 Mejoras y optimizaciones</h3>
 <table>
-    <tr><th width="25%">Problema</th><th>Mejora</th></tr>
-    <tr><td><strong>Alto uso de memoria</strong></td><td>Gestión optimizada, reducción de ~500–900 MB</td></tr>
-    <tr><td><strong>Pobre compatibilidad GPU</strong></td><td>Aceleración GPU en todas las GPUs principales, respaldo automático a CPU</td></tr>
-    <tr><td><strong>Procesamiento lento</strong></td><td>Aceleración GPU mejora significativamente la velocidad</td></tr>
-    <tr><td><strong>Adaptación del diálogo de preferencias</strong></td><td>Se adapta a diferentes resoluciones de pantalla, soporte de zoom</td></tr>
+    <tr><th width="26%">Elemento</th><th>Mejora</th></tr>
+    <tr><td><strong>Fluidez del zoom</strong></td><td>La forma de onda y la curva de tono se mantienen suaves durante el zoom y el arrastre ya no produce tirones visibles.</td></tr>
+    <tr><td><strong>Visualización de curvas</strong></td><td>La curva de tono se dibuja de forma continua por cuadros, mantiene su forma al cambiar el zoom y no presenta cortes ni saltos.</td></tr>
+    <tr><td><strong>Precisión de la corrección automática</strong></td><td>Corregido el registro grave que se confundía con la octava contigua; el resultado de la corrección automática se ajusta más al tono cantado.</td></tr>
+    <tr><td><strong>Naturalidad de la corrección</strong></td><td>Los ataques, las respiraciones y las transiciones con la batería son más suaves al transponer, y el sonido tras una transposición amplia es más nítido.</td></tr>
+    <tr><td><strong>Aviso de renderizado más claro</strong></td><td>Antes de terminar el renderizado se reproduce el tono original y la esquina superior derecha muestra «Renderizando (completados/total)»; al terminar, el audio pasa automáticamente al sonido corregido.</td></tr>
+    <tr><td><strong>Sin análisis repetidos</strong></td><td>Al volver a importar el mismo audio o al reabrir el proyecto se reutiliza el análisis de tono existente y el tiempo de espera se reduce de forma notable.</td></tr>
+    <tr><td><strong>Apertura de proyectos más completa</strong></td><td>Al reabrir un proyecto se restauran por completo el contenido de las pistas, las cabeceras de pista y las curvas de tono corregidas.</td></tr>
+    <tr><td><strong>Guardado con archivo de audio automático</strong></td><td>Al guardar el proyecto se crea junto al archivo una carpeta «nombre_proyecto_Media» con los audios utilizados, de modo que el proyecto se abre en otro ordenador.</td></tr>
+    <tr><td><strong>Reproducción del plugin más estable</strong></td><td>La reproducción continua en el host ya no se corta ni repite el mismo fragmento, y la salida se silencia en cuanto se detiene la reproducción.</td></tr>
+    <tr><td><strong>Memoria y caché</strong></td><td>Al cerrar o eliminar clips se libera la caché ocupada, y la edición prolongada consume menos memoria.</td></tr>
+    <tr><td><strong>Estabilidad</strong></td><td>Corregidos los cierres inesperados y los cortes de sonido al cerrar ventanas o cambiar de segmento de edición en algunos hosts.</td></tr>
 </table>
+
+<div class="tip">
+    <div class="tip-title">Contenido anterior actualizado</div>
+    Los nombres de los modelos de análisis de tono, la ubicación de los archivos de modelo, los rangos de parámetros, los valores predeterminados de los atajos, el funcionamiento del plugin y la descripción de los estados de renderizado del manual anterior están reescritos según la interfaz real de v1.8.3, y este manual es la referencia.
+</div>
 
 <h2 id="intro">1. Introducción al producto</h2>
 
-<p>OpenTune es un software de código abierto de corrección de tono con IA basado en un vocoder neuronal. A diferencia de los algoritmos DSP tradicionales que transponen directamente, utiliza el vocoder PC-NSF-HiFiGAN para regenerar la voz preservando los formantes originales, manteniendo un timbre natural y sólido incluso con ajustes extremos de tono.</p>
+<p>OpenTune es un software de código abierto de corrección de tono con IA basado en un vocoder neuronal. Utiliza el vocoder PC-NSF-HiFiGAN para regenerar la voz preservando los formantes originales, y mantiene un timbre natural y sólido incluso con ajustes extremos de tono.</p>
 
-<p>OpenTune ofrece dos modos de funcionamiento: <strong>independiente</strong> y <strong>plugin VST3/ARA (para DAW)</strong>. Puede usarse como editor multipista independiente o integrarse en un DAW para edición colaborativa en tiempo real.</p>
+<p>OpenTune ofrece dos modos de trabajo: <strong>Standalone (ejecución independiente)</strong> y <strong>VST3/ARA (plugin de host)</strong>. Funciona como editor multipista independiente o se integra en un DAW para editar en colaboración. La versión para macOS incluye además el componente AU.</p>
+
+<h3>Dos formas de corregir el tono</h3>
+<table>
+    <tr><th width="22%">Forma</th><th>Cuándo se usa</th><th>Sonido y velocidad</th></tr>
+    <tr><td><strong>Procesamiento ligero</strong></td><td>Correcciones pequeñas, de hasta unos 75 cents</td><td>Procesamiento muy rápido, conserva el detalle y la textura de la grabación original</td></tr>
+    <tr><td><strong>Resíntesis por IA</strong></td><td>Cambios grandes: dibujo a mano, anclas, transposición completa y correcciones de más de unos 75 cents</td><td>Regenera la voz con una calidad uniforme y requiere una breve espera de renderizado</td></tr>
+</table>
+
+<p>Con «Modo híbrido» activado en Preferencias → Audio, el software elige automáticamente una de las dos formas según la magnitud de la corrección. Con la opción desactivada, todas las correcciones usan la resíntesis por IA.</p>
 
 <h3>Ventajas principales</h3>
 <table>
     <tr><th width="25%">Característica</th><th>Descripción</th></tr>
-    <tr><td><strong>Formantes preservados</strong></td><td>Cambia el tono sin alterar el timbre vocal, eliminando la distorsión tipo "pato" o cambio de identidad vocal</td></tr>
-    <tr><td><strong>Transposición de amplio rango</strong></td><td>Admite correcciones de tono extremas y transposición manteniendo una calidad nítida y estable</td></tr>
-    <tr><td><strong>Resíntesis por IA</strong></td><td>Basado en el vocoder de aprendizaje profundo PC-NSF-HiFiGAN, reconstruye la voz con alta fidelidad</td></tr>
-    <tr><td><strong>Flujo de trabajo tipo Auto-Tune</strong></td><td>Corrección automática, dibujo libre, notas y herramientas de anclaje incluidas</td></tr>
-    <tr><td><strong>Detección automática de escala</strong></td><td>Algoritmo Krumhansl-Schmuckler integrado, compatible con 8 tipos de escalas</td></tr>
-    <tr><td><strong>Soporte de formato dual</strong></td><td>Modo independiente + plugin VST3/ARA con integración perfecta en los principales DAW</td></tr>
-    <tr><td><strong>Aceleración GPU</strong></td><td>Aceleración automática de inferencia IA con DirectML / CoreML, con respaldo fluido en CPU</td></tr>
-    <tr><td><strong>500 pasos de deshacer</strong></td><td>Sistema personalizado de Deshacer/Rehacer, cualquier operación de edición es reversible</td></tr>
-    <tr><td><strong>Código abierto y gratuito</strong></td><td>Gratuito para siempre, impulsado por la comunidad, en mejora continua</td></tr>
+    <tr><td><strong>Formantes intactos</strong></td><td>El cambio de tono no altera el timbre de la voz y elimina la distorsión de «voz de pato» o de «otra persona cantando»</td></tr>
+    <tr><td><strong>Transposición de amplio rango</strong></td><td>Admite correcciones de tono extremas y transposición con una calidad nítida y estable</td></tr>
+    <tr><td><strong>Resíntesis por IA</strong></td><td>Vocoder de aprendizaje profundo PC-NSF-HiFiGAN que reconstruye la voz con alta fidelidad</td></tr>
+    <tr><td><strong>Flujo de trabajo tipo Auto-Tune</strong></td><td>Corrección automática, dibujo a mano, notas, anclas, borrador y ecualizador, entre otras herramientas</td></tr>
+    <tr><td><strong>Detección automática de escala</strong></td><td>Reconocimiento de escala integrado con 8 tipos y asignación manual de la raíz y la escala en cualquier momento</td></tr>
+    <tr><td><strong>Soporte de formato dual</strong></td><td>Standalone independiente + plugin VST3/ARA para los DAW principales</td></tr>
+    <tr><td><strong>Aceleración GPU</strong></td><td>DirectML en Windows y CoreML en macOS; sin tarjeta gráfica disponible se usa la CPU</td></tr>
+    <tr><td><strong>500 pasos de deshacer</strong></td><td>Cualquier operación de edición se deshace paso a paso</td></tr>
+    <tr><td><strong>Código abierto y gratuito</strong></td><td>Gratuito para siempre, impulsado por la comunidad y en mejora continua</td></tr>
 </table>
 
 <div class="tip">
     <div class="tip-title">Destacado técnico</div>
-    OpenTune utiliza el modelo de aprendizaje profundo RMVPE para extracción de tono de alta precisión, combinado con el vocoder neuronal PC-NSF-HiFiGAN para resíntesis de alta calidad. Compatible con aceleración GPU para un procesamiento rápido.
+    OpenTune extrae el tono original con el modelo de aprendizaje profundo FCPE y completa la resíntesis de alta calidad con el vocoder neuronal PC-NSF-HiFiGAN, con aceleración GPU.
 </div>
 
 <h2 id="requirements">2. Requisitos del sistema</h2>
@@ -158,80 +186,106 @@
 <h3>Requisitos mínimos</h3>
 <table>
     <tr><th width="25%">Elemento</th><th>Requisito</th></tr>
-    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 12.0+ (Intel / Apple Silicon)</td></tr>
-    <tr><td>Procesador</td><td>Intel Core i5 o procesador AMD equivalente</td></tr>
-    <tr><td>Memoria RAM</td><td>8 GB RAM</td></tr>
-    <tr><td>Espacio en disco</td><td>500 MB de espacio disponible (incluye modelos IA)</td></tr>
-    <tr><td>Tarjeta de sonido</td><td>Dispositivo de audio compatible con ASIO o WASAPI</td></tr>
+    <tr><td>Sistema operativo</td><td>Windows 10/11 (64 bits) o macOS 12.0 o superior (Intel / Apple Silicon)</td></tr>
+    <tr><td>Procesador</td><td>Intel Core i5 o un procesador AMD de rendimiento equivalente</td></tr>
+    <tr><td>Memoria</td><td>8 GB de RAM</td></tr>
+    <tr><td>Almacenamiento</td><td>500 MB de espacio libre (incluye los modelos de IA y el proyecto de demostración)</td></tr>
+    <tr><td>Tarjeta de sonido</td><td>Dispositivo de audio compatible con ASIO o WASAPI (solo para la versión independiente)</td></tr>
 </table>
 
 <h3>Requisitos recomendados</h3>
 <table>
     <tr><th width="25%">Elemento</th><th>Requisito</th></tr>
     <tr><td>Procesador</td><td>Intel Core i7 / Apple M1 o superior</td></tr>
-    <tr><td>Memoria RAM</td><td>16 GB RAM o superior</td></tr>
-    <tr><td>Tarjeta gráfica</td><td>GPU compatible con DirectML (NVIDIA / AMD / Intel) para acelerar la inferencia del vocoder</td></tr>
+    <tr><td>Memoria</td><td>16 GB de RAM o más</td></tr>
+    <tr><td>Tarjeta gráfica</td><td>GPU compatible con DirectML (NVIDIA / AMD / Intel) que acelera el análisis de tono y la resíntesis</td></tr>
 </table>
 
 <div class="note">
-    <div class="note-title">Nota sobre aceleración GPU</div>
-    <p>OpenTune es compatible con aceleración GPU mediante DirectML (Windows) o CoreML (macOS). Si la GPU no está disponible, se revierte automáticamente a CPU sin afectar el uso normal. Puede cambiarse manualmente a "Prioridad CPU" en Preferencias.</p>
+    <div class="note-title">Sobre la tarjeta gráfica</div>
+    <p>Windows usa la aceleración de la tarjeta gráfica mediante DirectML y macOS usa la aceleración de Apple Silicon mediante CoreML. Sin tarjeta gráfica disponible se usa la CPU y todas las funciones siguen operativas. En Preferencias también se elige «CPU primero».</p>
 </div>
 
 <h2 id="install">3. Instalación e inicio</h2>
 
-<h3>3.1 Descargar el software</h3>
-<p>Visite la página de GitHub Releases para descargar la última versión.</p>
+<h3>3.1 Descarga del software</h3>
+<p>Descarga el instalador de la última versión desde la página de GitHub Releases. Windows usa el programa de instalación y macOS el paquete PKG.</p>
 
 <h3>3.2 Estructura de archivos</h3>
+<p>Tras la instalación en Windows, los archivos principales se distribuyen así:</p>
+<table>
+    <tr><th width="42%">Archivo o carpeta</th><th>Uso</th></tr>
+    <tr><td><code>OpenTune.exe</code></td><td>Programa principal (versión independiente)</td></tr>
+    <tr><td><code>OpenTune.vst3</code></td><td>Plugin VST3 (con soporte ARA2) para el DAW</td></tr>
+    <tr><td><code>OpenTuneOnnxRuntime_1_24_4.dll</code></td><td>Biblioteca de inferencia de IA</td></tr>
+    <tr><td><code>DirectML.dll</code>, <code>D3D12\</code></td><td>Componentes de aceleración gráfica</td></tr>
+    <tr><td><code>docs\UserGuide.html</code></td><td>Esta guía del usuario (menú Ayuda → Manual de usuario...)</td></tr>
+    <tr><td><code>Demo\Demo.otproj</code>, <code>Demo\Demo.wav</code></td><td>Proyecto de demostración y canción de demostración</td></tr>
+    <tr><td><code>C:\ProgramData\OpenTune\Models\fcpe.onnx</code></td><td>Modelo de análisis de tono (unos 43 MB)</td></tr>
+    <tr><td><code>C:\ProgramData\OpenTune\Models\hifigan.onnx</code></td><td>Modelo del vocoder (unos 56 MB)</td></tr>
+</table>
+
+<div class="warning">
+    <div class="warning-title">Ubicación de los modelos</div>
+    Los modelos de IA se guardan en el directorio de datos públicos del sistema (en Windows, <code>C:\ProgramData\OpenTune\Models</code>), y la versión independiente y el plugin comparten los mismos archivos. Mover o eliminar ese directorio impide corregir el tono.
+</div>
+
+<h3>3.3 Inicio del programa</h3>
+<p>Haz doble clic en <code>OpenTune.exe</code> para iniciar la versión independiente; en el primer inicio se inicializan automáticamente los modelos de IA. Para el plugin, coloca <code>OpenTune.vst3</code> en el directorio de escaneo VST3 del host o marca el componente del plugin durante la instalación para que el instalador lo registre.</p>
+
+<h3>3.4 Primer inicio: guía de introducción y proyecto de demostración</h3>
+<p>El primer inicio abre automáticamente la <strong>guía de introducción</strong>. La guía empieza confirmando el flujo de edición:</p>
 <ul>
-    <li><code>OpenTune.exe</code> — Programa principal (versión independiente)</li>
-    <li><code>OpenTune.vst3</code> — Plugin VST3 (para DAW)</li>
-    <li><code>OpenTuneOnnxRuntime_1_24_4.dll</code> — ONNX Runtime</li>
-    <li><code>DirectML.dll</code> — DirectML Runtime (aceleración GPU)</li>
-    <li><code>models/</code> — Carpeta de modelos IA
-        <ul>
-            <li><code>rmvpe.onnx</code> — Modelo de extracción de tono (~28 MB)</li>
-            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> — Modelo de vocoder</li>
-        </ul>
-    </li>
-    <li><code>docs/UserGuide.html</code> — Esta guía del usuario</li>
+    <li><strong>OpenTune</strong> — edición por notas, para un ajuste fino nota a nota.</li>
+    <li><strong>OpenDyne</strong> — edición por bloques de forma de onda, para modelar el conjunto.</li>
+    <li><strong>Elegir más tarde</strong> — omite la elección y pasa a la presentación.</li>
 </ul>
+<p>Después, la guía recorre en orden los menús Archivo, Editar y Ver, el acceso al audio, la vista de pistas, el piano roll, las herramientas de edición, los parámetros de velocidad de afinación y vibrato, el ajuste automático y el ajuste magnético, la escala, la barra de vista general, los botones de transporte y la ayuda y las opciones. La tarjeta de la guía muestra el progreso actual (por ejemplo, «4 / 12») y permite avanzar, retroceder o salir en cualquier momento con «Salir de la guía». Los pasos se adaptan al entorno: la versión independiente, el plugin ARA y el modo de captura muestran avisos distintos.</p>
 
-<h3>3.3 Iniciar el programa</h3>
-<p>Haga doble clic en <code>OpenTune.exe</code> para iniciar la versión independiente. Los modelos IA se inicializan automáticamente en el primer inicio. Para el plugin VST3, copie <code>OpenTune.vst3</code> en el directorio de escaneo VST3 de su DAW.</p>
+<p>Cuando la guía termina y el proyecto sigue vacío, el software carga automáticamente el <strong>proyecto de demostración</strong> y muestra tres consejos en orden:</p>
+<ol>
+    <li><strong>Proyecto de demostración</strong> — la canción de demostración ya está cargada en la pista; haz doble clic en el clip de audio para abrir el piano roll y editar el tono.</li>
+    <li><strong>Renderizado de audio</strong> — al cargar el proyecto, modificar el tono o transponer se inicia el renderizado; durante el renderizado se reproduce el tono original.</li>
+    <li><strong>Herramientas de edición</strong> — las herramientas de la derecha sirven para corregir el tono; deja el ratón sobre una herramienta para ver su nombre y su uso.</li>
+</ol>
+<p>Cada paso se omite con «Omitir guía». El proyecto de demostración aparece una sola vez, en el primer inicio, y después no sobrescribe ningún proyecto existente.</p>
 
-<h3>3.4 Introducción en el primer inicio</h3>
-<p>En el primer inicio se abre automáticamente la <strong>guía de introducción</strong>: tras elegir el modo de edición, presenta los menús Archivo/Edición/Ver, la importación de audio, el rollo de piano y las barras de herramientas, las herramientas de edición principales y el panel de parámetros. Los pasos se adaptan al entorno (Standalone / plugin ARA / captura en vivo) y se puede salir en cualquier momento.</p>
-<p>Para verla de nuevo, abra <strong>Ayuda → Introducción...</strong> o pulse <strong>Repetir introducción</strong> en las preferencias.</p>
+<div class="tip">
+    <div class="tip-title">Volver a ver la guía</div>
+    Desde el menú Archivo, <strong>Ayuda → Introducción...</strong> reabre la guía; en la página Audio de Preferencias también se pulsa <strong>Repetir introducción</strong>.
+</div>
 
 <div class="page-break"></div>
 <h2 id="interface">4. Descripción general de la interfaz</h2>
 
-<p>La interfaz de la versión independiente de OpenTune presenta un diseño moderno de paneles múltiples, con áreas que se pueden plegar y ocultar:</p>
+<p>La versión independiente de OpenTune usa un diseño de varios paneles y cada área se pliega y se oculta.</p>
 
 <h3>4.1 Diseño de la interfaz</h3>
 <table>
     <tr><th width="20%">Área</th><th>Función</th></tr>
-    <tr><td><strong>Barra de herramientas superior</strong></td><td>Botones de menú (Archivo/Editar/Ver), controles de transporte, configuración de BPM/escala, Tap Tempo, cambio de vista</td></tr>
-    <tr><td><strong>Panel de pistas izquierdo</strong></td><td>Gestión multipista (hasta 12 pistas), perillas de volumen, Solo/Silencio, medidores de nivel circulares, botón para añadir pista</td></tr>
-    <tr><td><strong>Vista central de arreglo</strong></td><td>Disposición de clips de audio, previsualización de forma de onda, línea de tiempo, arrastrar/dividir/fusionar/eliminar clips</td></tr>
-    <tr>        <td><strong>Rollo de piano central</strong></td><td>Edición de curva de tono, dibujo/selección de notas, visualización de curva F0, cabezal de reproducción, audición de teclas (clic en el teclado para previsualizar el tono); en TimeTool las teclas, notas y curva F0 se ocultan y se muestran marcadores de tiempo arrastrables (TimeGrid handles)</td></tr>
-    <tr><td><strong>Panel de parámetros derecho</strong></td><td>Perillas de Retune Speed / Vibrato / Note Split, botones de selección de herramienta</td></tr>
-    <tr>        <td><strong>Insignia de estado de renderizado</strong></td><td>Muestra flotante en la esquina superior derecha con el progreso de renderizado (ej. «Renderizando 3/8»); el progreso de estiramiento temporal de la Etapa 2 se muestra por separado (ej. «+2»)</td></tr>
+    <tr><td><strong>Barra de herramientas superior</strong></td><td>Botones de menú Archivo/Editar/Ver, selección de escala (raíz y escala), botones de transporte (reproducir, pausar, detener, bucle, Cargar), conmutador entre la vista de pistas y la vista de piano roll, tempo y compás, tap tempo, visualización de tiempo y botones de plegado de paneles en ambos extremos</td></tr>
+    <tr><td><strong>Panel de pistas izquierdo</strong></td><td>Gestión multipista (hasta 12 pistas), perilla de volumen, silencio/solo, medidor de nivel de indicadores luminosos alrededor de la perilla y entrada para añadir pista</td></tr>
+    <tr><td><strong>Vista central de arreglo</strong></td><td>Disposición de clips de audio, previsualización de la forma de onda, regla de tiempo, mover/recortar/fundir/ajustar ganancia/dividir/unir/eliminar clips</td></tr>
+    <tr><td><strong>Piano roll central</strong></td><td>Edición de la curva de tono, dibujo y selección de notas, visualización de la curva de tono, cabezal de reproducción y audición con el teclado de piano de la izquierda</td></tr>
+    <tr><td><strong>Parte inferior del piano roll</strong></td><td>Barra de vista general (se arrastra para recorrer todo el audio) y deslizadores de zoom horizontal y vertical en la esquina inferior izquierda</td></tr>
+    <tr><td><strong>Panel de parámetros derecho</strong></td><td>Cuatro perillas (Vel. afinación, Prof. vibrato, Tasa vibrato y Div. notas), zona de selección de herramientas y botón de transposición</td></tr>
+    <tr><td><strong>Insignia de estado de renderizado</strong></td><td>En la esquina superior derecha muestra el progreso actual del renderizado, por ejemplo «Renderizando (3/8)»</td></tr>
 </table>
 
 <h3>4.2 Plegado de paneles</h3>
-<p>Haga clic en los botones de alternar panel en los extremos izquierdo y derecho de la barra de herramientas superior para ocultar/mostrar el panel de pistas izquierdo o el panel de parámetros derecho, logrando un modo de "lienzo principal inmersivo".</p>
+<p>Los botones de conmutación de panel de los extremos izquierdo y derecho de la barra de herramientas superior ocultan o muestran el panel de pistas izquierdo y el panel de parámetros derecho, y el lienzo principal ocupa todo el ancho.</p>
 
 <h3>4.3 Cambio de vista</h3>
 <ul>
-    <li><strong>Vista de Pistas (Track View)</strong>: Muestra la vista de arreglo + rollo de piano, ideal para gestionar múltiples clips de audio</li>
-    <li><strong>Vista de Rollo de Piano (Piano Roll View)</strong>: Edición de rollo de piano a pantalla completa, para edición fina de tono</li>
+    <li><strong>Vista de pistas</strong>: muestra la vista de arreglo y el piano roll, para gestionar varios clips de audio.</li>
+    <li><strong>Vista de piano roll</strong>: muestra solo el piano roll para una edición de tono precisa, con la barra de vista general y los deslizadores de zoom en la parte inferior.</li>
 </ul>
 
-<h3>4.4 Información contextual al pasar el ratón</h3>
-<p>Al posicionar el ratón sobre cualquier control durante aproximadamente 0.6 segundos, aparecerá una ventana flotante de estilo oscuro con la descripción de la función del control y su atajo de teclado (si existe). El texto de la sugerencia cambia automáticamente con el idioma de la interfaz.</p>
+<h3>4.4 Información al pasar el ratón</h3>
+<p>Al dejar el ratón sobre cualquier control durante unos 0.6 segundos aparece un aviso flotante oscuro con el nombre del control, la descripción de su función y su atajo de teclado. El texto del aviso cambia con el idioma de la interfaz.</p>
+
+<h3>4.5 Avisos de contenido vacío</h3>
+<p>Antes de leer audio, el piano roll no muestra curvas de tono ni notas; la corrección automática en ese estado avisa de que el audio necesita un análisis previo. En una pista vacía, la vista de arreglo muestra la entrada para añadir pista.</p>
 
 <h2 id="quickstart">5. Inicio rápido</h2>
 
@@ -240,44 +294,49 @@
         <div class="step-number">1</div>
         <div class="step-content">
             <h4>Importar audio</h4>
-            <p>Arrastre y suelte archivos de audio en la ventana del programa, o impórtelos mediante el menú File → Import Audio. Compatible con formatos WAV, MP3, FLAC, OGG, AIFF, entre otros.</p>
+            <p>Arrastra el archivo de audio a la ventana o elígelo con Archivo → Importar audio. Formatos compatibles: WAV, AIFF, FLAC, OGG y MP3.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">2</div>
         <div class="step-content">
-            <h4>Extracción automática de tono</h4>
-            <p>Tras la importación, el software extrae automáticamente la curva de tono original, mostrada en rojo en el rollo de piano.</p>
+            <h4>Esperar el análisis de tono</h4>
+            <p>Tras la importación, el software analiza y extrae automáticamente el tono original, que se muestra como curva de tono en el piano roll. Durante el análisis la interfaz muestra «Procesando audio».</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">3</div>
         <div class="step-content">
-            <h4>Configuración de escala</h4>
-            <p>El software detecta automáticamente la escala, o puede seleccionar manualmente la nota raíz (C~B) y el tipo de escala (Mayor, Menor, Cromática, etc. 8 tipos).</p>
+            <h4>Confirmar la escala</h4>
+            <p>El software reconoce la escala automáticamente. En la barra de herramientas superior también se elige la raíz (C~B) y el tipo de escala (mayor, menor, cromática y 8 tipos en total).</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">4</div>
         <div class="step-content">
-            <h4>Editar tono</h4>
-            <p>Use la herramienta de corrección automática (corrección con un clic) o dibuje manualmente notas/anclajes/curvas a mano alzada. El tono corregido se muestra como una curva azul.</p>
+            <h4>Editar el tono</h4>
+            <p>Con la corrección automática se ajusta todo el tono a la escala; con anclas, dibujo libre y dibujo de notas se corrige nota a nota. El resultado corregido se muestra como una segunda curva sobre el tono original.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">5</div>
         <div class="step-content">
             <h4>Ajustar parámetros</h4>
-            <p>Ajuste Retune Speed, Vibrato Depth/Rate, etc. en el panel de parámetros. Admite configuración de vibrato independiente por nota.</p>
+            <p>En el panel de parámetros ajusta Vel. afinación, Prof. vibrato y Tasa vibrato. Con notas seleccionadas, los cambios se aplican solo a las notas seleccionadas.</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">6</div>
         <div class="step-content">
-            <h4>Previsualizar y exportar</h4>
-            <p>Presione Espacio para reproducir y previsualizar. Cuando esté satisfecho, exporte mediante File → Export. Admite exportar clip seleccionado, pista individual o mezcla de bus.</p>
+            <h4>Escuchar y exportar</h4>
+            <p>Pulsa Space para reproducir. Al terminar el renderizado se escucha el sonido corregido; cuando el resultado convence, Archivo → Exportar audio escribe el archivo.</p>
         </div>
     </div>
+</div>
+
+<div class="note">
+    <div class="note-title">Qué se escucha durante el renderizado</div>
+    <p>Tras modificar el tono, el software resintetiza el audio en segundo plano y muestra «Renderizando (completados/total)» en la esquina superior derecha. Antes de terminar el renderizado se reproduce el tono original y después suena automáticamente el sonido corregido.</p>
 </div>
 
 <div class="page-break"></div>
@@ -285,447 +344,657 @@
 
 <h3>6.1 Importación de audio</h3>
 <ul>
-    <li>Formatos compatibles: WAV, MP3, FLAC, OGG, AIFF, entre otros</li>
-    <li>Remuestreo automático a 44.1 kHz durante la importación</li>
-    <li>Importación por arrastrar y soltar (directamente a la ventana)</li>
-    <li>Soporte multipista: hasta 12 pistas independientes, cada una con múltiples clips</li>
-    <li>Importación por lotes de múltiples archivos (secuenciales o en pistas separadas)</li>
+    <li>Formatos compatibles: WAV, AIFF, FLAC, OGG y MP3; en Windows también WMA.</li>
+    <li>Admite audio mono y estéreo; los archivos con más de dos canales no se importan.</li>
+    <li>La importación se hace por arrastrar y soltar o con Archivo → Importar audio; al seleccionar varios archivos a la vez se pregunta el modo: importar secuencialmente en la pista actual o importar en pistas separadas.</li>
+    <li>Soporte multipista: hasta 12 pistas, cada una con varios clips. Si el número de archivos supera las pistas disponibles, un aviso lo indica y se importan solo los que caben.</li>
+    <li>La importación conserva la frecuencia de muestreo del audio original; la edición y la resíntesis usan una copia de trabajo unificada de 44.1 kHz.</li>
+    <li>La importación muestra el progreso y solo se ejecuta una tarea de importación a la vez.</li>
 </ul>
 
-<h3>6.2 Extracción de tono (RMVPE)</h3>
+<h3>6.2 Análisis de tono</h3>
 <ul>
-    <li>Tras importar el audio, se extrae automáticamente la curva de tono original (mostrada en rojo)</li>
-    <li>Basado en el modelo de aprendizaje profundo RMVPE, con alta precisión y fuerte resistencia al ruido</li>
-    <li>Admite detección vocal en el rango de frecuencia de 50 Hz – 1100 Hz</li>
+    <li>Tras importar el audio se extrae automáticamente el tono original, que se muestra como curva de tono con un color personalizable en Preferencias.</li>
+    <li>Usa el modelo de aprendizaje profundo FCPE, eficaz con voces y melodías monofónicas.</li>
+    <li>Cada audio se analiza una sola vez; al volver a importarlo o al reabrir el proyecto se reutiliza el resultado.</li>
+    <li>Si el análisis falla, la interfaz muestra un aviso e indica cómo reimportar el audio para regenerarlo.</li>
 </ul>
 
 <h3>6.3 Detección y selección de escala</h3>
-<p>Detección automática de escala integrada mediante el algoritmo Krumhansl-Schmuckler, compatible con 8 tipos de escala:</p>
+<p>El software reconoce la escala automáticamente y también acepta la asignación manual. Con la escala asignada a mano, todo el audio calcula la nota objetivo de la corrección automática con esa escala. Los 8 tipos de escala disponibles:</p>
 <table>
-    <tr><th>Escala</th><th>Abrev.</th><th>Descripción</th></tr>
+    <tr><th>Escala</th><th>Abreviatura en la interfaz</th><th>Descripción</th></tr>
     <tr><td>Mayor</td><td>Maj.</td><td>Escala mayor natural</td></tr>
     <tr><td>Menor</td><td>Min.</td><td>Escala menor natural</td></tr>
-    <tr><td>Cromática</td><td>Chr.</td><td>Los 12 semitonos disponibles (sin filtro de escala)</td></tr>
-    <tr><td>Menor Armónica</td><td>H.Min.</td><td>Menor con séptimo grado elevado</td></tr>
-    <tr><td>Dórica</td><td>Dor.</td><td>Común en jazz/blues</td></tr>
-    <tr><td>Mixolidia</td><td>Mix.</td><td>Mayor con séptimo grado descendido</td></tr>
-    <tr><td>Pentatónica Mayor</td><td>Pent.</td><td>Escala pentatónica (estilo chino)</td></tr>
-    <tr><td>Pentatónica Menor</td><td>m.Pent.</td><td>Escala pentatónica de blues</td></tr>
+    <tr><td>Cromática</td><td>Chr.</td><td>Los 12 semitonos disponibles; la corrección automática se ajusta al semitono más cercano</td></tr>
+    <tr><td>Menor armónica</td><td>H.Min.</td><td>Menor con el séptimo grado elevado</td></tr>
+    <tr><td>Dórica</td><td>Dor.</td><td>Habitual en jazz y blues</td></tr>
+    <tr><td>Mixolidia</td><td>Mix.</td><td>Mayor con el séptimo grado descendido</td></tr>
+    <tr><td>Pentatónica mayor</td><td>Pent.</td><td>Escala pentatónica</td></tr>
+    <tr><td>Pentatónica menor</td><td>m.Pent.</td><td>Escala pentatónica de blues</td></tr>
 </table>
 
-<h3>6.4 Resíntesis por vocoder IA</h3>
+<h3>6.4 Corrección de tono y resíntesis</h3>
 <ul>
-    <li>Tras corregir el tono, el software utiliza el vocoder neuronal PC-NSF-HiFiGAN para resintetizar el audio</li>
-    <li>Preserva los formantes originales, la transposición de amplio rango no produce distorsión</li>
-    <li>Frecuencia de muestreo de salida: 44.1 kHz, calidad de sonido natural y nítida</li>
-    <li>Compatible con aceleración GPU (configurable en Preferencias)</li>
+    <li>Tras modificar el tono, el software elige el procesamiento ligero o la resíntesis por IA según la magnitud del cambio y genera el audio reproducible.</li>
+    <li>Las correcciones pequeñas (de hasta unos 75 cents) usan el procesamiento ligero con el modo híbrido activado; el resultado es rápido y fiel al detalle original.</li>
+    <li>El dibujo libre, las anclas, la transposición y las modificaciones de más de unos 75 cents usan siempre la resíntesis por IA, que preserva los formantes y evita la distorsión en transposiciones amplias.</li>
+    <li>La frecuencia de muestreo de salida es de 44.1 kHz, con un sonido natural y nítido.</li>
+    <li>El renderizado se hace por segmentos, de modo que con audio largo se edita mientras se renderiza; la insignia de la esquina superior derecha muestra el progreso.</li>
 </ul>
 
 <h3>6.5 Gestión multipista</h3>
 <ul>
-    <li>Hasta 12 pistas independientes</li>
-    <li>Cada pista admite múltiples clips de audio</li>
-    <li>Operaciones de pista: Solo, Silencio, ajuste de volumen (perilla circular)</li>
-    <li>Medidores LED circulares muestran el volumen en tiempo real</li>
-    <li>Operaciones de clip: Arrastrar para mover, Dividir (Split), Fusionar (Merge), Eliminar</li>
+    <li>Hasta 12 pistas independientes, cada una con varios clips.</li>
+    <li>Controles de pista: silencio, solo, perilla de volumen (0~4.0 veces) y anillo exterior de la perilla como indicador de nivel en tiempo real.</li>
+    <li>Menú contextual de la pista: Añadir pista, Duplicar pista, Color pista (color personalizado / color aleatorio) y Eliminar pista.</li>
+    <li>Operaciones de clip: mover, recortar por ambos lados, ajustar fundidos, ajustar ganancia, dividir, unir, duplicar en el sitio y eliminar.</li>
+    <li>Haz doble clic en un clip para abrirlo directamente en el piano roll.</li>
 </ul>
 
-<h3>6.6 Deshacer/Rehacer</h3>
+<h3>6.6 Deshacer y rehacer</h3>
 <ul>
-    <li>Guarda hasta <strong>500 pasos</strong> de historial de operaciones</li>
-    <li>Compatible con todas las operaciones de edición: dibujo de notas, ajustes de parámetros, operaciones de clip, etc.</li>
-    <li>Atajos: <code>Ctrl+Z</code> (Deshacer), <code>Ctrl+Y</code> o <code>Ctrl+Shift+Z</code> (Rehacer)</li>
+    <li>Guarda hasta <strong>500 pasos</strong> del historial de operaciones.</li>
+    <li>Cubre todas las operaciones de edición: dibujo de notas, modificación de tono, ajuste de parámetros, operaciones de clip, operaciones de pista y modificaciones del proyecto.</li>
+    <li>Atajos: <code>Ctrl+Z</code> deshace y <code>Ctrl+Y</code> o <code>Ctrl+Shift+Z</code> rehace.</li>
 </ul>
 
 <div class="page-break"></div>
 <h2 id="tools">7. Herramientas de edición</h2>
 
-<p>OpenTune ofrece siete herramientas de edición profesionales, alternables desde la zona de herramientas del panel de parámetros o mediante atajos de teclado:</p>
+<p>Las herramientas de edición se cambian desde la zona de herramientas del panel de parámetros derecho o con atajos de teclado. Al dejar el ratón sobre un botón de herramienta se muestran su nombre, su uso y su atajo. Los atajos entre paréntesis de este capítulo son los valores predeterminados de Windows; los de macOS están en el capítulo 11.</p>
+
+<h3>7.1 Herramientas del esquema de edición OpenTune</h3>
 
 <div class="tool-card">
-    <h4>AutoTune — Herramienta de Corrección Automática (Atajo: 6)</h4>
-    <p>Corrige automáticamente el tono a la nota objetivo más cercana según la escala actual. Ideal para corrección rápida por lotes.</p>
+    <h4>Corrección automática AUTO (atajo 6)</h4>
+    <p>Ajusta el tono a la nota de escala más cercana según la escala actual. Con notas, un área o un rango de tono seleccionados, procesa solo la selección; sin selección, procesa todo el audio. Una sola pasada da el resultado y las zonas ya corregidas no cambian al repetir la operación.</p>
 </div>
 
 <div class="tool-card">
-    <h4>Select — Herramienta de Selección (Atajo: 3)</h4>
-    <p>Selecciona notas o regiones de tiempo. Tras la selección puede mover, eliminar, ajustar parámetros, etc.</p>
-    <p><strong>Operaciones</strong>: Clic para seleccionar, arrastrar para selección por marco, Shift+clic para selección múltiple, Supr para eliminar.</p>
+    <h4>Herramienta de selección SELECT (atajo 3)</h4>
+    <p>Selecciona notas o regiones de tiempo; con la selección hecha se mueven, se eliminan o se ajustan sus parámetros.</p>
+    <p><strong>Operaciones</strong>: clic para seleccionar, arrastre para seleccionar un marco, Shift+clic para selección múltiple y Delete para eliminar; arrastra el borde de una nota para cambiar su duración y el centro para cambiar su tono o su posición.</p>
 </div>
 
 <div class="tool-card">
-    <h4>DrawNote — Herramienta de Dibujo de Notas (Atajo: 2)</h4>
-    <p>Dibuja bloques de notas manualmente. Arrastre en el rollo de piano para crear notas con tono y duración específicos.</p>
-    <p><strong>Característica</strong>: Cada nota puede tener configuraciones independientes de Retune Speed, Vibrato Depth/Rate.</p>
+    <h4>Dibujar nota DRAW NOTE (atajo 2)</h4>
+    <p>Dibuja bloques de notas a mano: arrastra en el piano roll para crear una nota con el tono y la duración indicados.</p>
+    <p><strong>Características</strong>: cada nota ajusta por separado Vel. afinación, Prof. vibrato y Tasa vibrato.</p>
 </div>
 
 <div class="tool-card">
-    <h4>LineAnchor — Herramienta de Anclaje Lineal (Atajo: 4)</h4>
-    <p>Coloca puntos de anclaje clave en la curva de tono; el software genera automáticamente transiciones de interpolación lineal entre anclajes. Ideal para controlar con precisión glissandos y transiciones de tono.</p>
+    <h4>Ancla de línea LINE ANCHOR (atajo 4)</h4>
+    <p>Coloca anclas clave en la curva de tono y el software genera entre ellas transiciones rectas, lo que da un control preciso de glissandos y transiciones de nota. Las anclas usan la resíntesis por IA.</p>
 </div>
 
 <div class="tool-card">
-    <h4>HandDraw — Herramienta de Dibujo Libre (Atajo: 5)</h4>
-    <p>Dibuja directamente la curva F0 para personalizar completamente el contorno tonal. Ideal para crear vibrato, glissando, pitch bend y otros efectos decorativos.</p>
+    <h4>Dibujo libre HAND DRAW (atajo 5)</h4>
+    <p>Dibuja la curva de tono directamente y personaliza por completo su contorno, con vibrato, glissando, pitch bend y otros adornos. La zona dibujada usa la resíntesis por IA.</p>
 </div>
 
 <div class="tool-card">
-    <h4>Borrador (Eraser)</h4>
-    <p>Herramienta de pincel: al arrastrar borra a la vez las notas y la corrección de tono dentro del área del pincel. Todo el trazo se registra como un solo paso de deshacer.</p>
-    <p><strong>Uso</strong>: seleccione el borrador en el panel de parámetros o en la barra de herramientas que aparece al hacer clic con el botón derecho y arrastre con el botón izquierdo (el pincel circular muestra el área). Sin atajo predeterminado.</p>
+    <h4>Borrador ERASER</h4>
+    <p>Borrado con pincel: al arrastrar con el botón izquierdo se borran a la vez las notas y la corrección de tono dentro del pincel circular, y todo el trazo entra en el historial de deshacer como un solo paso.</p>
+    <p><strong>Operaciones</strong>: elige el borrador en el panel de parámetros o en la barra de herramientas del clic derecho y arrastra con el botón izquierdo; no tiene atajo predeterminado.</p>
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — Herramienta de tiempo (Atajo: T) [Solo en la versión independiente]</h4>
-    <p>Arrastre los marcadores de tiempo para ajustar el tiempo de salida del audio, logrando efectos de estiramiento/compresión temporal. Al entrar en la vista TimeTool, las teclas del piano, las notas y la curva F0 se ocultan automáticamente, centrándose en la edición en el dominio temporal.</p>
-    <p><strong>Operaciones</strong>: arrastrar marcadores para ajustar el tiempo de salida; Shift+clic para selección múltiple de marcadores; Alt+arrastre para liberar el límite de separación mínima; doble clic en área vacía para insertar un nuevo marcador; Supr elimina los marcadores seleccionados (extremos protegidos); clic en área vacía para reubicar el cabezal de reproducción.</p>
-    <p><strong>Extremos y renderizado</strong>: los extremos inicial y final están fijos, la duración total permanece sin cambios. La edición no vuelve a ejecutar la corrección de tono; una vez completada la canonización actual, se encola una reconstrucción única de estiramiento temporal de la Etapa 2 (algoritmo WSOLA de SoundTouch).</p>
+    <h4>Ecualizador EQ (atajo E)</h4>
+    <p>Añade un procesamiento de ecualización a cada nota. Con la herramienta de ecualizador activa (o con la tecla E), un clic en una nota abre su editor de EQ, donde se añaden, se desactivan y se eliminan bandas sobre el espectro; al arrastrar se seleccionan varias notas.</p>
+    <p><strong>Operaciones</strong>: hasta 10 bandas por nota; los tipos de filtro son corte de graves, estante de graves, pico, estante de agudos y corte de agudos; la frecuencia del pico va de 500 Hz a 12 kHz y la de los demás tipos de 20 Hz a 20 kHz; la ganancia va de ±12 dB; el valor Q va de 0.25 a 9. El editor se contrae a vista previa, se desactiva temporalmente o se elimina por completo. Antes de eliminar se pide una confirmación, con la opción «No volver a mostrar».</p>
 </div>
 
-<h3>7.1 Audición de teclas del piano</h3>
-<p>Haga clic en las teclas del piano en el lado izquierdo del rollo de piano para reproducir en tiempo real una muestra de piano con el tono correspondiente, facilitando la confirmación del tono objetivo. Puede mantener presionado y arrastrar entre teclas para deslizarse entre notas; al soltar el ratón la reproducción se detiene automáticamente. La tecla pulsada se resalta en azul.</p>
+<div class="tool-card">
+    <h4>Herramienta de tiempo TIME (atajo T, experimental)</h4>
+    <p>Arrastra los controladores de tiempo para ajustar el tiempo de salida del audio y lograr un efecto de estiramiento. Aparece tras activar «Activar funciones experimentales (herramienta de estiramiento temporal)» en Preferencias → Audio y solo está disponible en la versión independiente.</p>
+    <p><strong>Operaciones</strong>: al entrar en la herramienta de tiempo se ocultan el teclado de piano y la curva de tono y aparecen los controladores de tiempo arrastrables. Al arrastrar un controlador cambia el tiempo; Alt+arrastre libera temporalmente el límite de separación mínima; Shift+clic selecciona varios controladores; un doble clic en un espacio vacío inserta un controlador; Delete elimina los controladores seleccionados; un clic en un espacio vacío recoloca el cabezal de reproducción.</p>
+    <p><strong>Límites</strong>: los extremos inicial y final están fijos y la duración total no cambia; los extremos no se seleccionan ni se eliminan; la separación entre controladores tiene un mínimo y, cuando una inserción o un arrastre no lo cumple, el controlador mantiene su posición. El ajuste exige una nueva resíntesis y la nueva duración se escucha al terminar el renderizado.</p>
+</div>
+
+<h3>7.2 Herramientas del esquema de edición OpenDyne</h3>
+<table>
+    <tr><th width="22%">Herramienta</th><th width="14%">Atajo</th><th>Función</th></tr>
+    <tr><td><strong>Selección</strong></td><td>F1</td><td>Selecciona bloques de forma de onda (bloques de notas) de uno en uno, varios o por marco</td></tr>
+    <tr><td><strong>Tono</strong></td><td>F2</td><td>Arrastra el tono de los bloques de forma de onda seleccionados con ajuste a la «Cuadrícula de tono»</td></tr>
+    <tr><td><strong>Modulación</strong></td><td>F3</td><td>Ajusta la amplitud del movimiento de tono dentro del bloque de forma de onda, es decir, la profundidad del vibrato</td></tr>
+    <tr><td><strong>Envolvente de volumen</strong></td><td>F4</td><td>Ajusta la evolución del volumen a lo largo del tiempo dentro del bloque de forma de onda</td></tr>
+    <tr><td><strong>Deriva</strong></td><td>F5</td><td>Corrige el movimiento lento de tono dentro del bloque de forma de onda</td></tr>
+    <tr><td><strong>Tijeras</strong></td><td>F6</td><td>Corta el bloque de forma de onda en partes editables por separado; un doble clic en la línea de separación une notas contiguas</td></tr>
+</table>
+<p>En macOS, las herramientas de OpenDyne usan las teclas numéricas 1~6 en el mismo orden que la tabla anterior. La herramienta de tiempo y el ecualizador tienen el mismo atajo en los dos esquemas.</p>
+
+<div class="note">
+    <div class="note-title">Los botones AUTO / SNAP de OpenDyne</div>
+    <p>En el esquema OpenDyne, el mismo botón del panel de parámetros se muestra como <strong>SNAP</strong>: al pulsarlo se ajustan las notas seleccionadas de una vez; sin notas seleccionadas se ajustan todas. El modo de ajuste al arrastrar lo decide la «Cuadrícula de tono»: sin ajuste, cromático o escala tonal.</p>
+</div>
+
+<h3>7.3 Audición con el teclado de piano</h3>
+<p>Un clic en las teclas de piano de la izquierda del piano roll reproduce en tiempo real el tono de piano correspondiente; al mantener pulsado y arrastrar se desliza entre teclas y al soltar se detiene. La tecla pulsada se resalta.</p>
+
+<h3>7.4 Audición al arrastrar notas</h3>
+<p>Con «Escuchar transposición al arrastrar notas» activado en Preferencias → Edicion, al arrastrar una nota para cambiar su tono se escucha al instante el tono de destino, lo que ayuda a encontrar la nota. Esta opción controla también la audición tras editar con el teclado. Con la opción desactivada, el arrastre solo cambia la visualización y no suena.</p>
 
 <h2 id="parameters">8. Parámetros detallados</h2>
 
 <h3>8.1 Parámetros de corrección de tono</h3>
 
 <div class="param-item">
-    <div class="param-name">Retune Speed (Velocidad de corrección)</div>
+    <div class="param-name">Vel. afinación</div>
     <div class="param-range">Rango: 0% – 100% | Valor predeterminado: 15%</div>
-    <p>Controla la velocidad e intensidad de la corrección de tono. Valores más altos = corrección más rápida y precisa; valores más bajos = más fluctuaciones originales preservadas.</p>
+    <p>Controla la velocidad y la intensidad de la corrección de tono. Un valor alto corrige más rápido y con más precisión; un valor bajo conserva más las fluctuaciones del tono original.</p>
     <ul>
-        <li><strong>Valores bajos (0–30%)</strong>: Preserva el vibrato natural, ideal para sonido realista</li>
-        <li><strong>Valores medios (30–70%)</strong>: Equilibra precisión y naturalidad</li>
-        <li><strong>Valores altos (70–100%)</strong>: Corrección precisa, produce un efecto Auto-Tune notable; al 100% el borde de la nota cambia de forma instantánea, sin transición</li>
+        <li><strong>Valores bajos (0–30%)</strong>: conservan el vibrato natural, ideales para un resultado realista</li>
+        <li><strong>Valores medios (30–70%)</strong>: equilibran precisión y naturalidad</li>
+        <li><strong>Valores altos (70–100%)</strong>: corrección precisa con un efecto Auto-Tune evidente; al 100% el borde de la nota cambia de forma instantánea, sin transición</li>
     </ul>
-    <p><strong>Por nota</strong>: Ajuste tras seleccionar notas; solo afecta las notas seleccionadas.</p>
+    <p><strong>Por nota</strong>: con notas seleccionadas, el ajuste afecta solo a las notas seleccionadas.</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Vibrato Depth (Profundidad de vibrato)</div>
-    <div class="param-range">Rango: 0 – 1 | Valor predeterminado: 0</div>
-    <p>Amplitud del vibrato artificial añadido a las notas. 0 = sin vibrato, 1 = profundidad máxima. Configurable por nota.</p>
+    <div class="param-name">Prof. vibrato</div>
+    <div class="param-range">Rango: 0% – 100% | Valor predeterminado: 0%</div>
+    <p>Amplitud del vibrato artificial añadido a las notas. 0 no añade vibrato y 100% aplica la profundidad máxima. Se ajusta por nota.</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Vibrato Rate (Velocidad de vibrato)</div>
-    <div class="param-range">Rango: 0 – 15 Hz | Valor predeterminado: 7.5 Hz</div>
-    <p>Controla la frecuencia de oscilación del vibrato artificial. El vibrato vocal natural suele estar en el rango de 5–8 Hz. Configurable por nota.</p>
+    <div class="param-name">Tasa vibrato</div>
+    <div class="param-range">Rango: 3 – 12 Hz | Valor predeterminado: 7.5 Hz</div>
+    <p>Controla la frecuencia de vibración del vibrato artificial. El vibrato vocal natural se sitúa entre 5 y 8 Hz. Se ajusta por nota.</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Note Split Threshold (Umbral de división de notas)</div>
-    <div class="param-range">Rango: 0 – 100 cents | Valor predeterminado: 80 cents</div>
-    <p>Controla la sensibilidad de división en la generación automática de notas. Valores más bajos facilitan la división en notas independientes.</p>
+    <div class="param-name">Div. notas</div>
+    <div class="param-range">Rango: 0 – 200 cents | Valor predeterminado: 80 cents</div>
+    <p>Controla la sensibilidad al dividir las notas automáticamente: un valor bajo divide una interpretación continua en más notas independientes. Al soltar el ratón se vuelve a dividir y el cambio entra en el historial de deshacer como un solo paso.</p>
 </div>
 
-<h3>8.2 Parámetros de pista</h3>
-<div class="param-item">
-    <div class="param-name">Volume (Volumen)</div>
-    <div class="param-range">Rango: 0 – 4.0x | Valor predeterminado: 1.0</div>
-    <p>Perilla de volumen de pista, admite ganancia superior a 1.0.</p>
+<div class="note">
+    <div class="note-title">Operaciones comunes de las perillas</div>
+    <p>Arrastra la perilla para ajustar el valor y usa la rueda para un ajuste fino. Con la perilla enfocada, las flechas hacen un ajuste fino, Alt aplica pasos precisos, PageUp/PageDown ajustan en pasos grandes, Home toma el valor máximo y End el mínimo, Backspace restaura el valor predeterminado y Enter permite escribir el valor (Enter confirma y Esc cancela).</p>
 </div>
 
-<h3>8.3 Parámetros de reproducción</h3>
+<h3>8.2 Transposición</h3>
 <div class="param-item">
-    <div class="param-name">BPM (Pulsaciones por minuto)</div>
-    <div class="param-range">Rango: 20 – 300 BPM | Valor predeterminado: 120</div>
-    <p>Controla el tempo del proyecto y la cuadrícula de la línea de tiempo. Haga doble clic en el número para ingresar un valor preciso.</p>
+    <div class="param-name">Transposición (botón del panel de parámetros)</div>
+    <div class="param-range">Rango: ±24 semitonos, ±99 cents</div>
+    <p>Sube o baja el tono de todo el clip actual. El botón abre un diálogo para ajustar semitonos y cents por separado; al confirmar, todo el audio se resintetiza con el nuevo tono. El botón muestra la transposición actual para confirmarla en cualquier momento. La transposición usa siempre la resíntesis por IA.</p>
+</div>
+
+<h3>8.3 Cuadrícula de tono (OpenDyne)</h3>
+<div class="param-item">
+    <div class="param-name">Cuadrícula de tono</div>
+    <div class="param-range">Opciones: Sin ajuste / Cromático / Escala tonal | Valor predeterminado: Escala tonal</div>
+    <p>Determina el ajuste al arrastrar el tono en el esquema OpenDyne. Sin ajuste, el arrastre es libre por cents; Cromático ajusta al semitono más cercano; Escala tonal ajusta a las notas de la raíz y la escala actuales.</p>
+</div>
+
+<h3>8.4 Parámetros de pista y de transporte</h3>
+<div class="param-item">
+    <div class="param-name">Volumen de pista</div>
+    <div class="param-range">Rango: 0 – 4.0 veces | Valor predeterminado: 1.0</div>
+    <p>Perilla de volumen de la pista con ganancia superior a 1.0; el anillo exterior indica el nivel en tiempo real.</p>
 </div>
 <div class="param-item">
-    <div class="param-name">Tap Tempo</div>
-    <p>Toque repetidamente el botón Tap; el software calcula automáticamente el intervalo promedio para determinar el BPM. Registra hasta 5 toques.</p>
+    <div class="param-name">Tempo y compás</div>
+    <div class="param-range">Rango de tempo: 1 – 999 BPM | Valor predeterminado: 120 BPM, 4/4</div>
+    <p>Controla el tempo del proyecto, la cuadrícula de la línea de tiempo y la indicación del pulso. Un clic en el número permite escribir el tempo; un clic en el número de compás de la derecha permite elegir los pulsos por compás (1–64) y la figura (1, 2, 4, 8, 16, 32 y 64).</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Tap tempo</div>
+    <p>Al pulsar «Tap tempo» varias veces, el software promedia el intervalo de las últimas pulsaciones y escribe el tempo con un decimal. Una pausa de más de 2 segundos reinicia el cálculo.</p>
+</div>
+<div class="param-item">
+    <div class="param-name">Visualización de tiempo y modo de desplazamiento</div>
+    <p>La regla se muestra en tiempo (minutos y segundos) o en compases; el desplazamiento se cambia entre «Continuo» y «Página».</p>
 </div>
 
 <div class="page-break"></div>
-<h2 id="schemes">9. Modos de edición</h2>
+<h2 id="schemes">9. Esquemas de edición</h2>
 
-<p>OpenTune ofrece dos modos de edición. Se alternan desde Preferencias → Modo de edición.</p>
+<p>OpenTune ofrece dos esquemas de edición y se cambian en Preferencias → Edicion → Esquema de edicion de audio; el cambio se aplica a la interfaz al instante.</p>
 
-<h3>9.1 Edición OpenTune (predeterminado)</h3>
+<h3>9.1 Edición OpenTune (predeterminada)</h3>
 <ul>
-    <li>Modo tradicional de edición de forma de onda y notas</li>
-    <li>El arrastre de notas se ajusta a la cuadrícula de tono (mismo comportamiento que el modo OpenDyne)</li>
-    <li>Rueda: desplazamiento vertical / Shift+rueda zoom vertical / Ctrl+rueda zoom horizontal / Alt+rueda desplazamiento horizontal</li>
-    <li>Barra de herramientas horizontal</li>
+    <li>Edición por notas: el bloque de nota, la curva de tono original y la curva de corrección se muestran a la vez.</li>
+    <li>Herramientas: corrección automática, selección, dibujar nota, ancla de línea, dibujo libre, borrador, ecualizador y herramienta de tiempo.</li>
+    <li>Al arrastrar notas, el ajuste sigue «Ajuste al mover»: seguir la escala global o ajustar a semitonos.</li>
+    <li>Asignación predeterminada de la rueda: rueda para desplazamiento vertical / Shift+rueda para zoom vertical / Ctrl+rueda para zoom horizontal / Alt+rueda para desplazamiento horizontal.</li>
 </ul>
 
 <h3>9.2 Edición OpenDyne</h3>
 <ul>
-    <li>Edición neuronal estilo Melodyne: visualización de segmentos de forma de onda, resaltado de selección</li>
-    <li>Rueda: desplazamiento vertical / Shift+rueda desplazamiento horizontal / Ctrl+rueda zoom dual eje / Alt+rueda zoom vertical</li>
-    <li>Barra de herramientas vertical con clic derecho</li>
-    <li>Herramientas de modulación y deriva de tono</li>
-    <li>Herramienta de envolvente de volumen</li>
-    <li>Herramienta Tijeras (comportamiento estilo Melodyne: cortar al pasar la línea vertical, doble clic en la línea de separación fusiona notas adyacentes)</li>
-    <li>Modo de ajuste a la cuadrícula de tono + ajuste automático</li>
-    <li>Barra de navegación de vista general estilo Melodyne</li>
-    <li>Zoom estilo Melodyne: Cmd+Alt doble clic, flechas para zoom preciso</li>
+    <li>Edición por bloques de forma de onda, para modelar el conjunto y trabajar al estilo Melodyne.</li>
+    <li>Herramientas: selección, tono, modulación, deriva, envolvente de volumen y tijeras, además de la herramienta de tiempo y el ecualizador.</li>
+    <li>La barra de herramientas del clic derecho es una barra de iconos; la herramienta de tono lleva una flecha de despliegue que abre las herramientas secundarias de modulación y deriva. El botón de corrección automática del panel de parámetros se muestra como SNAP y ajusta con una sola pulsación.</li>
+    <li>Ofrece selección de «Cuadrícula de tono» y ajuste con un solo clic.</li>
+    <li>Con Ctrl (Windows) o Cmd (macOS) + Alt y doble clic en una nota, la vista amplía esa nota; la misma operación en una zona sin notas restaura el zoom.</li>
 </ul>
 
 <div class="note">
-    <div class="note-title">Modo de edición y mapeo de rueda</div>
-    <p>Cambiar el modo de edición también cambia el mapeo de la rueda y el conjunto de herramientas. OpenTune usa edición tradicional de notas, OpenDyne usa edición de segmentos estilo Melodyne.</p>
+    <div class="note-title">Operaciones de vista comunes a los dos esquemas</div>
+    <p>Un doble clic en la barra de desplazamiento vertical ajusta el zoom a todas las notas; la barra de vista general inferior recorre todo el audio sin cambiar el zoom actual.</p>
 </div>
+
+<div class="note">
+    <div class="note-title">Todas las asignaciones de la rueda son personalizables</div>
+    <p>Las asignaciones de rueda y teclas de los dos esquemas se modifican por separado en Preferencias → Atajos de teclado con «Modo OpenTune» y «Modo OpenDyne», con los valores predeterminados descritos arriba. El cambio se aplica al instante.</p>
+</div>
+
+<h3>9.3 Estilo de cuadricula y ajuste al mover</h3>
+<table>
+    <tr><th width="26%">Ajuste</th><th>Descripción</th></tr>
+    <tr><td><strong>Estilo de cuadricula</strong></td><td>Teclas de piano: el eje de tono se ordena según el teclado de piano, con las teclas blancas y negras bien diferenciadas. Espaciado igual: todos los semitonos se reparten por igual, lo que facilita observar la curva con precisión.</td></tr>
+    <tr><td><strong>Ajuste al mover</strong></td><td>Seguir escala global: al arrastrar una nota se ajusta a las notas de la escala actual. Por semitonos: ajusta al semitono más cercano.</td></tr>
+</table>
 
 <h2 id="preferences">10. Preferencias</h2>
 
-<p>Abra el diálogo de preferencias mediante <strong>File → Options</strong> o <strong>Edit → Preferences</strong>.</p>
+<p>Las preferencias se abren en el menú Archivo → <strong>Opciones</strong>. La ventana se divide en varias páginas: Ctrl + Tab cambia de página y la tecla Tab recorre los controles.</p>
 
-<h3>10.1 Configuración compartida (común a la versión independiente y al plugin VST3)</h3>
+<h3>10.1 Audio</h3>
+<p>La página «Audio» reúne los ajustes relacionados con el cálculo del sonido. En la versión independiente esta página incluye además la sección de dispositivo de audio (véase 10.7).</p>
 <table>
-    <tr><th>Elemento</th><th>Descripción</th><th>Valor pred.</th></tr>
-    <tr><td>Idioma de la interfaz</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td>Tema</td><td>Aurora</td><td>Aurora</td></tr>
-    <tr><td>Modo de edición</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
-    <tr><td>Ajuste de desplazamiento de notas</td><td>Modo de ajuste al transportar notas en conjunto: Seguir escala global / Tono estándar más cercano (pasos iguales); solo disponible en el esquema OpenTune</td><td>Seguir escala global</td></tr>
-    <tr><td>Prioridad de renderizado</td><td>Prioridad GPU / Prioridad CPU</td><td>Prioridad GPU</td></tr>
-    <tr><td>Sensibilidad de zoom horizontal</td><td>Controla la velocidad de zoom horizontal con la rueda del ratón</td><td>1.0</td></tr>
-    <tr><td>Sensibilidad de zoom vertical</td><td>Controla la velocidad de zoom vertical con la rueda del ratón</td><td>1.0</td></tr>
-    <tr><td>Velocidad de desplazamiento</td><td>Velocidad de desplazamiento de la vista</td><td>1.0</td></tr>
-    <tr><td>Visualización de nombres de nota</td><td>Mostrar todos / Solo C / Ocultar</td><td>Solo C</td></tr>
-    <tr><td>Mostrar bordes de bloques</td><td>Visualización de bordes de bloques de renderizado</td><td>Apagado</td></tr>
-    <tr><td>Mostrar fotogramas no sonoros</td><td>Mostrar datos F0 de fotogramas no sonoros</td><td>Apagado</td></tr>
-    <tr><td>Estilo de cursor del ratón</td><td>Adwaita / Capitaine / Breeze</td><td>Predeterminado del sistema</td></tr>
+    <tr><th width="34%">Ajuste</th><th>Descripción</th><th width="16%">Valor predeterminado</th></tr>
+    <tr><td>Repetir introducción</td><td>Cierra los ajustes y reproduce de nuevo la guía de la interfaz</td><td>—</td></tr>
+    <tr><td>Prioridad de renderizado</td><td>GPU primero / CPU primero: decide si el análisis de tono y la resíntesis usan la tarjeta gráfica o el procesador</td><td>GPU primero</td></tr>
+    <tr><td>Modelo de detección de tono</td><td>Selecciona el modelo de análisis de tono, actualmente FCPE</td><td>FCPE</td></tr>
+    <tr><td>Activar funciones experimentales (herramienta de estiramiento temporal)</td><td>Con la opción activa aparece la herramienta de tiempo en la zona de herramientas. Solo en la versión independiente</td><td>Apagado</td></tr>
+    <tr><td>Modo híbrido</td><td>Las correcciones pequeñas usan el procesamiento ligero y las grandes la resíntesis por IA</td><td>Encendido</td></tr>
 </table>
 
-<h3>10.2 Configuración exclusiva de la versión independiente</h3>
+<h3>10.2 Tema</h3>
 <table>
-    <tr><th>Elemento</th><th>Descripción</th></tr>
-    <tr><td>Dispositivo de audio</td><td>Tipo de controlador, selección de dispositivo, frecuencia de muestreo, tamaño de búfer</td></tr>
-    <tr><td>Atajos de teclado</td><td>10 atajos de teclado personalizables (con detección de conflictos y restablecimiento)</td></tr>
-    <tr><td>Estela del ratón</td><td>8 temas de efectos de estela para elegir</td></tr>
+    <tr><th width="34%">Ajuste</th><th>Descripción</th><th width="16%">Valor predeterminado</th></tr>
+    <tr><td>Tema</td><td>Paleta de colores de la interfaz</td><td>Aurora cristal</td></tr>
+    <tr><td>Idioma</td><td>中文 / English / 日本語 / Русский / Español; la interfaz se actualiza al instante</td><td>中文</td></tr>
 </table>
 
-<h3>10.3 Acceso rápido desde el menú Ver</h3>
-<p>Las siguientes configuraciones visuales también pueden alternarse directamente desde el menú <strong>View</strong>:</p>
+<h3>10.3 Edicion</h3>
+<table>
+    <tr><th width="34%">Ajuste</th><th>Descripción</th><th width="16%">Valor predeterminado</th></tr>
+    <tr><td>Esquema de edicion de audio</td><td>OpenTune u OpenDyne; el cambio afecta a la vez al editor y al conjunto de herramientas</td><td>OpenTune</td></tr>
+    <tr><td>Sensibilidad zoom horizontal</td><td>Sensibilidad del zoom horizontal con Ctrl+rueda, rango 0.10–1.00</td><td>0.35</td></tr>
+    <tr><td>Sensibilidad zoom vertical</td><td>Sensibilidad del zoom vertical con Shift+rueda, rango 0.10–1.00</td><td>0.35</td></tr>
+    <tr><td>Velocidad</td><td>Velocidad de desplazamiento de la vista con la rueda, rango 30–300</td><td>90</td></tr>
+    <tr><td>Frecuencia de afinación</td><td>Frecuencia del tono de referencia, rango 400–500 Hz, que rige la conversión de nombres de nota y el objetivo de la corrección automática</td><td>440 Hz</td></tr>
+    <tr><td>Estilo de cuadricula</td><td>Teclas de piano / Espaciado igual</td><td>Teclas de piano</td></tr>
+    <tr><td>Ajuste al mover</td><td>Seguir escala global / Por semitonos; solo en el esquema OpenTune</td><td>Seguir escala global</td></tr>
+    <tr><td>Escuchar transposición al arrastrar notas</td><td>Escucha el tono de destino al arrastrar una nota para cambiar su tono y controla la audición tras editar con el teclado</td><td>Apagado</td></tr>
+    <tr><td>Modo de accesibilidad</td><td>Activa los anuncios del lector de pantalla y la edición de notas con el teclado</td><td>Apagado</td></tr>
+    <tr><td>Restablecer</td><td>Devuelve la sensibilidad de zoom y la velocidad de desplazamiento a sus valores predeterminados</td><td>—</td></tr>
+</table>
+
+<h3>10.4 Ver</h3>
+<table>
+    <tr><th width="34%">Ajuste</th><th>Descripción</th><th width="16%">Valor predeterminado</th></tr>
+    <tr><td>Etiquetas de notas</td><td>Mostrar todo / Solo C / Ocultar</td><td>Solo C</td></tr>
+    <tr><td>Mostrar cuadros sordos</td><td>Muestra los datos de tono de los tramos sin voz</td><td>Apagado</td></tr>
+    <tr><td>Brillo de fondo</td><td>Brillo del fondo del piano roll, rango 0%–200%</td><td>100%</td></tr>
+    <tr><td>Color de la curva de corrección de tono</td><td>Un clic en la muestra elige el color de la curva corregida</td><td>Tonos azules</td></tr>
+    <tr><td>Color de la curva de tono original</td><td>Un clic en la muestra elige el color de la curva de tono original</td><td>Tonos rojos</td></tr>
+</table>
+
+<h3>10.5 Atajos de teclado</h3>
+<p>Los atajos personalizables se agrupan en tres secciones: «General», «Modo OpenTune» y «Modo OpenDyne». Para asignar un atajo, haz clic en una entrada y pulsa una tecla, gira la rueda o haz clic en el botón central o lateral del ratón; una misma acción admite varias entradas; ante un conflicto, el aviso indica a qué acción pertenece la asignación y permite reasignarla directamente.</p>
+<p>La página incluye «Restablecer todo», que devuelve todas las asignaciones a los valores de fábrica.</p>
+
+<h3>10.6 Ratón (solo versión independiente)</h3>
+<table>
+    <tr><th width="34%">Ajuste</th><th>Descripción</th><th width="16%">Valor predeterminado</th></tr>
+    <tr><td>Ratón</td><td>Apagado / Clásico / Neón / Fuego / Océano / Galaxia / Flor de cerezo / Matriz</td><td>Clásico</td></tr>
+</table>
+
+<h3>10.7 Dispositivo de audio (mitad inferior de la página «Audio» de la versión independiente)</h3>
+<p>Los siguientes controles forman la sección de dispositivo de audio de la página «Audio» de la versión independiente. El plugin recibe la salida de audio del host y no muestra estos controles.</p>
+<table>
+    <tr><th width="34%">Control</th><th>Descripción</th></tr>
+    <tr><td>Tipo de dispositivo para explorar</td><td>Selecciona el tipo de controlador, por ejemplo ASIO, WASAPI o DirectSound</td></tr>
+    <tr><td>Salida</td><td>Selecciona el dispositivo de salida</td></tr>
+    <tr><td>Frecuencia de muestreo</td><td>Ajusta la frecuencia de muestreo del dispositivo</td></tr>
+    <tr><td>Tamaño del búfer</td><td>Ajusta el búfer: un valor menor reduce la latencia y aumenta el consumo</td></tr>
+    <tr><td>Canales de salida activos</td><td>Marca los canales de salida que se usan</td></tr>
+    <tr><td>Probar</td><td>Reproduce un tono de prueba y confirma que el dispositivo y los canales elegidos funcionan</td></tr>
+</table>
+
+<h3>10.8 Interruptores rápidos del menú Ver</h3>
+<p>Los siguientes ajustes de visualización se cambian también desde el menú Ver, con el mismo resultado que en Preferencias:</p>
 <ul>
-    <li>Show Waveform — Mostrar/ocultar forma de onda</li>
-    <li>Teclas de piano — Marcado muestra carriles de teclas de piano, desmarcado cambia a asistencia de escala</li>
-    <li>Note Labels — Modo de etiquetas de notas</li>
-    <li>Show Chunk Boundaries — Bordes de bloques</li>
-    <li>Show Unvoiced Frames — Fotogramas no sonoros</li>
-    <li>Theme — Cambiar tema</li>
-    <li>Mouse Trail — Tema de estela del ratón</li>
+    <li>Ver forma de onda — muestra u oculta la forma de onda del audio</li>
+    <li>Teclado de piano — muestra u oculta el teclado de piano de la izquierda</li>
+    <li>Brillo de escala — marca con brillo las teclas de piano según la escala actual</li>
+    <li>Etiquetas de notas — Mostrar todo / Solo C / Ocultar</li>
+    <li>Mostrar cuadros sordos — muestra los datos de tono de los tramos sin voz</li>
+    <li>Tema, Zoom de interfaz, Ratón, Estilo del cursor y Color pista</li>
 </ul>
 
+<div class="page-break"></div>
 <h2 id="shortcuts">11. Atajos de teclado</h2>
 
-<h3>11.1 Control de reproducción</h3>
+<p>Los atajos de las tablas siguientes se modifican en Preferencias → Atajos de teclado; los valores predeterminados de macOS se indican aparte. Con el plugin en ejecución, el host controla la reproducción, la pausa y la detención, y el software no responde a esos tres atajos de transporte.</p>
+
+<h3>11.1 Reproducción y transporte</h3>
 <table class="shortcut-table">
-    <tr><th>Atajo</th><th>Función</th><th>macOS Predeterminado</th></tr>
-    <tr><td>Space</td><td>Reproducir / Pausar</td><td>Space</td></tr>
-    <tr><td>Enter</td><td>Detener reproducción</td><td>. (punto)</td></tr>
-    <tr><td>A</td><td>Reproducir desde el inicio</td><td>&#8984;.</td></tr>
-    <tr><td>Escape</td><td>Cancelar operación actual / Detener</td><td>Esc</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS predeterminado</th><th>Función</th></tr>
+    <tr><td>Space</td><td>Space</td><td>Reproducir / Pausar</td></tr>
+    <tr><td>Enter</td><td>⌘⌥⇧.</td><td>Detener la reproducción</td></tr>
+    <tr><td>A</td><td>⌘⌥⇧Return</td><td>Reproducir desde el inicio; si se pulsa durante la reproducción, pausa y vuelve al inicio</td></tr>
 </table>
 
 <h3>11.2 Operaciones de edición</h3>
 <table class="shortcut-table">
-    <tr><th>Atajo</th><th>Función</th></tr>
+    <tr><th width="30%">Atajo</th><th>Función</th></tr>
     <tr><td>Ctrl + Z</td><td>Deshacer</td></tr>
     <tr><td>Ctrl + Y / Ctrl + Shift + Z</td><td>Rehacer</td></tr>
     <tr><td>Ctrl + X</td><td>Cortar</td></tr>
     <tr><td>Ctrl + C</td><td>Copiar</td></tr>
     <tr><td>Ctrl + V</td><td>Pegar</td></tr>
     <tr><td>Ctrl + A</td><td>Seleccionar todo</td></tr>
-    <tr><td>Delete / Backspace</td><td>Eliminar selección</td></tr>
+    <tr><td>Ctrl + D</td><td>Duplicar en el sitio</td></tr>
+    <tr><td>Delete / Backspace / 1</td><td>Eliminar la selección</td></tr>
+    <tr><td>Esc</td><td>Cancelar la selección / cancelar la operación actual</td></tr>
 </table>
 
-<h3>11.3 Cambio de herramienta</h3>
-<p><strong>Herramientas de OpenTune</strong></p>
+<h3>11.3 Operaciones de clip en la vista de arreglo</h3>
 <table class="shortcut-table">
-    <tr><th>Atajo</th><th>Herramienta</th></tr>
-    <tr><td>2</td><td>Dibujar Nota</td></tr>
-    <tr><td>3</td><td>Herramienta de Selección</td></tr>
-    <tr><td>4</td><td>Herramienta de Anclaje</td></tr>
-    <tr><td>5</td><td>Dibujo Libre</td></tr>
-    <tr><td>6</td><td>Corrección Automática</td></tr>
-    <tr><td>T</td><td>Herramienta de tiempo</td></tr>
+    <tr><th width="30%">Windows</th><th width="24%">macOS predeterminado</th><th>Función</th></tr>
+    <tr><td>S</td><td>⌘E</td><td>Divide los clips seleccionados en el cabezal de reproducción</td></tr>
+    <tr><td>M</td><td>⌘J</td><td>Une con el clip contiguo</td></tr>
+    <tr><td>← / →</td><td>← / →</td><td>Desplaza el clip a la izquierda / a la derecha</td></tr>
+    <tr><td>Ctrl + Shift + S</td><td>Ctrl + Shift + S</td><td>Activa o desactiva el ajuste</td></tr>
 </table>
 
-<p><strong>Herramientas de OpenDyne</strong></p>
-<table class="shortcut-table">
-    <tr><th>Atajo</th><th>Herramienta</th></tr>
-    <tr><td>2</td><td>Dibujar Nota</td></tr>
-    <tr><td>3</td><td>Herramienta de Selección</td></tr>
-    <tr><td>4</td><td>Modulación de tono</td></tr>
-    <tr><td>5</td><td>Deriva de tono</td></tr>
-    <tr><td>6</td><td>Envolvente de volumen</td></tr>
-    <tr><td>7</td><td>Tijeras</td></tr>
-    <tr><td>T</td><td>Herramienta de tiempo</td></tr>
-</table>
-
-<h3>11.4 Operaciones de vista</h3>
+<h3>11.4 Cambio de herramienta</h3>
 <p><strong>Modo OpenTune</strong></p>
 <table class="shortcut-table">
-    <tr><th>Atajo</th><th>Función</th></tr>
-    <tr><td>Rueda del ratón</td><td>Desplazamiento vertical</td></tr>
-    <tr><td>Shift + Rueda</td><td>Zoom vertical del eje de tono</td></tr>
-    <tr><td>Ctrl + Rueda</td><td>Zoom horizontal de la línea de tiempo</td></tr>
-    <tr><td>Alt + Rueda</td><td>Desplazamiento horizontal</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS predeterminado</th><th>Herramienta</th></tr>
+    <tr><td>2</td><td>2</td><td>Dibujar nota</td></tr>
+    <tr><td>3</td><td>3</td><td>Selección</td></tr>
+    <tr><td>4</td><td>4</td><td>Ancla de línea</td></tr>
+    <tr><td>5</td><td>H</td><td>Dibujo libre</td></tr>
+    <tr><td>6</td><td>A</td><td>Corrección automática</td></tr>
+    <tr><td>E</td><td>E</td><td>Ecualizador</td></tr>
+    <tr><td>T</td><td>T</td><td>Herramienta de tiempo (requiere las funciones experimentales)</td></tr>
 </table>
 
-<p><strong>Modo OpenDyne</strong>: la navegación con la rueda es una asignación fija y no se puede personalizar. Para Ctrl + Rueda, use Ctrl en Windows/Linux y Command (⌘) en macOS.</p>
+<p><strong>Modo OpenDyne</strong></p>
 <table class="shortcut-table">
-    <tr><th>Atajo</th><th>Función</th></tr>
-    <tr><td>Rueda del ratón</td><td>Desplazamiento vertical</td></tr>
-    <tr><td>Shift + Rueda</td><td>Desplazamiento horizontal</td></tr>
-    <tr><td>Ctrl + Rueda</td><td>Zoom sincronizado horizontal y vertical</td></tr>
-    <tr><td>Alt + Rueda</td><td>Zoom vertical del eje de tono</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS predeterminado</th><th>Herramienta</th></tr>
+    <tr><td>F1</td><td>1</td><td>Selección</td></tr>
+    <tr><td>F2</td><td>2</td><td>Tono</td></tr>
+    <tr><td>F3</td><td>3</td><td>Modulación</td></tr>
+    <tr><td>F4</td><td>5</td><td>Envolvente de volumen</td></tr>
+    <tr><td>F5</td><td>4</td><td>Deriva</td></tr>
+    <tr><td>F6</td><td>6</td><td>Tijeras</td></tr>
+    <tr><td>E</td><td>E</td><td>Ecualizador</td></tr>
+    <tr><td>T</td><td>T</td><td>Herramienta de tiempo (requiere las funciones experimentales)</td></tr>
 </table>
 
-<div class="tip">
-    <div class="tip-title">Atajos personalizados</div>
-    Los atajos de edición y herramientas configurables pueden personalizarse en Preferencias → Atajos de teclado. Admite múltiples asignaciones, detección de conflictos y restablecimiento con un clic. En macOS se muestran automáticamente los símbolos ⌘/⌥/⇧.
+<h3>11.5 Navegación y zoom de la vista</h3>
+<table class="shortcut-table">
+    <tr><th width="30%">Windows</th><th width="26%">macOS predeterminado</th><th>Función</th></tr>
+    <tr><td>Rueda</td><td>Rueda</td><td>Desplazamiento vertical</td></tr>
+    <tr><td>Shift + Rueda</td><td>Shift + Rueda</td><td>Zoom vertical (eje de tono) centrado en la posición del puntero</td></tr>
+    <tr><td>Ctrl + Rueda</td><td>Control + Rueda</td><td>Zoom horizontal (eje de tiempo) centrado en la posición del puntero</td></tr>
+    <tr><td>Alt + Rueda</td><td>Option + Rueda</td><td>Desplazamiento horizontal</td></tr>
+    <tr><td>Ctrl + Alt + ← / →</td><td>⌘⌥⇧← / →</td><td>Reducir / ampliar horizontalmente</td></tr>
+    <tr><td>Ctrl + Alt + ↑ / ↓</td><td>⌘⌥⇧↑ / ↓</td><td>Ampliar / reducir verticalmente</td></tr>
+    <tr><td>Alt + ← / →</td><td>Option + ← / →</td><td>Desplazar a la izquierda / a la derecha</td></tr>
+    <tr><td>Ctrl + 0</td><td>⌘0</td><td>Ajustar a las notas seleccionadas</td></tr>
+    <tr><td>Ctrl + Shift + 0</td><td>⌘⇧0</td><td>Ajustar a todas las notas</td></tr>
+</table>
+
+<h3>11.6 Atajos personalizados</h3>
+<ul>
+    <li>Todos los elementos configurables se reúnen en Preferencias → Atajos de teclado, agrupados por esquema.</li>
+    <li>La asignación admite teclas del teclado, las cuatro direcciones de la rueda, el botón central y los dos botones laterales del ratón.</li>
+    <li>Ante un conflicto, un diálogo indica a qué acción está asignada la entrada; al confirmar, la asignación anterior se sustituye.</li>
+    <li>«Restablecer todo» devuelve todas las asignaciones de una vez.</li>
+</ul>
+
+<div class="page-break"></div>
+<h2 id="accessibility">12. Modo de accesibilidad y edición con el teclado</h2>
+
+<p>Con el <strong>Modo de accesibilidad</strong> activado en Preferencias → Edicion, la interfaz anuncia los elementos con el lector de pantalla y permite editar notas con el teclado. Con la opción desactivada, las flechas solo hacen el movimiento de tono y el cambio de nota más básicos.</p>
+
+<h3>12.1 Contenido de los anuncios del lector de pantalla</h3>
+<ul>
+    <li>Nombre y valor actual de los controles de la interfaz: perillas, listas desplegables, casillas y pestañas.</li>
+    <li>Resultado de las operaciones: elementos deshechos y rehechos, número de notas eliminadas, resultado de las divisiones y uniones, y aplicación de la corrección automática.</li>
+    <li>Información de la nota: nombre, cambio de tono, tiempos de inicio y fin, modulación, deriva y volumen.</li>
+    <li>Posición de reproducción y estado actual: posición de pausa y aviso cuando la posición no está disponible durante la reproducción.</li>
+    <li>Estado y progreso del renderizado.</li>
+</ul>
+
+<h3>12.2 Edición de notas con el teclado</h3>
+<p>En el piano roll, tras seleccionar una nota con las flechas izquierda y derecha se edita con el teclado. Ante un conflicto de atajos, mandan las asignaciones de Preferencias.</p>
+<table class="shortcut-table">
+    <tr><th width="34%">Tecla</th><th>Resultado</th></tr>
+    <tr><td>← / →</td><td>Selecciona la nota anterior / siguiente</td></tr>
+    <tr><td>Shift + ← / →</td><td>Amplía la selección</td></tr>
+    <tr><td>Home / End</td><td>Selecciona la primera / última nota</td></tr>
+    <tr><td>↑ / ↓</td><td>Anuncia las teclas de edición disponibles sin cambiar el contenido</td></tr>
+    <tr><td>Ctrl + ↑ / ↓</td><td>Sube / baja el tono según la cuadrícula de tono</td></tr>
+    <tr><td>Ctrl + Shift + ↑ / ↓</td><td>Ajusta el tono con pasos de 1 cent</td></tr>
+    <tr><td>Alt + ↑ / ↓</td><td>Mueve el tono por semitonos, aunque la nota de destino no esté en la escala</td></tr>
+    <tr><td>Ctrl + ← / →</td><td>Ajusta el final de la nota</td></tr>
+    <tr><td>Ctrl + Shift + ← / →</td><td>Ajusta el inicio de la nota</td></tr>
+    <tr><td>X</td><td>Divide la nota seleccionada en el punto de cambio de tono; sin un cambio claro, la divide por la mitad</td></tr>
+    <tr><td>Shift + X</td><td>Divide la nota seleccionada en el cursor de reproducción</td></tr>
+    <tr><td>J</td><td>Une con la nota contigua siguiente</td></tr>
+    <tr><td>R</td><td>Devuelve el tono cantado original</td></tr>
+    <tr><td>I</td><td>Anuncia la información de la nota seleccionada</td></tr>
+    <tr><td>Shift + I</td><td>Anuncia la posición de reproducción actual</td></tr>
+    <tr><td>Enter</td><td>Ejecuta la acción predeterminada de la nota: en el esquema OpenDyne abre las acciones de edición de la nota seleccionada, y con la herramienta de ecualizador abre el ecualizador de esa nota</td></tr>
+    <tr><td>Shift + F10</td><td>Abre el menú de herramientas, igual que el botón derecho del ratón</td></tr>
+</table>
+
+<p>En el esquema OpenDyne, con las herramientas de modulación, deriva y envolvente de volumen seleccionadas, Ctrl + ↑ / ↓ ajusta el parámetro correspondiente: unos 5% por paso en modulación y deriva y 1 dB por paso en volumen; con Shift se aplican pasos precisos.</p>
+
+<div class="note">
+    <div class="note-title">Origen de la posición en el plugin</div>
+    <p>En los hosts con ARA, el host proporciona la posición del cursor de reproducción; al detener la reproducción se usa la posición actual del cursor de edición del host. Cuando el host no proporciona la posición, las operaciones que dependen de ella, como Shift + X, anuncian que la posición es desconocida.</p>
+</div>
+
+<h2 id="themes">13. Temas y apariencia</h2>
+
+<h3>13.1 Temas de la interfaz</h3>
+<table>
+    <tr><th width="18%">Tema</th><th>Estilo</th><th>Uso recomendado</th></tr>
+    <tr><td><strong>Aurora cristal</strong></td><td>Fondo oscuro, brillo neón, efecto de vidrio esmerilado, perillas de aspecto realista y bordes de módulo refinados</td><td>Corrección de tono prolongada y estética tecnológica</td></tr>
+</table>
+
+<h3>13.2 Zoom de la interfaz</h3>
+<p>El menú Ver → Zoom de interfaz ofrece seis niveles: 75%, 90%, 100%, 110%, 125% y 150%. La interfaz completa y las fuentes se amplían o se reducen a la vez y el contenido de la ventana se reorganiza en consecuencia.</p>
+
+<h3>13.3 Brillo de fondo y colores de curva</h3>
+<ul>
+    <li><strong>Brillo de fondo</strong>: 0%–200%, valor predeterminado 100%, para ajustar el contraste en entornos luminosos o en habitaciones oscuras.</li>
+    <li><strong>Color de la curva de tono original</strong>: color con el que se muestra el tono cantado original, rojo por defecto.</li>
+    <li><strong>Color de la curva de corrección de tono</strong>: color con el que se muestra el resultado corregido, azul por defecto.</li>
+</ul>
+
+<h3>13.4 Color de las notas</h3>
+<p>El color del bloque de nota distingue las pistas y refleja además la magnitud del cambio: cuanto mayor es el cambio, más azul frío resulta la nota subida y más naranja cálido la nota bajada. Las notas con ecualización se ven un poco más oscuras. Así se localizan de inmediato las notas que necesitan resíntesis.</p>
+
+<h3>13.5 Efectos de estela del ratón (solo versión independiente)</h3>
+<table>
+    <tr><th width="20%">Efecto</th><th>Estilo</th></tr>
+    <tr><td>Apagado</td><td>Sin estela</td></tr>
+    <tr><td>Clásico</td><td>Estela clásica azul (predeterminada)</td></tr>
+    <tr><td>Neón</td><td>Degradado neón magenta y cian</td></tr>
+    <tr><td>Fuego</td><td>Efecto de fuego naranja y dorado</td></tr>
+    <tr><td>Océano</td><td>Ondas marinas azules y turquesas</td></tr>
+    <tr><td>Galaxia</td><td>Efecto de galaxia violeta y rosa</td></tr>
+    <tr><td>Flor de cerezo</td><td>Pétalos de cerezo rosa claro</td></tr>
+    <tr><td>Matriz</td><td>Lluvia digital verde estilo Matrix</td></tr>
+</table>
+
+<h3>13.6 Estilo del cursor</h3>
+<p>En el menú Ver se eligen cuatro estilos de cursor: Sistema, Adwaita, Capitaine y Breeze.</p>
+
+<h3>13.7 Animación al pasar el ratón</h3>
+<p>Al pasar el ratón sobre los botones de la barra de herramientas, el icono se agranda ligeramente y se ilumina, lo que confirma la interacción al instante.</p>
+
+<h2 id="gpu">14. Aceleración GPU</h2>
+
+<p>OpenTune acelera con la tarjeta gráfica el análisis de tono y la inferencia del vocoder, y la velocidad de procesamiento sube de forma notable.</p>
+
+<h3>14.1 Plataformas compatibles</h3>
+<ul>
+    <li><strong>Windows</strong>: tarjetas NVIDIA / AMD / Intel mediante DirectML</li>
+    <li><strong>macOS</strong>: aceleración gráfica del sistema mediante CoreML</li>
+    <li>Sin tarjeta gráfica disponible o con una tarjeta no compatible, el procesamiento pasa a la CPU y todas las funciones siguen operativas</li>
+</ul>
+
+<h3>14.2 Configuración</h3>
+<p>En Preferencias → Audio → Prioridad de renderizado elige:</p>
+<ul>
+    <li><strong>GPU primero</strong> (predeterminado): usa primero la aceleración de la tarjeta gráfica</li>
+    <li><strong>CPU primero</strong>: procesa todo con el procesador, para controladores gráficos inestables</li>
+</ul>
+
+<div class="warning">
+    <div class="warning-title">Qué ocurre al cambiar</div>
+    <p>Cambiar la prioridad de renderizado recarga el motor de procesamiento; cambiar el modo híbrido resintetiza los clips existentes con el nuevo método y la insignia de la esquina superior derecha muestra el progreso; cambiar el modelo de detección de tono afecta solo a los análisis posteriores y los clips ya analizados no cambian.</p>
 </div>
 
 <div class="page-break"></div>
-<h2 id="themes">12. Temas y apariencia</h2>
+<h2 id="vst3">15. Modo plugin VST3/ARA</h2>
 
-<h3>12.1 Temas de la interfaz</h3>
+<p>El plugin OpenTune se carga en el DAW en formato VST3 y, con la extensión ARA2, permite una edición no destructiva. La versión para macOS incluye además el componente AU.</p>
+
+<h3>15.1 Funcionamiento</h3>
+<ul>
+    <li>Cargado en un host compatible (Studio One, Cubase, REAPER, Logic Pro), el plugin realiza todas las operaciones de corrección de tono en su ventana.</li>
+    <li>Los hosts con ARA proporcionan los datos de audio directamente, sin importar ni exportar archivos; los resultados de la edición se reflejan al instante en la reproducción de la línea de tiempo del host.</li>
+    <li>Sincroniza el transporte del host (reproducir, detener y posicionar) y sigue su tempo.</li>
+    <li>La lectura y la edición actúan solo sobre el segmento de audio seleccionado y los proyectos con varios segmentos no interfieren entre sí.</li>
+    <li>Al modificar el audio de entrada, el tono original se actualiza automáticamente.</li>
+    <li>Antes de terminar el renderizado se reproduce el tono original y al terminar suena automáticamente el sonido corregido.</li>
+</ul>
+
+<h3>15.2 Lectura de audio</h3>
+<p>En el plugin, toda la lectura de audio se hace con el botón <strong>Leer audio</strong> de la barra de herramientas superior (icono circular rojo), con un comportamiento distinto según el host:</p>
 <table>
-    <tr><th>Tema</th><th>Estilo</th><th>Uso recomendado</th></tr>
-    <tr><td><strong>Aurora Glass</strong></td><td>Fondo oscuro, brillo neón, vidrio esmerilado, perillas escultóricas (plata metálica + centro corazón), bordes de módulo refinados</td><td>Estética tecnológica, expresión personal</td></tr>
+    <tr><th width="22%">Tipo de host</th><th>Operación</th><th>Resultado</th></tr>
+    <tr><td><strong>Con ARA</strong></td><td>Selecciona el evento de audio en el host y pulsa «Leer audio» una vez</td><td>Lee el audio del segmento seleccionado e inicia el análisis; el piano roll muestra después la curva de tono. Si el audio ya se leyó, avisa «El audio ya se leyó»</td></tr>
+    <tr><td><strong>Sin ARA</strong></td><td>Pulsa «Leer audio» para iniciar la captura, inicia la reproducción del host y vuelve a pulsar al llegar a la posición deseada para finalizar la captura</td><td>Durante la captura el botón queda encendido y al finalizar se analiza automáticamente y el audio pasa a ser editable. Cada captura crea un segmento nuevo y los segmentos existentes no cambian; los solapamientos que produce el ir y venir durante la captura se unen y el sonido no se duplica</td></tr>
 </table>
+
+<h3>15.3 Edición externa</h3>
+<p>El botón «Edición externa» del plugin envía la curva de tono actual a la versión independiente de OpenTune para un ajuste fino:</p>
+<ol>
+    <li>Pulsa <strong>Edición externa</strong>: la versión independiente se inicia y abre la interfaz de edición de ese audio.</li>
+    <li>Modifica el tono en la versión independiente y pulsa <strong>Guardar y volver</strong>.</li>
+    <li>El plugin lee el resultado automáticamente y la interfaz anuncia «Edición externa aplicada».</li>
+</ol>
+<p>Si se pulsa antes de leer el audio, el aviso indica que hay que leerlo primero; si el archivo de curva devuelto está dañado, la sesión permanece abierta para corregir y volver a guardar desde la versión independiente.</p>
+
+<h3>15.4 Diferencias con la versión independiente</h3>
 <table>
-    <tr><th>Efecto</th><th>Estilo</th></tr>
-    <tr><td>Apagado (Off)</td><td>Sin estela</td></tr>
-    <tr><td>Classic</td><td>Estela azul clásica (predeterminada)</td></tr>
-    <tr><td>Neon</td><td>Degradado neón magenta/cian</td></tr>
-    <tr><td>Fire</td><td>Efecto de fuego naranja/dorado</td></tr>
-    <tr><td>Ocean</td><td>Ondas marinas azul/turquesa</td></tr>
-    <tr><td>Galaxy</td><td>Efecto galaxia violeta/rosa</td></tr>
-    <tr><td>Cherry Blossom</td><td>Pétalos de cerezo rosa claro</td></tr>
-    <tr><td>Matrix</td><td>Lluvia digital Matrix verde</td></tr>
-</table>
-
-<h3>12.3 Animación al pasar el ratón</h3>
-<p>Todos los botones de la barra de herramientas tienen una sutil retroalimentación visual al pasar el ratón: el icono se agranda ligeramente (1.08x) y se ilumina un 15%, proporcionando una confirmación visual instantánea de la interacción.</p>
-
-<h2 id="gpu">13. Aceleración GPU</h2>
-
-<p>OpenTune es compatible con aceleración GPU para la inferencia del vocoder, lo que mejora significativamente la velocidad de renderizado.</p>
-
-<h3>13.1 Plataformas compatibles</h3>
-<ul>
-    <li><strong>Windows</strong>: Compatible con GPU NVIDIA / AMD / Intel mediante DirectML</li>
-    <li><strong>macOS</strong>: Compatible con GPU de Apple mediante CoreML</li>
-    <li>Si no hay GPU dedicada o es incompatible, se revierte automáticamente a CPU sin afectar el uso</li>
-</ul>
-
-<h3>13.2 Configuración</h3>
-<p>En Preferencias → página Compartido → Prioridad de renderizado, seleccione:</p>
-<ul>
-    <li><strong>Prioridad GPU</strong> (predeterminado): Usa automáticamente aceleración GPU</li>
-    <li><strong>Prioridad CPU</strong>: Fuerza el uso de CPU, útil para problemas de compatibilidad GPU</li>
-</ul>
-
-<h2 id="vst3">14. Modo plugin VST3/ARA</h2>
-
-<p>El plugin OpenTune VST3 se integra profundamente con el DAW mediante el protocolo ARA2, permitiendo edición no destructiva.</p>
-
-<h3>14.1 Modo de funcionamiento</h3>
-<ul>
-    <li>Se carga como extensión VST3 + ARA2 en DAW compatibles (como Studio One, Cubase, Logic Pro)</li>
-    <li>El DAW proporciona los datos de audio fuente mediante el protocolo ARA, sin necesidad de importar/exportar archivos</li>
-    <li>Los resultados de edición se reflejan en tiempo real en la reproducción de la línea de tiempo del DAW</li>
-    <li>Compatible con sincronización de transporte del host (Play/Stop/Seek) y seguimiento de BPM; el seguimiento de reproducción es estable, sin vibración del cabezal</li>
-    <li>Reproducción continua estable en los hosts: sin tartamudeos ni fragmentos repetidos (p. ej., en Cubase 13 Pro); la salida se limpia al instante al detener la reproducción</li>
-    <li>Compatible con vinculación de múltiples regiones ARA; varias regiones de la misma fuente comparten el estado de edición</li>
-    <li>Autoalineación de referencia: en modo ARA, el tono de referencia se alinea automáticamente entre regiones, mejorando la consistencia de la edición multipista</li>
-    <li>La lectura y edición solo afectan al clip de audio seleccionado actualmente; el botón de lectura no está disponible hasta que el clip enfocado esté listo</li>
-    <li>La curva de tono original se actualiza automáticamente al cambiar el audio de entrada</li>
-    <li>Los clips capturados en el host se renderizan automáticamente cuando el análisis de tono está listo, sin clips perdidos ni retrasados</li>
-    <li>El modo plugin VST3 oculta elementos de menú exclusivos de la versión independiente, como proyecto/importar/exportar</li>
-</ul>
-
-<h3>14.2 Diferencias con la versión independiente</h3>
-<table>
-    <tr><th>Función</th><th>Independiente</th><th>VST3/ARA</th></tr>
-    <tr><td>Edición multipista</td><td>✓ Hasta 12 pistas</td><td>✗ Edición de material único</td></tr>
-    <tr><td>Importar/Exportar archivos</td><td>✓</td><td>✗ (Gestionado por el DAW)</td></tr>
-    <tr><td>Estela del ratón</td><td>✓ 8 temas</td><td>✗</td></tr>
-    <tr><td>Atajos personalizados</td><td>✓</td><td>✗ (Usa los atajos del DAW)</td></tr>
-    <tr><td>Configuración de dispositivo de audio</td><td>✓</td><td>✗ (Usa el motor de audio del DAW)</td></tr>
-    <tr><td>Sincronización de transporte del host</td><td>✗</td><td>✓</td></tr>
+    <tr><th width="30%">Función</th><th width="26%">Independiente</th><th>Plugin</th></tr>
+    <tr><td>Edición multipista</td><td>✓ Hasta 12 pistas</td><td>✗ Las pistas las gestiona el host</td></tr>
+    <tr><td>Importación/exportación de archivos</td><td>✓</td><td>✗ Las realiza el host</td></tr>
+    <tr><td>Guardar/abrir proyecto</td><td>✓</td><td>✗ Se guarda con el proyecto del host</td></tr>
+    <tr><td>Ajustes del dispositivo de audio</td><td>✓</td><td>✗ Usa el motor de audio del host</td></tr>
+    <tr><td>Estela del ratón</td><td>✓ 8 opciones</td><td>✗</td></tr>
+    <tr><td>Funciones experimentales (herramienta de tiempo)</td><td>✓</td><td>✗</td></tr>
+    <tr><td>Control de transporte (reproducir/detener)</td><td>✓</td><td>✗ Usa el transporte del host</td></tr>
     <tr><td>Edición no destructiva ARA</td><td>✗</td><td>✓</td></tr>
-    <tr><td>Edición de rollo de piano</td><td>✓</td><td>✓</td></tr>
-    <tr><td>Panel de parámetros</td><td>✓</td><td>✓</td></tr>
-    <tr><td>Deshacer/Rehacer</td><td>✓</td><td>✓</td></tr>
-    <tr><td>Cambio de tema</td><td>✓</td><td>✓</td></tr>
-    <tr><td>Interfaz multilingüe</td><td>✓</td><td>✓</td></tr>
+    <tr><td>Edición externa</td><td>✗</td><td>✓</td></tr>
+    <tr><td>Piano roll, panel de parámetros, deshacer y rehacer, temas e interfaz multilingüe</td><td>✓</td><td>✓</td></tr>
 </table>
 
-<div class="page-break"></div>
-<h2 id="export">15. Exportar audio</h2>
+<div class="note">
+    <div class="note-title">Diferencias de menús y transporte</div>
+    <p>En modo plugin, el menú Archivo oculta los elementos relacionados con proyectos y archivos; pulsar importar o exportar avisa de que la operación se realiza en el host. La barra superior del plugin no ofrece los botones de reproducir, pausar y detener y conserva los menús, la visualización de tiempo, Leer audio, el tempo y el menú de más opciones; el transporte lo controla el host y los atajos correspondientes no actúan en el plugin.</p>
+</div>
 
-<h3>15.1 Formato de exportación</h3>
+<h2 id="export">16. Exportar audio</h2>
+
+<h3>16.1 Formato de exportación</h3>
 <ul>
     <li><strong>Formato</strong>: WAV</li>
     <li><strong>Frecuencia de muestreo</strong>: 44.1 kHz</li>
-    <li><strong>Profundidad de bits</strong>: 32-bit Float</li>
-    <li><strong>Canales</strong>: Mono (Clip/Pista) / Estéreo (Mezcla Maestra)</li>
+    <li><strong>Profundidad de bits</strong>: 32 bits en coma flotante</li>
+    <li><strong>Canales</strong>: mono en clips y pistas, estéreo en la mezcla maestra</li>
 </ul>
 
-<h3>15.2 Opciones de exportación</h3>
+<h3>16.2 Alcance de la exportación</h3>
 <table>
-    <tr><th>Opción</th><th>Descripción</th></tr>
-    <tr><td>Export Selected Clip</td><td>Exporta solo el clip de audio seleccionado actualmente</td></tr>
-    <tr><td>Export Track</td><td>Exporta la mezcla de todos los clips de la pista especificada</td></tr>
-    <tr><td>Export Bus (Master Mix)</td><td>Exporta la mezcla final de todas las pistas</td></tr>
+    <tr><th width="30%">Opción</th><th>Descripción</th></tr>
+    <tr><td>Exportar clip seleccionado</td><td>Exporta solo el clip de audio seleccionado, con la corrección de tono aplicada</td></tr>
+    <tr><td>Exportar pista</td><td>Exporta la mezcla de todos los clips de la pista indicada</td></tr>
+    <tr><td>Exportar bus (mezcla maestra)</td><td>Exporta la mezcla final de todas las pistas</td></tr>
 </table>
 
-<h3>15.3 Proceso de exportación</h3>
+<h3>16.3 Proceso de exportación</h3>
 <ol>
-    <li>Menú <strong>File → Export Audio</strong></li>
-    <li>Seleccione el rango de exportación</li>
-    <li>Elija ubicación y nombre de archivo</li>
-    <li>Espere a que finalice el renderizado en segundo plano (el progreso se muestra en la insignia de renderizado)</li>
+    <li>Menú <strong>Archivo → Exportar audio</strong>: elige el alcance de la exportación.</li>
+    <li>Elige la ubicación y el nombre del archivo.</li>
+    <li>Si el archivo de destino ya existe, el software pregunta si se sobrescribe.</li>
+    <li>Espera a que termine la síntesis en segundo plano: al terminar se indica la ruta completa del archivo exportado y, si falla, el motivo.</li>
 </ol>
 
-<h2 id="faq">16. Preguntas frecuentes</h2>
+<div class="tip">
+    <div class="tip-title">Espera al renderizado antes de exportar</div>
+    <p>La exportación espera a que todos los clips estén listos y después escribe el archivo; si hay un renderizado en curso, la exportación se pone en cola, de modo que ver la insignia «Renderizando» antes de exportar es lo normal. Solo se ejecuta una exportación a la vez.</p>
+</div>
 
-<h3>Q1: ¿No se muestra la curva de tono tras importar audio?</h3>
-<p><strong>R:</strong> Asegúrese de que <code>models/rmvpe.onnx</code> existe y está completo. El audio debe contener contenido vocal melódico claro. Las pistas de solo acompañamiento/percusión no permiten extraer F0.</p>
+<h2 id="faq">17. Preguntas frecuentes</h2>
 
-<h3>Q2: ¿La aceleración GPU no funciona?</h3>
-<p><strong>R:</strong> Verifique lo siguiente:</p>
+<h3>Q1: ¿No aparece la curva de tono tras importar el audio?</h3>
+<p><strong>R:</strong> Comprueba que <code>C:\ProgramData\OpenTune\Models\fcpe.onnx</code> existe y está completo. El audio necesita una melodía vocal clara; un acompañamiento instrumental o una percusión no aportan datos de tono válidos. Si el análisis falla, la interfaz muestra un aviso y la reimportación del audio lanza un nuevo análisis.</p>
+
+<h3>Q2: ¿La aceleración GPU no está activa?</h3>
+<p><strong>R:</strong> Comprueba en orden:</p>
 <ul>
-    <li>Asegúrese de que <code>DirectML.dll</code> está en el directorio del programa</li>
-    <li>Confirme que los controladores GPU están actualizados a la última versión</li>
-    <li>En Preferencias, confirme que "Prioridad de renderizado" está en Prioridad GPU</li>
-    <li>Revise el archivo de registro para confirmar si el proveedor DML se cargó correctamente</li>
+    <li>Que <code>DirectML.dll</code> está en el directorio del programa y la carpeta <code>D3D12</code> está completa</li>
+    <li>Que el controlador de la tarjeta gráfica está en la última versión</li>
+    <li>Que Preferencias → Audio → Prioridad de renderizado está en GPU primero</li>
+    <li>Que el registro del directorio de logs confirma la carga de la aceleración gráfica</li>
 </ul>
 
-<h3>Q3: ¿El consumo de memoria es muy alto?</h3>
-<p><strong>R:</strong> v1.7 ya optimizó la gestión de memoria: el modelo F0 se libera automáticamente tras su uso. Si aún es alto, intente: desactivar la aceleración GPU (la sesión GPU consume memoria de video adicional), reducir el número de pistas abiertas simultáneamente.</p>
+<h3>Q3: ¿Durante el renderizado se escucha el sonido original?</h3>
+<p><strong>R:</strong> Es el estado normal. Al modificar el tono, transponer o abrir un proyecto se inicia una nueva síntesis; antes de terminar el renderizado se reproduce el tono original y la esquina superior derecha muestra «Renderizando (completados/total)». Cuando la insignia desaparece, la reproducción usa el sonido corregido.</p>
 
-<h3>Q4: ¿La calidad del audio corregido es anormal?</h3>
-<p><strong>R:</strong> Posibles causas: archivo de modelo del vocoder dañado (vuelva a descargarlo), Retune Speed demasiado alto (pruebe por debajo del 30%), calidad deficiente de la grabación original.</p>
+<h3>Q4: ¿No encuentras la herramienta de tiempo?</h3>
+<p><strong>R:</strong> La herramienta de tiempo es una función experimental: marca «Activar funciones experimentales (herramienta de estiramiento temporal)» en Preferencias → Audio y el botón aparece en la zona de herramientas. Esta función no tiene versión para el plugin.</p>
 
-<h3>Q5: ¿Cómo lograr un efecto de corrección de tono natural?</h3>
+<h3>Q5: ¿La calidad del sonido corregido presenta anomalías?</h3>
+<p><strong>R:</strong> Causas: archivo de modelo dañado (se recupera al reinstalar), velocidad de afinación demasiado alta (baja el valor por debajo de 30%) y calidad deficiente de la grabación original. Con una velocidad de afinación más baja y menos cambios, el sonido se acerca más a la interpretación original.</p>
+
+<h3>Q6: ¿Cómo se consigue una corrección de tono natural?</h3>
 <ul>
-    <li>Use una Retune Speed baja (10–30%)</li>
-    <li>Conserve el vibrato original, no añada Vibrato artificial</li>
-    <li>Use la herramienta LineAnchor para ajustar con precisión las posiciones clave</li>
-    <li>Seleccione el modo "OpenTune" para obtener un control más fino</li>
+    <li>Usa una velocidad de afinación baja (10%–30%)</li>
+    <li>Conserva el vibrato original y no añadas vibrato artificial</li>
+    <li>Ajusta los puntos clave con la herramienta de ancla y cambia solo lo necesario</li>
+    <li>Activa el modo híbrido para que las correcciones pequeñas conserven la textura original</li>
 </ul>
 
-<h3>Q6: ¿El plugin VST3 no carga en el DAW?</h3>
-<p><strong>R:</strong> Asegúrese de que la carpeta <code>OpenTune.vst3</code> está completa (incluye el subdirectorio Contents/x86_64-win/), y que los DLL de ONNX Runtime y los archivos de modelo están en la ubicación correcta. Vuelva a escanear el directorio VST3 en su DAW.</p>
+<h3>Q7: ¿El plugin no se carga en el DAW?</h3>
+<p><strong>R:</strong> Comprueba que la carpeta <code>OpenTune.vst3</code> está completa (incluye el subdirectorio <code>Contents\x86_64-win\</code>) y que los archivos de modelo están en <code>C:\ProgramData\OpenTune\Models</code>. Tras la instalación, vuelve a escanear el directorio VST3 del host; para usar ARA, el host necesita soporte ARA2.</p>
 
-<h3>Q7: ¿Cómo cambiar el idioma de la interfaz?</h3>
-<p><strong>R:</strong> Preferencias → Idioma (Language), seleccione el idioma deseado y la interfaz cambiará inmediatamente. Compatible con chino, inglés, japonés, ruso y español.</p>
+<h3>Q8: ¿El botón Leer audio del plugin no responde?</h3>
+<p><strong>R:</strong> En los hosts con ARA, selecciona antes un evento de audio en el host; sin selección o con el evento aún no listo, el aviso pide volver a seleccionarlo. En los hosts sin ARA, pulsa «Leer audio» y después inicia la reproducción del host; al detener la reproducción, vuelve a pulsar para finalizar la captura.</p>
 
-<h3>Q8: ¿Qué hacer si falla el renderizado o el análisis de tono?</h3>
-<p><strong>R:</strong> Aparecerá un diálogo de diagnóstico (por ejemplo, «Error de renderizado, puede usarse la señal seca») con la ruta del registro y su contenido reciente para copiarlo fácilmente. Carpetas de registro: Windows <code>%APPDATA%\OpenTune\Logs</code>, macOS <code>~/Library/OpenTune/Logs/</code>.</p>
+<h3>Q9: ¿Cómo se cambia el idioma de la interfaz?</h3>
+<p><strong>R:</strong> Preferencias → Tema → Idioma: elige el idioma de destino y la interfaz cambia al instante. Idiomas disponibles: chino, inglés, japonés, ruso y español.</p>
+
+<h3>Q10: ¿Qué hacer cuando falla el renderizado o el análisis de tono?</h3>
+<p><strong>R:</strong> El software muestra un aviso de diagnóstico (por ejemplo, «Error de renderizado; puede usarse audio sin procesar. Motivo: …») con la ruta del archivo de registro y el contenido reciente, listo para copiar. Directorio de logs: Windows <code>%APPDATA%\OpenTune\Logs</code>, macOS <code>~/Library/OpenTune/Logs/</code>.</p>
+
+<h3>Q11: ¿El proyecto guardado no abre el audio en otro ordenador?</h3>
+<p><strong>R:</strong> Al guardar el proyecto, el software crea junto al archivo una carpeta «nombre_proyecto_Media» y copia los audios utilizados. Al mover el proyecto, copia juntos el archivo <code>.otproj</code> y la carpeta <code>_Media</code> del mismo nombre.</p>
+
+<h3>Q12: ¿Los atajos de teclado no responden?</h3>
+<p><strong>R:</strong> Comprueba primero que el foco está en el piano roll o en la vista de arreglo; en el plugin, la reproducción, la pausa y la detención dependen del host y esos tres atajos no actúan. Si una tecla entra en conflicto con el sistema o con otro programa, asigna la rueda o un botón lateral del ratón en Preferencias → Atajos de teclado.</p>
 
 <hr>
 
 <footer>
-    <p>OpenTune v1.7 — Software de corrección de tono con IA | Código abierto y gratuito | Licencia AGPL v3.0</p>
-    <p>Agradecimientos a la comunidad de código abierto DiffSinger y a todos los colaboradores</p>
+    <p>OpenTune v1.8.3 — Software de corrección de tono con IA | Código abierto y gratuito | Licencia AGPL v3.0</p>
+    <p>Gracias a la comunidad de código abierto DiffSinger y a todos los colaboradores</p>
 </footer>
 
 </body>
