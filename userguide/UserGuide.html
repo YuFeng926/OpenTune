@@ -68,14 +68,14 @@
     <h1>OpenTune</h1>
     <div class="subtitle">AI 智能修音软件</div>
     <div class="tagline">保留共振峰，移调不失真</div>
-    <div class="version">用户指南 v1.7</div>
-    <div class="version" style="margin-top: 10px;">2026 年 8 月</div>
+    <div class="version">用户指南 v1.8.3</div>
+    <div class="version" style="margin-top: 10px;">2026 年 11 月</div>
 </div>
 
 <div class="toc">
     <h2>目录</h2>
     <ul>
-        <li><a href="#whats-new">★ v1.7 新功能与改进</a></li>
+        <li><a href="#whats-new">★ v1.8.3 新功能与改进</a></li>
         <li><a href="#intro">1. 产品简介</a></li>
         <li><a href="#requirements">2. 系统要求</a></li>
         <li><a href="#install">3. 安装与启动</a></li>
@@ -87,52 +87,80 @@
         <li><a href="#schemes">9. 编辑方案</a></li>
         <li><a href="#preferences">10. 偏好设置</a></li>
         <li><a href="#shortcuts">11. 快捷键</a></li>
-        <li><a href="#themes">12. 主题与视觉</a></li>
-        <li><a href="#gpu">13. GPU 加速</a></li>
-        <li><a href="#vst3">14. VST3/ARA 插件模式</a></li>
-        <li><a href="#export">15. 导出音频</a></li>
-        <li><a href="#faq">16. 常见问题</a></li>
+        <li><a href="#accessibility">12. 无障碍模式与键盘编辑</a></li>
+        <li><a href="#themes">13. 主题与视觉</a></li>
+        <li><a href="#gpu">14. GPU 加速</a></li>
+        <li><a href="#vst3">15. VST3/ARA 插件模式</a></li>
+        <li><a href="#export">16. 导出音频</a></li>
+        <li><a href="#faq">17. 常见问题</a></li>
     </ul>
 </div>
 
 <div class="page-break"></div>
-<h2 id="whats-new">★ v1.7 新功能与改进</h2>
+<h2 id="whats-new">★ v1.8.3 新功能与改进</h2>
+
+<p>本章汇总从 v1.8.0 到 v1.8.3 期间用户能直接感受到的变化。旧版说明中已经不适用的操作，已在本手册正文对应章节同步改写。</p>
 
 <h3>🎉 新增功能</h3>
 <table>
-    <tr><th width="25%">功能</th><th>说明</th></tr>
-    <tr><td><strong>OpenDyne 编辑模式</strong></td><td>全新神经编辑模式，Melodyne 式工作流：波形可视化、音高调制/音高漂移工具、音量包络、剪刀切割、概览导航条</td></tr>
-    <tr><td><strong>Melodyne 式概览</strong></td><td>波形预览条与滚动条合并，支持视图导航</td></tr>
-    <tr><td><strong>滚轮导航（OpenDyne）</strong></td><td>Ctrl+滚轮双轴缩放、Alt+滚轮纵向缩放、Shift+滚轮横向滚动</td></tr>
-    <tr><td><strong>Melodyne 式缩放</strong></td><td>Cmd+Alt 双击聚焦/恢复、方向键精确缩放、临时放大镜光标</td></tr>
-    <tr><td><strong>音高网格吸附</strong></td><td>可切换的音高网格吸附，一键吸附到最近音符</td></tr>
-    <tr><td><strong>音符边缘退让</strong></td><td>拖拽音符时边缘自动退让，避免遮挡相邻元素</td></tr>
-    <tr><td><strong>右键工具栏（OpenDyne）</strong></td><td>右键工具选择改为纵向图标工具栏布局</td></tr>
-    <tr><td><strong>时间轴总览条</strong></td><td>新增时间轴总览条与钢琴卷帘视口记忆</td></tr>
-    <tr><td><strong>鼠标光标主题</strong></td><td>3 种可选光标样式：Adwaita、Capitaine、Breeze</td></tr>
-    <tr><td><strong>快捷键三段式布局</strong></td><td>快捷键设置页分为通用/OpenTune/OpenDyne 三段</td></tr>
-    <tr><td><strong>音符级 EQ 编辑</strong></td><td>新增音符级 EQ 编辑功能，支持动态滤波器与真实频谱链路</td></tr>
-    <tr><td><strong>网格样式切换</strong></td><td>新增钢琴卷帘网格样式切换（PianoLanes/EqualSpacing）</td></tr>
-    <tr><td><strong>钢琴卷帘背景亮度</strong></td><td>设置页视图页面新增钢琴卷帘背景亮度滑块（0%-200%，默认100%）</td></tr>
-    <tr><td><strong>参考音高基准频率</strong></td><td>用户可配置基准频率（400-500Hz），替换硬编码 440Hz</td></tr>
-    <tr><td><strong>VST3 non-ARA 捕获模式</strong></td><td>新增 VST3 non-ARA 捕获模式，支持 Melodyne Transfer 风格的捕获→渲染→回放工作流</td></tr>
-    <tr><td><strong>剪刀双击合并</strong></td><td>双击分离线合并相邻音符，支持多选中音符链式合并</td></tr>
+    <tr><th width="26%">功能</th><th>说明</th></tr>
+    <tr><td><strong>钢琴卷帘缩放滑杆</strong></td><td>视图左下角新增一组缩放滑杆：竖条控制音高轴缩放，横条控制时间轴缩放。两个滑杆等滑程、等倍率，拖动时以视口中心为锚点缩放；滚轮缩放仍以指针位置为中心。</td></tr>
+    <tr><td><strong>音符按移调幅度着色</strong></td><td>改动较大的音符会自动带上颜色：升调偏冷蓝、降调偏暖橙，改动越大颜色越明显。哪些音符需要重新合成，一眼就能看出来。</td></tr>
+    <tr><td><strong>音高曲线配色自定义</strong></td><td>偏好设置 → 视图里可以分别选择「原始音高曲线颜色」和「音高修正曲线颜色」。</td></tr>
+    <tr><td><strong>界面缩放</strong></td><td>视图菜单新增 75%、90%、100%、110%、125%、150% 六档界面缩放，小屏幕和高分屏都能调出合适的大小。</td></tr>
+    <tr><td><strong>视图菜单集中开关</strong></td><td>视图菜单可直接开关显示波形、钢琴键盘、音阶明暗、音名标签、无声帧，并可切换主题、鼠标轨迹和鼠标指针样式。</td></tr>
+    <tr><td><strong>轨道颜色</strong></td><td>轨道右键菜单新增「轨道颜色」，可指定自定义颜色或随机颜色；视图菜单里可切换所有新轨道的取色方式：随机颜色 / 自定义颜色。</td></tr>
+    <tr><td><strong>偏好设置重新排版</strong></td><td>设置分为「音频」「主题」「编辑」「视图」「快捷键」「鼠标轨迹」六个页面，支持 Ctrl+Tab 切换页面、Tab 键逐个访问控件。</td></tr>
+    <tr><td><strong>无障碍模式</strong></td><td>开启后界面支持读屏播报，并可用键盘完整地选择、移动、缩放、分割和合并音符。</td></tr>
+    <tr><td><strong>快捷键可绑定鼠标</strong></td><td>滚轮上/下/左/右、鼠标中键、侧键都能设成快捷键；设置页按「通用 / OpenTune 模式 / OpenDyne 模式」分区，冲突时给出提示并可直接重新分配。</td></tr>
+    <tr><td><strong>拖动音符试听</strong></td><td>开启「拖动音符时试听移调」后，拖动音符改变音高时会即时听到目标音高。</td></tr>
+    <tr><td><strong>上手引导与演示工程</strong></td><td>首次启动先走一遍界面引导；引导结束后会自动载入一首演示歌曲，并给出三步提示，帮助马上听到修音效果。</td></tr>
+    <tr><td><strong>关于对话框</strong></td><td>文件菜单新增「关于」，可查看版本与版权信息、项目地址、反馈入口和贡献者名单。</td></tr>
+    <tr><td><strong>最近工程</strong></td><td>文件菜单会记住最近打开的工程，可一键打开，也可一键清除列表。</td></tr>
+    <tr><td><strong>批量导入两种方式</strong></td><td>一次选择多个音频文件时，可选择「按顺序导入到当前轨道」或「导入到独立轨道」。</td></tr>
+    <tr><td><strong>时间工具（实验性）</strong></td><td>时间工具改为实验性功能，在偏好设置 → 音频中开启「启用实验性功能」后才会出现在工具区。</td></tr>
+    <tr><td><strong>混合模式</strong></td><td>偏好设置 → 音频中的「混合模式」开启后，小幅修正使用轻量处理，大幅修正才使用 AI 重合成。</td></tr>
+    <tr><td><strong>插件「读取音频」</strong></td><td>插件里统一通过顶部红色圆形按钮读取音频：支持 ARA 的宿主读取当前选中段落，其他宿主用开始/结束采集的方式录入。</td></tr>
+    <tr><td><strong>外部编辑</strong></td><td>插件内可将当前音高曲线交给独立版精修，保存返回后自动带回插件。</td></tr>
+    <tr><td><strong>macOS 12 起支持</strong></td><td>macOS 最低系统版本为 12.0，Intel 与 Apple 芯片都能运行；macOS 另提供 AU 组件。</td></tr>
+    <tr><td><strong>重新生成音符</strong></td><td>编辑菜单新增「重新生成音符」，可按现有分析重新划分音符块，不必重新分析音频。</td></tr>
 </table>
 
-<h3>🐛 修复与优化</h3>
+<h3>🛠 改进与优化</h3>
 <table>
-    <tr><th width="25%">问题</th><th>改进</th></tr>
-    <tr><td><strong>内存占用过高</strong></td><td>优化内存管理，常驻内存减少约 500–900 MB</td></tr>
-    <tr><td><strong>GPU 兼容性差</strong></td><td>所有主流 GPU 均可使用 GPU 加速，无兼容 GPU 时自动回退 CPU</td></tr>
-    <tr><td><strong>处理速度慢</strong></td><td>GPU 加速大幅提升修音处理速度</td></tr>
-    <tr><td><strong>设置弹窗适配</strong></td><td>适配不同屏幕分辨率，支持缩放</td></tr>
+    <tr><th width="26%">项目</th><th>改进</th></tr>
+    <tr><td><strong>缩放流畅度</strong></td><td>波形与音高曲线在缩放过程中保持平滑，拖动缩放不再出现明显卡顿。</td></tr>
+    <tr><td><strong>曲线显示</strong></td><td>音高曲线按帧连续绘制，缩放时曲线形状保持稳定，不再出现断裂或跳变。</td></tr>
+    <tr><td><strong>自动校正精度</strong></td><td>修正了低音区容易被判成相邻八度的问题，自动校正结果更贴近演唱音高。</td></tr>
+    <tr><td><strong>修音自然度</strong></td><td>移调时的音头、气口和鼓点衔接更平滑，大幅移调后的声音更清晰。</td></tr>
+    <tr><td><strong>渲染提示更明确</strong></td><td>渲染完成前播放的是原始音高，右上角显示「渲染中（已完成/总数）」，渲染结束后自动切换到修正后的声音。</td></tr>
+    <tr><td><strong>免重复分析</strong></td><td>同一段音频再次导入或重新打开工程时，直接复用已有的音高分析结果，等待时间明显缩短。</td></tr>
+    <tr><td><strong>工程打开更完整</strong></td><td>重新打开工程后，轨道内容、轨道头和已修正的音高曲线都完整恢复。</td></tr>
+    <tr><td><strong>保存自动归档音频</strong></td><td>保存工程时会在工程文件旁建立同名的「工程名_Media」文件夹，把用到的音频一起存好，工程换电脑也能打开。</td></tr>
+    <tr><td><strong>插件播放更稳定</strong></td><td>宿主内连续播放不再卡顿或重复同一片段，停止播放后输出立即静音。</td></tr>
+    <tr><td><strong>内存与缓存</strong></td><td>关闭或删除片段后及时释放占用的缓存，长时间编辑更省内存。</td></tr>
+    <tr><td><strong>稳定性</strong></td><td>修复了部分宿主中关闭窗口、切换编辑段落时的异常退出与无声问题。</td></tr>
 </table>
+
+<div class="tip">
+    <div class="tip-title">旧版内容已更新</div>
+    旧版手册中的音高分析模型名称、模型文件位置、参数范围、快捷键默认值、插件工作方式和渲染状态说明都已按 v1.8.3 的实际界面改写，请以本手册为准。
+</div>
 
 <h2 id="intro">1. 产品简介</h2>
 
-<p>OpenTune 是一款基于神经声码器的开源 AI 修音软件。与传统 DSP 算法直接移调不同，它使用 PC-NSF-HiFiGAN 声码器在保留原始共振峰的前提下重新生成人声，即使进行极端音高调整，也能保持自然、扎实的音质。</p>
+<p>OpenTune 是一款基于神经声码器的开源 AI 修音软件。它使用 PC-NSF-HiFiGAN 声码器在保留原始共振峰的前提下重新生成人声，即使进行极端音高调整，也能保持自然、扎实的音质。</p>
 
-<p>OpenTune 同时提供 <strong>Standalone（独立运行）</strong>和 <strong>VST3/ARA（宿主插件）</strong>两种工作模式，可作为独立的多轨编辑器使用，也可嵌入 DAW 中进行实时协作编辑。</p>
+<p>OpenTune 同时提供 <strong>Standalone（独立运行）</strong>和 <strong>VST3/ARA（宿主插件）</strong>两种工作模式，可作为独立的多轨编辑器使用，也可嵌入 DAW 中进行协作编辑。macOS 版本另提供 AU 组件。</p>
+
+<h3>两种修音方式</h3>
+<table>
+    <tr><th width="22%">方式</th><th>适用情况</th><th>听感与速度</th></tr>
+    <tr><td><strong>轻量处理</strong></td><td>小幅修正，约 75 音分以内</td><td>处理很快，保留原始录音的细节与质感</td></tr>
+    <tr><td><strong>AI 重合成</strong></td><td>大幅改动：手绘、锚点、整体移调，以及超过约 75 音分的修正</td><td>重新生成人声，音质统一，需要短暂渲染等待</td></tr>
+</table>
+
+<p>在偏好设置 → 音频中开启「混合模式」后，软件会按修正幅度自动选择上面两种方式。关闭后，所有修正都走 AI 重合成。</p>
 
 <h3>核心优势</h3>
 <table>
@@ -140,17 +168,17 @@
     <tr><td><strong>共振峰不变</strong></td><td>改变音高时不影响声音的底色，告别"鸭子叫"或"换人唱"的失真感</td></tr>
     <tr><td><strong>大范围移调</strong></td><td>支持夸张的音高修正与转调，音质依然清晰稳定</td></tr>
     <tr><td><strong>AI 重合成</strong></td><td>基于 PC-NSF-HiFiGAN 深度学习声码器，高保真重建人声</td></tr>
-    <tr><td><strong>类 Auto-Tune 工作流</strong></td><td>自动修正、手绘、音符、锚点工具一应俱全</td></tr>
-    <tr><td><strong>自动调式检测</strong></td><td>内置 Krumhansl-Schmuckler 算法，支持 8 种调式</td></tr>
-    <tr><td><strong>双格式支持</strong></td><td>Standalone 独立运行 + VST3/ARA 插件无缝对接主流 DAW</td></tr>
-    <tr><td><strong>GPU 加速</strong></td><td>DirectML / CoreML 自动加速 AI 推理，CPU 无缝回退</td></tr>
-    <tr><td><strong>500 步撤销</strong></td><td>自定义 Undo/Redo 系统，任意编辑操作皆可回退</td></tr>
+    <tr><td><strong>类 Auto-Tune 工作流</strong></td><td>自动校正、手绘、音符、锚点、橡皮擦、均衡器等工具一应俱全</td></tr>
+    <tr><td><strong>自动调式检测</strong></td><td>内置调式识别，支持 8 种调式，可随时手动指定根音与调式</td></tr>
+    <tr><td><strong>双格式支持</strong></td><td>Standalone 独立运行 + VST3/ARA 插件对接主流 DAW</td></tr>
+    <tr><td><strong>GPU 加速</strong></td><td>Windows 使用 DirectML、macOS 使用 CoreML 加速，无可用显卡时自动改用 CPU</td></tr>
+    <tr><td><strong>500 步撤销</strong></td><td>任意编辑操作都可逐步回退</td></tr>
     <tr><td><strong>开源免费</strong></td><td>永久免费，社区驱动，持续迭代</td></tr>
 </table>
 
 <div class="tip">
     <div class="tip-title">技术亮点</div>
-    OpenTune 使用 RMVPE 深度学习模型进行高精度音高提取，配合 PC-NSF-HiFiGAN 神经声码器实现高质量的重合成。支持 GPU 加速，处理速度快。
+    OpenTune 使用 FCPE 深度学习模型提取原始音高，配合 PC-NSF-HiFiGAN 神经声码器完成高质量重合成，并支持 GPU 加速。
 </div>
 
 <h2 id="requirements">2. 系统要求</h2>
@@ -158,11 +186,11 @@
 <h3>最低配置</h3>
 <table>
     <tr><th width="25%">项目</th><th>要求</th></tr>
-    <tr><td>操作系统</td><td>Windows 10/11 (64位) 或 macOS 12.0+（Intel / Apple Silicon）</td></tr>
+    <tr><td>操作系统</td><td>Windows 10/11（64 位）或 macOS 12.0 及以上（Intel / Apple 芯片）</td></tr>
     <tr><td>处理器</td><td>Intel Core i5 或同等性能 AMD 处理器</td></tr>
     <tr><td>内存</td><td>8 GB RAM</td></tr>
-    <tr><td>存储空间</td><td>500 MB 可用空间（含 AI 模型）</td></tr>
-    <tr><td>声卡</td><td>支持 ASIO 或 WASAPI 的音频设备</td></tr>
+    <tr><td>存储空间</td><td>500 MB 可用空间（含 AI 模型与演示工程）</td></tr>
+    <tr><td>声卡</td><td>支持 ASIO 或 WASAPI 的音频设备（仅独立版需要）</td></tr>
 </table>
 
 <h3>推荐配置</h3>
@@ -170,68 +198,94 @@
     <tr><th width="25%">项目</th><th>要求</th></tr>
     <tr><td>处理器</td><td>Intel Core i7 / Apple M1 或更高</td></tr>
     <tr><td>内存</td><td>16 GB RAM 或更高</td></tr>
-    <tr><td>显卡</td><td>支持 DirectML 的 GPU（NVIDIA / AMD / Intel）可加速声码器推理</td></tr>
+    <tr><td>显卡</td><td>支持 DirectML 的显卡（NVIDIA / AMD / Intel）可加速音高分析与重合成</td></tr>
 </table>
 
 <div class="note">
-    <div class="note-title">GPU 加速说明</div>
-    <p>OpenTune 支持 DirectML（Windows）或 CoreML（macOS）GPU 加速。若 GPU 不可用会自动回退 CPU，不影响正常使用。可在偏好设置中手动切换为"CPU 优先"。</p>
+    <div class="note-title">显卡说明</div>
+    <p>Windows 通过 DirectML 使用显卡加速，macOS 通过 CoreML 使用 Apple 芯片加速。显卡不可用时会自动改用 CPU，功能不受影响。也可在偏好设置中主动选择「CPU 优先」。</p>
 </div>
 
 <h2 id="install">3. 安装与启动</h2>
 
 <h3>3.1 下载软件</h3>
-<p>前往 GitHub Releases 页面下载最新版本。</p>
+<p>前往 GitHub Releases 页面下载最新版本的安装包。Windows 使用安装程序，macOS 使用 PKG 安装包。</p>
 
 <h3>3.2 文件结构</h3>
-<ul>
-    <li><code>OpenTune.exe</code> — 主程序（Standalone）</li>
-    <li><code>OpenTune.vst3</code> — VST3 插件（用于 DAW）</li>
-    <li><code>OpenTuneOnnxRuntime_1_24_4.dll</code> — ONNX Runtime</li>
-    <li><code>DirectML.dll</code> — DirectML 运行时（GPU 加速）</li>
-    <li><code>models/</code> — AI 模型文件夹
-        <ul>
-            <li><code>rmvpe.onnx</code> — 音高提取模型（~28MB）</li>
-            <li><code>pc_nsf_hifigan_44.1k_ONNX/</code> — 声码器模型</li>
-        </ul>
-    </li>
-    <li><code>docs/UserGuide.html</code> — 本用户指南</li>
-</ul>
+<p>Windows 安装完成后，主要文件分布如下：</p>
+<table>
+    <tr><th width="42%">文件或文件夹</th><th>用途</th></tr>
+    <tr><td><code>OpenTune.exe</code></td><td>主程序（独立版）</td></tr>
+    <tr><td><code>OpenTune.vst3</code></td><td>VST3 插件（含 ARA2 支持），供 DAW 使用</td></tr>
+    <tr><td><code>OpenTuneOnnxRuntime_1_24_4.dll</code></td><td>AI 推理运行库</td></tr>
+    <tr><td><code>DirectML.dll</code>、<code>D3D12\</code></td><td>显卡加速组件</td></tr>
+    <tr><td><code>docs\UserGuide.html</code></td><td>本用户指南</td></tr>
+    <tr><td><code>Demo\Demo.otproj</code>、<code>Demo\Demo.wav</code></td><td>演示工程与演示歌曲</td></tr>
+    <tr><td><code>C:\ProgramData\OpenTune\Models\fcpe.onnx</code></td><td>音高分析模型（约 43 MB）</td></tr>
+    <tr><td><code>C:\ProgramData\OpenTune\Models\hifigan.onnx</code></td><td>声码器模型（约 56 MB）</td></tr>
+</table>
+
+<div class="warning">
+    <div class="warning-title">模型位置</div>
+    AI 模型统一存放在系统的公共程序数据目录（Windows 为 <code>C:\ProgramData\OpenTune\Models</code>），独立版和插件共用同一份模型文件。移动或删除该目录会导致软件无法修音。
+</div>
 
 <h3>3.3 启动程序</h3>
-<p>双击 <code>OpenTune.exe</code> 即可启动独立版。首次启动时自动初始化 AI 模型。VST3 插件需将 <code>OpenTune.vst3</code> 复制到宿主软件的 VST3 扫描目录。</p>
+<p>双击 <code>OpenTune.exe</code> 启动独立版，首次启动时自动初始化 AI 模型。插件版需要把 <code>OpenTune.vst3</code> 放到宿主软件的 VST3 扫描目录，或在安装时勾选插件组件由安装程序完成注册。</p>
 
-<h3>3.4 首次启动引导</h3>
-<p>首次启动时会自动进入<strong>上手引导</strong>：选择编辑方案后，依次介绍文件/编辑/视图菜单、音频导入、钢琴卷帘与工具栏、核心编辑工具及参数面板。引导步骤会根据运行环境（Standalone / ARA 插件 / 实时采集）自动调整，随时可退出。</p>
-<p>需要再次查看时，通过菜单 <strong>Help → Onboarding...</strong> 重新打开，或在偏好设置中点击<strong>重新进入上手引导</strong>。</p>
+<h3>3.4 首次启动：上手引导与演示工程</h3>
+<p>第一次启动会自动进入<strong>上手引导</strong>。引导开始先确认编辑工作流：</p>
+<ul>
+    <li><strong>OpenTune</strong> —— 编辑音符，适合逐音符精修。</li>
+    <li><strong>OpenDyne</strong> —— 编辑波形块，适合整体塑形。</li>
+    <li><strong>暂不选择</strong> —— 跳过选择，直接进入后续介绍。</li>
+</ul>
+<p>随后引导会依次指向文件、编辑、视图三个菜单，音频入口，轨道视图，钢琴卷帘，编辑工具，校正速度与颤音参数，自动与吸附，调式，概览条，走带按钮，以及帮助与选项。引导卡片显示当前进度（如「4 / 12」），可点上一步、下一步，也可随时「退出指南」。步骤会根据运行环境自动调整：独立版、ARA 插件、采集模式看到的提示各不相同。</p>
+
+<p>引导结束后，如果工程还是空的，软件会自动载入<strong>演示工程</strong>，并依次给出三条提示：</p>
+<ol>
+    <li><strong>演示工程</strong> —— 演示歌曲已加载到轨道上，双击音频片段进入钢琴卷帘编辑音高。</li>
+    <li><strong>音频渲染</strong> —— 加载工程、修改音高或移调后会开始渲染，渲染期间播放听到的是原始音高。</li>
+    <li><strong>编辑工具</strong> —— 右侧工具用于修音，把鼠标停在工具上可查看名称和用法。</li>
+</ol>
+<p>每一步都可点「跳过导览」。演示工程只在首次启动时自动出现一次，之后不会覆盖已有工程。</p>
+
+<div class="tip">
+    <div class="tip-title">再次查看引导</div>
+    通过文件菜单 <strong>帮助 → 上手引导...</strong> 可重新打开引导；也可在偏好设置 → 音频页面点击<strong>重新进入上手引导</strong>。
+</div>
 
 <div class="page-break"></div>
 <h2 id="interface">4. 界面概览</h2>
 
-<p>OpenTune Standalone 界面采用现代化多面板设计，各区域可折叠隐藏：</p>
+<p>OpenTune 独立版采用多面板布局，各区域可折叠隐藏。</p>
 
 <h3>4.1 界面布局</h3>
 <table>
     <tr><th width="20%">区域</th><th>功能</th></tr>
-    <tr><td><strong>顶部工具栏</strong></td><td>菜单按钮（文件/编辑/视图）、传输控制、BPM/调式设置、Tap Tempo、视图切换</td></tr>
-    <tr><td><strong>左侧轨道面板</strong></td><td>多轨道管理（最多 12 轨）、音量旋钮、Solo/Mute、圆形电平表、添加轨道按钮</td></tr>
-    <tr><td><strong>中央编曲视图</strong></td><td>音频片段排列、波形预览、时间轴、片段拖动/分割/合并/删除</td></tr>
-    <tr><td><strong>中央钢琴卷帘</strong></td><td>音高曲线编辑、音符绘制/选择、F0 曲线可视化、播放头、钢琴键试听（点击左侧键盘预览音高）；时间工具下钢琴键与音符/F0 曲线隐藏，显示可拖拽的时间手柄（TimeGrid handles）</td></tr>
-    <tr><td><strong>右侧参数面板</strong></td><td>Retune Speed / Vibrato / Note Split 旋钮、工具选择按钮</td></tr>
-    <tr><td><strong>渲染状态徽章</strong></td><td>右上角浮动显示当前渲染进度（如"渲染中 3/8"），Stage 2 时间拉伸进度单独显示（如"+2"）</td></tr>
+    <tr><td><strong>顶部工具栏</strong></td><td>文件/编辑/视图菜单按钮、调式选择（根音与调式）、走带按钮（播放、暂停、停止、循环、读取音频）、轨道视图与钢琴卷帘视图切换、速度与拍号、敲击节拍、时间显示，以及左右两端的面板折叠按钮</td></tr>
+    <tr><td><strong>左侧轨道面板</strong></td><td>多轨道管理（最多 12 轨）、音量旋钮、静音/独奏、环绕旋钮的指示灯式电平表、新建轨道入口</td></tr>
+    <tr><td><strong>中央编曲视图</strong></td><td>音频片段排列、波形预览、时间标尺、片段移动/裁剪/淡变/增益/分割/合并/删除</td></tr>
+    <tr><td><strong>中央钢琴卷帘</strong></td><td>音高曲线编辑、音符绘制与选择、音高曲线显示、播放头、左侧钢琴键试听</td></tr>
+    <tr><td><strong>钢琴卷帘底部</strong></td><td>概览条（拖动可快速浏览整段音频）与左下角的横向、纵向缩放滑杆</td></tr>
+    <tr><td><strong>右侧参数面板</strong></td><td>校正速度、颤音深度、颤音速率、音符分割四个旋钮，工具选择区，整体移调按钮</td></tr>
+    <tr><td><strong>渲染状态徽章</strong></td><td>右上角显示当前渲染进度，例如「渲染中 (3/8)」</td></tr>
 </table>
 
 <h3>4.2 面板折叠</h3>
-<p>点击顶部工具栏左右两端的面板切换按钮，可隐藏/显示左侧轨道面板或右侧参数面板，实现"沉浸式主画布"模式。</p>
+<p>点击顶部工具栏左右两端的面板切换按钮，可隐藏或显示左侧轨道面板、右侧参数面板，进入主画布全宽状态。</p>
 
 <h3>4.3 视图切换</h3>
 <ul>
-    <li><strong>轨道视图 (Track View)</strong>：显示编曲视图 + 钢琴卷帘，适合管理多个音频片段</li>
-    <li><strong>钢琴卷帘视图 (Piano Roll View)</strong>：全屏钢琴卷帘编辑，专注精细音高编辑</li>
+    <li><strong>轨道视图</strong>：显示编曲视图与钢琴卷帘，适合管理多个音频片段。</li>
+    <li><strong>钢琴卷帘视图</strong>：只显示钢琴卷帘，专注精细音高编辑，并显示底部概览条与缩放滑杆。</li>
 </ul>
 
-<h3>4.4 鼠标悬浮提示</h3>
-<p>将鼠标悬停在任何控件上方约 0.6 秒，将显示暗色风格的浮动提示窗口，包含控件的功能说明和快捷键（如有）。提示文本随界面语言自动切换。</p>
+<h3>4.4 悬浮提示</h3>
+<p>将鼠标悬停在任何控件上方约 0.6 秒，会显示暗色浮动提示，包含控件名称、功能说明和快捷键。提示文字随界面语言切换。</p>
+
+<h3>4.5 空内容提示</h3>
+<p>尚未读取音频时，钢琴卷帘中没有音高曲线与音符；此时执行自动校正会提示需要先完成音频分析。轨道为空时，编曲视图显示新建轨道入口。</p>
 
 <h2 id="quickstart">5. 快速入门</h2>
 
@@ -240,44 +294,49 @@
         <div class="step-number">1</div>
         <div class="step-content">
             <h4>导入音频</h4>
-            <p>将音频文件拖放到软件窗口，或通过菜单 File → Import Audio 导入。支持 WAV、MP3、FLAC、OGG、AIFF 等格式。</p>
+            <p>将音频文件拖入窗口，或通过文件 → 导入音频选择文件。支持 WAV、AIFF、FLAC、OGG、MP3 等格式。</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">2</div>
         <div class="step-content">
-            <h4>自动音高提取</h4>
-            <p>导入后软件自动提取原始音高曲线，在钢琴卷帘中显示为红色曲线。</p>
+            <h4>等待音高分析</h4>
+            <p>导入后软件自动分析并提取原始音高，在钢琴卷帘中显示为音高曲线。分析期间界面显示「正在处理音频」。</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">3</div>
         <div class="step-content">
-            <h4>调式设置</h4>
-            <p>软件自动检测调式，或手动选择根音（C~B）和调式类型（大调、小调、半音阶等 8 种）。</p>
+            <h4>确认调式</h4>
+            <p>软件会自动识别调式。也可在顶部工具栏手动选择根音（C~B）和调式类型（大调、小调、半音阶等 8 种）。</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">4</div>
         <div class="step-content">
             <h4>编辑音高</h4>
-            <p>使用自动修正工具（一键校正）或手动绘制音符/锚点/手绘曲线。修正后的音高显示为蓝色曲线。</p>
+            <p>用自动校正一键贴齐音阶，或用锚点、手绘、绘制音符逐个精修。修正结果以另一条曲线显示在原始音高之上。</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">5</div>
         <div class="step-content">
             <h4>调整参数</h4>
-            <p>在参数面板调节 Retune Speed、Vibrato Depth/Rate 等。支持逐音符设置独立颤音参数。</p>
+            <p>在参数面板调节校正速度、颤音深度、颤音速率等。选中音符后调整只作用于所选音符。</p>
         </div>
     </div>
     <div class="workflow-step">
         <div class="step-number">6</div>
         <div class="step-content">
-            <h4>预览与导出</h4>
-            <p>按 Space 播放预览，满意后通过 File → Export 导出。支持导出选中片段、单轨道或总线混音。</p>
+            <h4>试听与导出</h4>
+            <p>按空格播放。渲染完成后听到的就是修正后的声音，满意后通过文件 → 导出音频导出。</p>
         </div>
     </div>
+</div>
+
+<div class="note">
+    <div class="note-title">渲染期间听到的是什么</div>
+    <p>修改音高后，软件在后台重新合成音频，并在右上角显示「渲染中（已完成/总数）」。渲染结束前播放听到的是原始音高，结束后自动变为修正后的声音。</p>
 </div>
 
 <div class="page-break"></div>
@@ -285,449 +344,656 @@
 
 <h3>6.1 音频导入</h3>
 <ul>
-    <li>支持格式：WAV、MP3、FLAC、OGG、AIFF 等</li>
-    <li>导入时自动重采样至 44.1kHz</li>
-    <li>支持拖放导入（直接拖入窗口）</li>
-    <li>多轨道支持：最多 12 个独立轨道，每轨道可放置多个片段</li>
-    <li>支持批量导入多个文件（顺序排列或分轨）</li>
+    <li>支持格式：WAV、AIFF、FLAC、OGG、MP3，Windows 另支持 WMA。</li>
+    <li>支持单声道与立体声音频；超过两个声道的文件不支持导入。</li>
+    <li>可拖放导入，也可通过文件 → 导入音频选择；一次选择多个文件时会询问导入方式：按顺序导入到当前轨道，或导入到独立轨道。</li>
+    <li>多轨支持：最多 12 个轨道，每轨道可放置多个片段。导入数量超过可用轨道时会提示并只导入可容纳的部分。</li>
+    <li>导入时保留原始音频的采样率，编辑与重合成使用统一的 44.1 kHz 工作副本。</li>
+    <li>导入过程中会显示进度，一次只能进行一个导入任务。</li>
 </ul>
 
-<h3>6.2 音高提取（RMVPE）</h3>
+<h3>6.2 音高分析</h3>
 <ul>
-    <li>导入音频后自动提取原始音高曲线（红色显示）</li>
-    <li>基于 RMVPE 深度学习模型，精度高、噪声抗性强</li>
-    <li>支持 50Hz – 1100Hz 频率范围的人声检测</li>
+    <li>导入音频后自动提取原始音高，显示为音高曲线，颜色可在偏好设置中自定义。</li>
+    <li>使用 FCPE 深度学习模型，对人声和单声部旋律特别有效。</li>
+    <li>同一段音频只需分析一次；再次导入或重新打开工程时直接复用结果。</li>
+    <li>分析失败时界面会给出提示，并说明可重新导入音频来重新生成。</li>
 </ul>
 
 <h3>6.3 调式检测与选择</h3>
-<p>内置 Krumhansl-Schmuckler 算法的自动调式检测，支持 8 种调式类型：</p>
+<p>软件会自动识别调式，也可手动指定。手动指定后，整段音频都按所选调式计算自动校正的目标音。支持的 8 种调式：</p>
 <table>
-    <tr><th>调式</th><th>缩写</th><th>说明</th></tr>
+    <tr><th>调式</th><th>界面缩写</th><th>说明</th></tr>
     <tr><td>大调</td><td>Maj.</td><td>自然大调音阶</td></tr>
     <tr><td>小调</td><td>Min.</td><td>自然小调音阶</td></tr>
-    <tr><td>半音阶</td><td>Chr.</td><td>所有 12 个半音均可用（无调式过滤）</td></tr>
+    <tr><td>半音阶</td><td>Chr.</td><td>所有 12 个半音都可用，自动校正会贴到最近的半音</td></tr>
     <tr><td>和声小调</td><td>H.Min.</td><td>升七级的小调</td></tr>
     <tr><td>多利亚</td><td>Dor.</td><td>爵士/布鲁斯常用</td></tr>
     <tr><td>混合利底亚</td><td>Mix.</td><td>降七级的大调</td></tr>
-    <tr><td>大调五声</td><td>Pent.</td><td>五声音阶（中国风）</td></tr>
+    <tr><td>大调五声</td><td>Pent.</td><td>五声音阶</td></tr>
     <tr><td>小调五声</td><td>m.Pent.</td><td>布鲁斯五声音阶</td></tr>
 </table>
 
-<h3>6.4 AI 声码器重合成</h3>
+<h3>6.4 修音与重合成</h3>
 <ul>
-    <li>修正音高后，软件使用 PC-NSF-HiFiGAN 神经声码器重新合成音频</li>
-    <li>保留原始共振峰，大范围移调不失真</li>
-    <li>输出采样率 44.1kHz，音质自然清晰</li>
-    <li>支持 GPU 加速（可在偏好设置中配置）</li>
+    <li>修改音高后，软件按修改幅度选择轻量处理或 AI 重合成，再生成可播放的音频。</li>
+    <li>小幅修正（约 75 音分以内）在开启混合模式时使用轻量处理，速度快、保留原始细节。</li>
+    <li>手绘、锚点、整体移调以及超过约 75 音分的修改一律使用 AI 重合成，保留共振峰，大范围移调不失真。</li>
+    <li>输出采样率为 44.1 kHz，音质自然清晰。</li>
+    <li>渲染分段进行，长时间音频也能边渲染边编辑；右上角徽章显示进度。</li>
 </ul>
 
 <h3>6.5 多轨道管理</h3>
 <ul>
-    <li>最多 12 个独立轨道</li>
-    <li>每轨道支持多个音频片段</li>
-    <li>轨道操作：Solo、Mute、音量调节（圆形旋钮）</li>
-    <li>圆形 LED 电平表实时显示音量</li>
-    <li>片段操作：拖动移动、分割（Split）、合并（Merge）、删除</li>
+    <li>最多 12 个独立轨道，每轨道支持多个片段。</li>
+    <li>轨道控件：静音、独奏、音量旋钮（0~4.0 倍），旋钮外圈为实时电平指示。</li>
+    <li>轨道右键菜单：新建轨道、复制轨道、轨道颜色（自定义颜色 / 随机颜色）、删除轨道。</li>
+    <li>片段操作：移动、左右裁剪、调整淡入淡出、调整增益、分割、合并、原地复制、删除。</li>
+    <li>双击片段直接进入钢琴卷帘编辑该片段。</li>
 </ul>
 
-<h3>6.6 撤销/重做</h3>
+<h3>6.6 撤销与重做</h3>
 <ul>
-    <li>最多保存 <strong>500 步</strong>操作历史</li>
-    <li>支持所有编辑操作：音符绘制、参数调整、片段操作等</li>
-    <li>快捷键：<code>Ctrl+Z</code>（撤销）、<code>Ctrl+Y</code> 或 <code>Ctrl+Shift+Z</code>（重做）</li>
+    <li>最多保存 <strong>500 步</strong>操作历史。</li>
+    <li>覆盖所有编辑操作：音符绘制、音高修改、参数调整、片段操作、轨道操作、工程修改。</li>
+    <li>快捷键：<code>Ctrl+Z</code> 撤销，<code>Ctrl+Y</code> 或 <code>Ctrl+Shift+Z</code> 重做。</li>
 </ul>
 
 <div class="page-break"></div>
 <h2 id="tools">7. 编辑工具</h2>
 
-<p>OpenTune 提供七种专业编辑工具，通过参数面板的工具区或快捷键切换：</p>
+<p>编辑工具通过右侧参数面板的工具区或快捷键切换。鼠标悬停在工具按钮上会显示名称、用法与快捷键。本章括号中的快捷键为 Windows 默认值，macOS 默认值见第 11 章。</p>
+
+<h3>7.1 OpenTune 编辑方案的工具</h3>
 
 <div class="tool-card">
-    <h4>AutoTune — 自动修正工具 (快捷键: 6)</h4>
-    <p>根据当前调式自动将音高校正到最接近的目标音符。适合快速批量修正。</p>
+    <h4>自动校正 AUTO（快捷键 6）</h4>
+    <p>按当前调式把音高贴到最近的音阶音。选中音符、选区或音高范围时只处理选中的部分；没有选择时处理整段音频。处理一次即可听到结果；已经修正过的地方再次执行不会产生新的变化。</p>
 </div>
 
 <div class="tool-card">
-    <h4>Select — 选择工具 (快捷键: 3)</h4>
-    <p>选择音符或时间区域。选中后可进行移动、删除、参数调整等操作。</p>
-    <p><strong>操作</strong>：单击选择、拖动框选、Shift+点击多选、Delete 删除。</p>
+    <h4>选择工具 SELECT（快捷键 3）</h4>
+    <p>选择音符或时间区域，选中后可移动、删除或调整参数。</p>
+    <p><strong>操作</strong>：单击选择、拖动框选、Shift+单击多选、Delete 删除；拖动音符边缘可调整长度，拖动音符中部可改变音高或位置。</p>
 </div>
 
 <div class="tool-card">
-    <h4>DrawNote — 绘制音符工具 (快捷键: 2)</h4>
-    <p>手动绘制音符块。在钢琴卷帘中拖动创建音符，指定音高和时长。</p>
-    <p><strong>特点</strong>：每个音符可独立设置 Retune Speed、Vibrato Depth/Rate 参数。</p>
+    <h4>绘制音符 DRAW NOTE（快捷键 2）</h4>
+    <p>手动绘制音符块：在钢琴卷帘中拖动即可创建音符，指定音高与时长。</p>
+    <p><strong>特点</strong>：每个音符可独立设置校正速度、颤音深度、颤音速率。</p>
 </div>
 
 <div class="tool-card">
-    <h4>LineAnchor — 线锚点工具 (快捷键: 4)</h4>
-    <p>在音高曲线上放置关键锚点，软件在锚点之间自动生成直线插值过渡。适合精确控制滑音、转音。</p>
+    <h4>锚点 LINE ANCHOR（快捷键 4）</h4>
+    <p>在音高曲线上放置关键锚点，软件在锚点之间自动生成直线过渡，适合精确控制滑音与转音。锚点修改使用 AI 重合成。</p>
 </div>
 
 <div class="tool-card">
-    <h4>HandDraw — 手绘工具 (快捷键: 5)</h4>
-    <p>直接手绘 F0 曲线，完全自定义音高走向。适合绘制颤音、滑音、弯音等装饰效果。</p>
+    <h4>手绘 HAND DRAW（快捷键 5）</h4>
+    <p>直接手绘音高曲线，完全自定义音高走向，适合绘制颤音、滑音、弯音等装饰。手绘区域使用 AI 重合成。</p>
 </div>
 
 <div class="tool-card">
-    <h4>Eraser — 橡皮擦工具</h4>
-    <p>笔刷擦除工具：按住拖动即可同时擦除笔刷范围内的音符与音高修正，整次擦除作为一步操作进入撤销历史。</p>
-    <p><strong>操作</strong>：在参数面板或右键打开的工具栏中选择橡皮擦，按住左键拖动，圆形笔刷实时显示擦除范围；无默认快捷键。</p>
+    <h4>橡皮擦 ERASER</h4>
+    <p>笔刷擦除：按住左键拖动，圆形笔刷范围内同时擦除音符与音高修正，整次擦除作为一步操作进入撤销历史。</p>
+    <p><strong>操作</strong>：在参数面板或右键工具栏选择橡皮擦后按住左键拖动；无默认快捷键。</p>
 </div>
 
 <div class="tool-card">
-    <h4>TimeTool — 时间工具 (快捷键: T) [仅 Standalone]</h4>
-    <p>拖拽时间手柄调整音频的输出时间，实现时间拉伸/压缩效果。进入时间工具视图时，钢琴键与音符/F0 曲线自动隐藏，专注时间域编辑。</p>
-    <p><strong>操作</strong>：拖拽手柄调整输出时间；Shift+点击多选手柄；Alt+拖拽解除最小间距钳制；双击空白插入新手柄；Delete 删除选中手柄（端点保护）；空白区点击重定位播放头。</p>
-    <p><strong>端点与渲染</strong>：首尾两端点固定，总时长保持不变。编辑不重跑音高校正；当前 canonical 完整后，排入一次 SoundTouch WSOLA Stage2 时间拉伸重建。</p>
+    <h4>均衡器 EQ（快捷键 E）</h4>
+    <p>为单个音符添加频率均衡处理。切换到均衡器工具（或按 E）后点击音符，即可打开该音符的 EQ 编辑器，在频谱上添加、旁通、删除频段；按住拖动可框选多个音符。</p>
+    <p><strong>操作</strong>：每个音符最多 10 个频段；滤波器类型包括低切、低架、峰值、高架、高切；峰值频段的频率范围为 500 Hz~12 kHz，其余类型为 20 Hz~20 kHz；增益范围 ±12 dB；Q 值 0.25~9。可在编辑器内折叠为预览、临时旁通或整体移除。被移除前会确认一次，可选择「不再提示」。</p>
 </div>
 
-<h3>7.1 钢琴键试听</h3>
-<p>点击钢琴卷帘左侧的钢琴键区域可实时播放对应音高的钢琴采样音频，方便确认目标音高。支持按住拖拽在不同琴键之间滑动切换，松开鼠标后自动停止播放。被按下的琴键会以蓝色高亮显示。</p>
+<div class="tool-card">
+    <h4>时间工具 TIME（快捷键 T，实验性）</h4>
+    <p>拖拽时间手柄调整音频的输出时间，实现伸缩效果。需在偏好设置 → 音频中开启「启用实验性功能」后才会出现，仅独立版可用。</p>
+    <p><strong>操作</strong>：进入时间工具后钢琴键与音高曲线自动隐藏，显示可拖动的时间手柄。拖动手柄改变时间；按住 Alt 拖动可暂时解除最小间距限制；Shift+单击多选手柄；双击空白处插入新手柄；Delete 删除选中手柄；点击空白处重定位播放头。</p>
+    <p><strong>限制</strong>：首尾两个端点固定，总时长保持不变；端点不能被选中或删除；手柄之间的间距有最小值限制，插入或拖动不满足时会保持原位。调整后需要重新合成，渲染完成后才听到新时长。</p>
+</div>
+
+<h3>7.2 OpenDyne 编辑方案的工具</h3>
+<table>
+    <tr><th width="22%">工具</th><th width="14%">快捷键</th><th>作用</th></tr>
+    <tr><td><strong>选择</strong></td><td>F1</td><td>选择波形块（音符块），可单选、多选和框选</td></tr>
+    <tr><td><strong>音高</strong></td><td>F2</td><td>拖动所选波形块的音高，按「音高网格」吸附</td></tr>
+    <tr><td><strong>调制</strong></td><td>F3</td><td>调整波形块内的音高颤动幅度，即颤音的深浅</td></tr>
+    <tr><td><strong>音量包络</strong></td><td>F4</td><td>调整波形块内音量随时间的变化</td></tr>
+    <tr><td><strong>漂移</strong></td><td>F5</td><td>修正波形块内较慢的音高漂移</td></tr>
+    <tr><td><strong>剪刀</strong></td><td>F6</td><td>把波形块切成可独立编辑的几段；双击分离线可把相邻音符合并</td></tr>
+</table>
+<p>macOS 上 OpenDyne 工具使用数字键 1~6，顺序与上表一致。时间工具与均衡器在两个方案中的快捷键相同。</p>
+
+<div class="note">
+    <div class="note-title">OpenDyne 的 AUTO / SNAP 按钮</div>
+    <p>OpenDyne 方案下，参数面板中同一个按钮显示为 <strong>SNAP</strong>：按下后对选中音符做一键吸附；没有选中音符时对全部音符吸附。拖动时的吸附方式由「音高网格」决定：不吸附、半音阶或调式音阶。</p>
+</div>
+
+<h3>7.3 钢琴键试听</h3>
+<p>点击钢琴卷帘左侧的钢琴键可实时播放对应音高的钢琴音，按住拖拽可在不同琴键间滑动切换，松开后停止。被按下的琴键高亮显示。</p>
+
+<h3>7.4 音符拖动试听</h3>
+<p>在偏好设置 → 编辑中开启「拖动音符时试听移调」后，拖动音符改变音高时会即时听到目标音高，用于快速找音。该选项同时控制键盘编辑后是否试听。关闭后拖动只改变显示，不发声。</p>
 
 <h2 id="parameters">8. 参数详解</h2>
 
 <h3>8.1 音高校正参数</h3>
 
 <div class="param-item">
-    <div class="param-name">Retune Speed（校正速度）</div>
+    <div class="param-name">校正速度</div>
     <div class="param-range">范围：0% – 100% | 默认值：15%</div>
     <p>控制音高校正的速度和强度。值越大，校正越快越精确；值越小，保留更多原始音高波动。</p>
     <ul>
         <li><strong>低值 (0–30%)</strong>：保留自然颤音，适合追求真实感</li>
         <li><strong>中值 (30–70%)</strong>：平衡精度与自然度</li>
-        <li><strong>高值 (70–100%)</strong>：精确校正，产生明显的 Auto-Tune 效果；拉满 100% 时音符边界为瞬时阶跃切换，无过渡</li>
+        <li><strong>高值 (70–100%)</strong>：精确校正，产生明显的 Auto-Tune 效果；拉满 100% 时音符边界为瞬时切换，没有过渡</li>
     </ul>
     <p><strong>逐音符</strong>：选中音符后调整，只影响选中音符。</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Vibrato Depth（颤音深度）</div>
-    <div class="param-range">范围：0 – 1 | 默认值：0</div>
-    <p>为音符添加人工颤音的振幅。0 = 不添加，1 = 最大深度。支持逐音符设置。</p>
+    <div class="param-name">颤音深度</div>
+    <div class="param-range">范围：0% – 100% | 默认值：0%</div>
+    <p>为音符添加人工颤音的幅度。0 表示不添加，100% 表示最大深度。支持逐音符设置。</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Vibrato Rate（颤音速率）</div>
-    <div class="param-range">范围：0 – 15 Hz | 默认值：7.5 Hz</div>
-    <p>控制人工颤音的振动频率。人声自然颤音通常在 5–8 Hz 范围。支持逐音符设置。</p>
+    <div class="param-name">颤音速率</div>
+    <div class="param-range">范围：3 – 12 Hz | 默认值：7.5 Hz</div>
+    <p>控制人工颤音的振动频率。人声自然颤音通常在 5–8 Hz 之间。支持逐音符设置。</p>
 </div>
 
 <div class="param-item">
-    <div class="param-name">Note Split Threshold（音符分割阈值）</div>
-    <div class="param-range">范围：0 – 100 音分 | 默认值：80 音分</div>
-    <p>控制自动音符生成时的分割灵敏度。值越小，越容易分割成独立音符。</p>
+    <div class="param-name">音符分割</div>
+    <div class="param-range">范围：0 – 200 音分 | 默认值：80 音分</div>
+    <p>控制自动划分音符时的灵敏度：值越小，越容易把连续的演唱切成更多独立音符。调整后松开鼠标即重新划分，并作为一步操作进入撤销历史。</p>
 </div>
 
-<h3>8.2 轨道参数</h3>
+<div class="note">
+    <div class="note-title">旋钮的通用操作</div>
+    <p>拖动旋钮调整数值，滚轮微调。获得焦点后：方向键微调，按住 Alt 使用精细步长，PageUp/PageDown 大幅调整，Home 取最大值、End 取最小值，退格键恢复默认值，回车键直接输入数值（回车确认、Esc 取消）。</p>
+</div>
+
+<h3>8.2 整体移调</h3>
 <div class="param-item">
-    <div class="param-name">Volume（音量）</div>
+    <div class="param-name">整体移调（参数面板按钮）</div>
+    <div class="param-range">范围：±24 半音、±99 音分</div>
+    <p>对当前片段整体升降调。点击按钮打开对话框，分别设置半音与音分，确认后整段音频按新调高重新合成。按钮上会显示当前移调量，便于随时确认。整体移调一律使用 AI 重合成。</p>
+</div>
+
+<h3>8.3 音高网格（OpenDyne）</h3>
+<div class="param-item">
+    <div class="param-name">音高网格</div>
+    <div class="param-range">可选：不吸附 / 半音阶 / 调式音阶 | 默认值：调式音阶</div>
+    <p>决定 OpenDyne 方案下拖动音高时的吸附方式。不吸附为音分级的自由拖动；半音阶吸附到最近的半音；调式音阶吸附到当前根音与调式的音阶音。</p>
+</div>
+
+<h3>8.4 轨道与走带参数</h3>
+<div class="param-item">
+    <div class="param-name">轨道音量</div>
     <div class="param-range">范围：0 – 4.0 倍 | 默认值：1.0</div>
-    <p>轨道音量旋钮，支持超过 1.0 的增益放大。</p>
-</div>
-
-<h3>8.3 播放参数</h3>
-<div class="param-item">
-    <div class="param-name">BPM（每分钟节拍数）</div>
-    <div class="param-range">范围：20 – 300 BPM | 默认值：120</div>
-    <p>控制项目速度和时间轴网格。双击数字可直接输入精确值。</p>
+    <p>轨道音量旋钮，支持超过 1.0 的增益放大，外圈为实时电平指示。</p>
 </div>
 <div class="param-item">
-    <div class="param-name">Tap Tempo</div>
-    <p>连续点击 Tap 按钮，软件自动计算平均间隔得出 BPM。最多记录 5 次点击。</p>
+    <div class="param-name">速度与拍号</div>
+    <div class="param-range">速度范围：1 – 999 BPM | 默认值：120 BPM、4/4</div>
+    <p>控制项目速度、时间轴网格与节拍显示。点击数字可直接输入速度；点击右侧的拍号数字可分别选择每小节拍数（1–64）与拍值（1、2、4、8、16、32、64）。</p>
+</div>
+<div class="param-item">
+    <div class="param-name">敲击节拍</div>
+    <p>连续点击「敲击节拍」按钮，软件按最近几次点击的间隔取平均算出速度并填入，结果保留一位小数。两次点击间隔超过 2 秒会重新开始计算。</p>
+</div>
+<div class="param-item">
+    <div class="param-name">时间显示与滚动方式</div>
+    <p>标尺可切换为时间（分秒）或小节拍显示；滚动方式可在「连续」与「分页」之间切换。</p>
 </div>
 
 <div class="page-break"></div>
 <h2 id="schemes">9. 编辑方案</h2>
 
-<p>OpenTune 提供两种编辑方案，通过偏好设置 → 编辑方案切换。</p>
+<p>OpenTune 提供两种编辑方案，通过偏好设置 → 编辑 → 音频编辑方案切换，切换后界面立即变化。</p>
 
 <h3>9.1 OpenTune 编辑（默认）</h3>
 <ul>
-    <li>传统波形+音符编辑模式</li>
-    <li>音符拖拽吸附到音高网格（与 OpenDyne 方案行为一致）</li>
-    <li>滚轮：垂直滚动 / Shift+滚轮垂直缩放 / Ctrl+滚轮水平缩放 / Alt+滚轮水平滚动</li>
-    <li>工具栏横向排列</li>
+    <li>以音符为单位编辑：音符块、原始音高曲线、修正曲线同时显示。</li>
+    <li>工具为自动校正、选择、绘制音符、锚点、手绘、橡皮擦、均衡器与时间工具。</li>
+    <li>拖动音符时按「移动吸附」设置吸附：跟随全局调式，或按半音吸附。</li>
+    <li>默认滚轮映射：滚轮纵向滚动 / Shift+滚轮纵向缩放 / Ctrl+滚轮横向缩放 / Alt+滚轮横向滚动。</li>
 </ul>
 
 <h3>9.2 OpenDyne 编辑</h3>
 <ul>
-    <li>Melodyne 式神经编辑模式：波形可视化、选中高亮叠加</li>
-    <li>滚轮：垂直滚动 / Shift+滚轮横向滚动 / Ctrl+滚轮双轴缩放 / Alt+滚轮纵向缩放</li>
-    <li>右键工具栏纵向图标布局</li>
-    <li>音高调制工具</li>
-    <li>音高漂移工具</li>
-    <li>音量包络工具</li>
-    <li>剪刀切割工具（Melodyne 行为：切点竖线穿过即切，双击分离线合并相邻音符）</li>
-    <li>音高网格吸附 + 一键吸附</li>
-    <li>Melodyne 式概览导航条</li>
-    <li>Melodyne 式缩放：Cmd+Alt 双击聚焦/恢复、方向键精确缩放</li>
+    <li>以波形块为单位编辑，适合整体塑形与 Melodyne 式工作流。</li>
+    <li>工具为选择、音高、调制、漂移、音量包络、剪刀，另有时间工具与均衡器。</li>
+    <li>右键弹出的工具栏为图标条，音高工具带下拉箭头，可展开调制与漂移两个子工具；参数面板中的自动校正按钮显示为 SNAP，按下即一键吸附。</li>
+    <li>提供音高网格选择与一键吸附。</li>
+    <li>按住 Ctrl（Windows）或 Cmd（macOS）+ Alt 双击音符可放大到该音符，在没有音符处同样操作恢复原缩放。</li>
 </ul>
 
 <div class="note">
-    <div class="note-title">编辑方案与滚轮映射</div>
-    <p>切换编辑方案会同步切换滚轮导航映射和工具集。OpenTune 方案使用传统音符编辑，OpenDyne 方案使用 Melodyne 式波形块编辑。</p>
+    <div class="note-title">两种方案通用的视图操作</div>
+    <p>双击纵向滚动条可缩放到全部音符；底部概览条可在保持当前缩放的同时浏览整段音频。</p>
 </div>
+
+<div class="note">
+    <div class="note-title">滚轮映射都可自定义</div>
+    <p>两种方案的滚轮与按键映射都可在偏好设置 → 快捷键中按「OpenTune 模式」和「OpenDyne 模式」分别修改，默认映射如上。修改后立即生效。</p>
+</div>
+
+<h3>9.3 网格样式与移动吸附</h3>
+<table>
+    <tr><th width="26%">设置</th><th>说明</th></tr>
+    <tr><td><strong>网格样式</strong></td><td>钢琴键槽：音高轴按钢琴键排列，黑白键分明。等距：所有半音等距排列，便于精细观察曲线。</td></tr>
+    <tr><td><strong>移动吸附</strong></td><td>跟随全局调式：拖动音符时吸附到当前调式的音阶音。半音吸附：吸附到最近的半音。</td></tr>
+</table>
 
 <h2 id="preferences">10. 偏好设置</h2>
 
-<p>通过菜单 <strong>File → Options</strong> 或 <strong>Edit → Preferences</strong> 打开偏好设置对话框。</p>
+<p>通过文件菜单 → <strong>选项</strong> 打开偏好设置。窗口分为若干页面，可用 Ctrl+Tab 切换页面，Tab 键在控件之间移动。</p>
 
-<h3>10.1 共享设置（Standalone 和 VST3 通用）</h3>
+<h3>10.1 音频</h3>
+<p>「音频」页面集中处理与声音计算相关的设置。独立版的这一页面还包含音频设备部分（见 10.7）。</p>
 <table>
-    <tr><th>设置项</th><th>说明</th><th>默认值</th></tr>
-    <tr><td>界面语言</td><td>中文 / English / 日本語 / Русский / Español</td><td>中文</td></tr>
-    <tr><td>主题</td><td>Aurora</td><td>Aurora</td></tr>
-    <tr><td>编辑方案</td><td>OpenTune / OpenDyne</td><td>OpenTune</td></tr>
-    <tr><td>整体移动吸附</td><td>音符整体移调时的吸附方式：跟随全局调式 / 最近标准音（整体等距）；仅 OpenTune 编辑方案可用</td><td>跟随全局调式</td></tr>
-    <tr><td>渲染优先级</td><td>GPU 优先 / CPU 优先</td><td>GPU 优先</td></tr>
-    <tr><td>水平缩放灵敏度</td><td>控制鼠标滚轮水平缩放速度</td><td>1.0</td></tr>
-    <tr><td>垂直缩放灵敏度</td><td>控制鼠标滚轮垂直缩放速度</td><td>1.0</td></tr>
-    <tr><td>滚动速度</td><td>视图滚动速度</td><td>1.0</td></tr>
-    <tr><td>音名显示</td><td>全部显示 / 仅 C / 隐藏</td><td>仅 C</td></tr>
-    <tr><td>显示分块边界</td><td>渲染分块边界可视化</td><td>关</td></tr>
-    <tr><td>显示无声帧</td><td>显示非有声帧的 F0 数据</td><td>关</td></tr>
-    <tr><td>鼠标光标样式</td><td>Adwaita / Capitaine / Breeze</td><td>系统默认</td></tr>
+    <tr><th width="34%">设置项</th><th>说明</th><th width="16%">默认值</th></tr>
+    <tr><td>重新进入上手引导</td><td>关闭设置并重新播放界面引导</td><td>—</td></tr>
+    <tr><td>渲染优先级</td><td>GPU 优先 / CPU 优先，决定音高分析与重合成使用显卡还是处理器</td><td>GPU 优先</td></tr>
+    <tr><td>音高检测模型</td><td>选择音高分析模型，当前为 FCPE</td><td>FCPE</td></tr>
+    <tr><td>启用实验性功能（伸缩工具）</td><td>开启后工具区出现时间工具。仅独立版提供</td><td>关</td></tr>
+    <tr><td>混合模式</td><td>小幅修正使用轻量处理，大幅修正使用 AI 重合成</td><td>开</td></tr>
 </table>
 
-<h3>10.2 Standalone 专有设置</h3>
+<h3>10.2 主题</h3>
 <table>
-    <tr><th>设置项</th><th>说明</th></tr>
-    <tr><td>音频设备</td><td>驱动类型、设备选择、采样率、缓冲区大小</td></tr>
-    <tr><td>键盘快捷键</td><td>10 个可自定义的快捷键绑定（支持冲突检测和重置）</td></tr>
-    <tr><td>鼠标拖尾</td><td>8 种鼠标轨迹特效主题选择</td></tr>
+    <tr><th width="34%">设置项</th><th>说明</th><th width="16%">默认值</th></tr>
+    <tr><td>主题</td><td>界面配色主题</td><td>极光玻璃</td></tr>
+    <tr><td>界面语言</td><td>中文 / English / 日本語 / Русский / Español，切换后界面立即更新</td><td>中文</td></tr>
 </table>
 
-<h3>10.3 视图菜单快捷设置</h3>
-<p>以下视觉设置也可通过 <strong>View</strong> 菜单直接切换：</p>
+<h3>10.3 编辑</h3>
+<table>
+    <tr><th width="34%">设置项</th><th>说明</th><th width="16%">默认值</th></tr>
+    <tr><td>音频编辑方案</td><td>OpenTune 或 OpenDyne，切换后编辑器与工具集一起切换</td><td>OpenTune</td></tr>
+    <tr><td>水平缩放灵敏度</td><td>Ctrl+滚轮横向缩放的灵敏度，范围 0.10–1.00</td><td>0.35</td></tr>
+    <tr><td>垂直缩放灵敏度</td><td>Shift+滚轮纵向缩放的灵敏度，范围 0.10–1.00</td><td>0.35</td></tr>
+    <tr><td>滚动速度</td><td>滚轮滚动视图的速度，范围 30–300</td><td>90</td></tr>
+    <tr><td>基准音高</td><td>参考音高的频率，范围 400–500 Hz，影响音名换算与自动校正的目标</td><td>440 Hz</td></tr>
+    <tr><td>网格样式</td><td>钢琴键槽 / 等距</td><td>钢琴键槽</td></tr>
+    <tr><td>移动吸附</td><td>跟随全局调式 / 半音吸附，仅 OpenTune 方案可用</td><td>跟随全局调式</td></tr>
+    <tr><td>拖动音符时试听移调</td><td>拖动音符改变音高时试听目标音高，同时控制键盘编辑后的试听</td><td>关</td></tr>
+    <tr><td>无障碍模式</td><td>启用读屏播报和键盘音符编辑</td><td>关</td></tr>
+    <tr><td>恢复默认设置</td><td>把缩放灵敏度与滚动速度恢复为默认值</td><td>—</td></tr>
+</table>
+
+<h3>10.4 视图</h3>
+<table>
+    <tr><th width="34%">设置项</th><th>说明</th><th width="16%">默认值</th></tr>
+    <tr><td>音名标签</td><td>全部显示 / 仅 C / 隐藏</td><td>仅 C</td></tr>
+    <tr><td>显示无声音帧</td><td>显示没有发声的段落上的音高数据</td><td>关</td></tr>
+    <tr><td>背景亮度</td><td>钢琴卷帘背景明暗，范围 0%–200%</td><td>100%</td></tr>
+    <tr><td>音高修正曲线颜色</td><td>点击色块选择修正后曲线的颜色</td><td>蓝色系</td></tr>
+    <tr><td>原始音高曲线颜色</td><td>点击色块选择原始音高曲线的颜色</td><td>红色系</td></tr>
+</table>
+
+<h3>10.5 快捷键</h3>
+<p>按「通用」「OpenTune 模式」「OpenDyne 模式」三段列出可自定义的操作。点击某一项后按下按键、滚动滚轮或点击鼠标中键/侧键即可完成绑定；同一操作可绑定多个输入；与已有绑定冲突时会提示该绑定属于哪个操作，并可直接重新分配。</p>
+<p>页面提供「全部恢复默认」，用于把所有绑定还原为出厂设置。</p>
+
+<h3>10.6 鼠标轨迹（仅独立版）</h3>
+<table>
+    <tr><th width="34%">设置项</th><th>说明</th><th width="16%">默认值</th></tr>
+    <tr><td>鼠标轨迹</td><td>关闭 / 经典 / 霓虹 / 火焰 / 海洋 / 星河 / 樱花 / 矩阵</td><td>经典</td></tr>
+</table>
+
+<h3>10.7 音频设备（独立版「音频」页面的下半部分）</h3>
+<p>以下控件位于独立版「音频」页面的音频设备部分，插件版由宿主提供音频输出，因此不显示这些控件。</p>
+<table>
+    <tr><th width="34%">控件</th><th>说明</th></tr>
+    <tr><td>浏览设备类型</td><td>选择驱动类型，如 ASIO、WASAPI、DirectSound</td></tr>
+    <tr><td>输出</td><td>选择输出设备</td></tr>
+    <tr><td>采样率</td><td>设置设备采样率</td></tr>
+    <tr><td>缓冲区大小</td><td>设置缓冲区，数值越小延迟越低，占用越高</td></tr>
+    <tr><td>活动输出通道</td><td>勾选要使用的输出通道</td></tr>
+    <tr><td>测试</td><td>播放测试音，确认所选设备与通道正常</td></tr>
+</table>
+
+<h3>10.8 视图菜单中的快捷开关</h3>
+<p>以下显示设置也可直接在视图菜单中切换，效果与偏好设置一致：</p>
 <ul>
-    <li>Show Waveform — 显示/隐藏波形</li>
-    <li>钢琴键槽 — 勾选显示钢琴键槽模式；取消切换为音阶辅助模式</li>
-    <li>Note Labels — 音名显示模式</li>
-    <li>Show Chunk Boundaries — 分块边界</li>
-    <li>Show Unvoiced Frames — 无声帧</li>
-    <li>Theme — 主题切换</li>
-    <li>Mouse Trail — 鼠标拖尾主题</li>
+    <li>显示波形 —— 显示或隐藏音频波形</li>
+    <li>钢琴键盘 —— 显示或隐藏左侧钢琴键</li>
+    <li>音阶明暗 —— 按当前调式给钢琴键加明暗提示</li>
+    <li>音名标签 —— 全部显示 / 仅 C / 隐藏</li>
+    <li>显示无声音帧 —— 显示没有发声段落的音高数据</li>
+    <li>主题、界面缩放、鼠标轨迹、鼠标指针样式、轨道颜色</li>
 </ul>
 
+<div class="page-break"></div>
 <h2 id="shortcuts">11. 快捷键</h2>
 
-<h3>11.1 播放控制</h3>
+<p>下表中的快捷键可在偏好设置 → 快捷键中修改，macOS 默认值单独列出。插件运行时，播放、暂停、停止由宿主 DAW 控制，软件不再响应这三个走带快捷键。</p>
+
+<h3>11.1 播放与走带</h3>
 <table class="shortcut-table">
-    <tr><th>快捷键</th><th>功能</th><th>macOS 默认</th></tr>
-    <tr><td>Space</td><td>播放 / 暂停</td><td>Space</td></tr>
-    <tr><td>Enter</td><td>停止播放</td><td>. (句号)</td></tr>
-    <tr><td>A</td><td>从起始位置播放</td><td>⌘.</td></tr>
-    <tr><td>Escape</td><td>取消当前操作 / 停止</td><td>Esc</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS 默认</th><th>功能</th></tr>
+    <tr><td>Space</td><td>Space</td><td>播放 / 暂停</td></tr>
+    <tr><td>Enter</td><td>⌘⌥⇧.</td><td>停止播放</td></tr>
+    <tr><td>A</td><td>⌘⌥⇧Return</td><td>从起始位置播放；播放中按下则暂停并回到起始位置</td></tr>
 </table>
 
 <h3>11.2 编辑操作</h3>
 <table class="shortcut-table">
-    <tr><th>快捷键</th><th>功能</th></tr>
+    <tr><th width="30%">快捷键</th><th>功能</th></tr>
     <tr><td>Ctrl + Z</td><td>撤销</td></tr>
     <tr><td>Ctrl + Y / Ctrl + Shift + Z</td><td>重做</td></tr>
     <tr><td>Ctrl + X</td><td>剪切</td></tr>
     <tr><td>Ctrl + C</td><td>复制</td></tr>
     <tr><td>Ctrl + V</td><td>粘贴</td></tr>
     <tr><td>Ctrl + A</td><td>全选</td></tr>
-    <tr><td>Delete / Backspace</td><td>删除选中内容</td></tr>
+    <tr><td>Ctrl + D</td><td>原地复制</td></tr>
+    <tr><td>Delete / Backspace / 1</td><td>删除选中内容</td></tr>
+    <tr><td>Esc</td><td>取消选择 / 取消当前操作</td></tr>
 </table>
 
-<h3>11.3 工具切换</h3>
-<p><strong>OpenTune 工具</strong></p>
+<h3>11.3 编曲视图的片段操作</h3>
 <table class="shortcut-table">
-    <tr><th>快捷键</th><th>工具</th></tr>
-    <tr><td>2</td><td>绘制音符</td></tr>
-    <tr><td>3</td><td>选择工具</td></tr>
-    <tr><td>4</td><td>锚点工具</td></tr>
-    <tr><td>5</td><td>手绘工具</td></tr>
-    <tr><td>6</td><td>自动修正</td></tr>
-    <tr><td>T</td><td>时间工具</td></tr>
+    <tr><th width="30%">Windows</th><th width="24%">macOS 默认</th><th>功能</th></tr>
+    <tr><td>S</td><td>⌘E</td><td>在播放头处拆分选中片段</td></tr>
+    <tr><td>M</td><td>⌘J</td><td>与相邻片段合并</td></tr>
+    <tr><td>← / →</td><td>← / →</td><td>片段左移 / 右移</td></tr>
+    <tr><td>Ctrl + Shift + S</td><td>Ctrl + Shift + S</td><td>切换吸附</td></tr>
 </table>
 
-<p><strong>OpenDyne 工具</strong></p>
-<table class="shortcut-table">
-    <tr><th>快捷键</th><th>工具</th></tr>
-    <tr><td>2</td><td>绘制音符</td></tr>
-    <tr><td>3</td><td>选择工具</td></tr>
-    <tr><td>4</td><td>音高调制工具</td></tr>
-    <tr><td>5</td><td>音高漂移工具</td></tr>
-    <tr><td>6</td><td>音量包络工具</td></tr>
-    <tr><td>7</td><td>剪刀工具</td></tr>
-    <tr><td>T</td><td>时间工具</td></tr>
-</table>
-
-<h3>11.4 视图操作</h3>
+<h3>11.4 工具切换</h3>
 <p><strong>OpenTune 模式</strong></p>
 <table class="shortcut-table">
-    <tr><th>快捷键</th><th>功能</th></tr>
-    <tr><td>滚轮</td><td>垂直滚动</td></tr>
-    <tr><td>Shift + 滚轮</td><td>垂直缩放音高轴</td></tr>
-    <tr><td>Ctrl + 滚轮</td><td>水平缩放时间轴</td></tr>
-    <tr><td>Alt + 滚轮</td><td>水平滚动</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS 默认</th><th>工具</th></tr>
+    <tr><td>2</td><td>2</td><td>绘制音符</td></tr>
+    <tr><td>3</td><td>3</td><td>选择</td></tr>
+    <tr><td>4</td><td>4</td><td>锚点</td></tr>
+    <tr><td>5</td><td>H</td><td>手绘</td></tr>
+    <tr><td>6</td><td>A</td><td>自动校正</td></tr>
+    <tr><td>E</td><td>E</td><td>均衡器</td></tr>
+    <tr><td>T</td><td>T</td><td>时间工具（需开启实验性功能）</td></tr>
 </table>
 
-<p><strong>OpenDyne 模式</strong>：滚轮导航为固定映射，不可自定义。其中 Ctrl + 滚轮在 Windows/Linux 使用 Ctrl，在 macOS 使用 Command（⌘）。</p>
+<p><strong>OpenDyne 模式</strong></p>
 <table class="shortcut-table">
-    <tr><th>快捷键</th><th>功能</th></tr>
-    <tr><td>滚轮</td><td>垂直滚动</td></tr>
-    <tr><td>Shift + 滚轮</td><td>水平滚动</td></tr>
-    <tr><td>Ctrl + 滚轮</td><td>横纵向同步缩放</td></tr>
-    <tr><td>Alt + 滚轮</td><td>垂直缩放音高轴</td></tr>
+    <tr><th width="22%">Windows</th><th width="22%">macOS 默认</th><th>工具</th></tr>
+    <tr><td>F1</td><td>1</td><td>选择</td></tr>
+    <tr><td>F2</td><td>2</td><td>音高</td></tr>
+    <tr><td>F3</td><td>3</td><td>调制</td></tr>
+    <tr><td>F4</td><td>5</td><td>音量包络</td></tr>
+    <tr><td>F5</td><td>4</td><td>漂移</td></tr>
+    <tr><td>F6</td><td>6</td><td>剪刀</td></tr>
+    <tr><td>E</td><td>E</td><td>均衡器</td></tr>
+    <tr><td>T</td><td>T</td><td>时间工具（需开启实验性功能）</td></tr>
 </table>
 
-<div class="tip">
-    <div class="tip-title">自定义快捷键</div>
-    可配置的编辑和工具快捷键可在偏好设置 → 快捷键页面中自定义。支持多绑定、冲突检测和一键重置。macOS 下自动显示 ⌘/⌥/⇧ 符号。
+<h3>11.5 视图导航与缩放</h3>
+<table class="shortcut-table">
+    <tr><th width="30%">Windows</th><th width="26%">macOS 默认</th><th>功能</th></tr>
+    <tr><td>滚轮</td><td>滚轮</td><td>纵向滚动</td></tr>
+    <tr><td>Shift + 滚轮</td><td>Shift + 滚轮</td><td>纵向缩放（音高轴），以指针位置为中心</td></tr>
+    <tr><td>Ctrl + 滚轮</td><td>Control + 滚轮</td><td>横向缩放（时间轴），以指针位置为中心</td></tr>
+    <tr><td>Alt + 滚轮</td><td>Option + 滚轮</td><td>横向滚动</td></tr>
+    <tr><td>Ctrl + Alt + ← / →</td><td>⌘⌥⇧← / →</td><td>横向缩小 / 放大</td></tr>
+    <tr><td>Ctrl + Alt + ↑ / ↓</td><td>⌘⌥⇧↑ / ↓</td><td>纵向放大 / 缩小</td></tr>
+    <tr><td>Alt + ← / →</td><td>Option + ← / →</td><td>横向左滚 / 右滚</td></tr>
+    <tr><td>Ctrl + 0</td><td>⌘0</td><td>缩放至所选音符</td></tr>
+    <tr><td>Ctrl + Shift + 0</td><td>⌘⇧0</td><td>缩放至全部音符</td></tr>
+</table>
+
+<h3>11.6 自定义快捷键</h3>
+<ul>
+    <li>所有可配置项集中在偏好设置 → 快捷键，按方案分段显示。</li>
+    <li>绑定支持键盘按键、滚轮四个方向、鼠标中键与两个侧键。</li>
+    <li>冲突时弹窗说明该输入已分配给哪个操作，确认后原绑定被替换。</li>
+    <li>「全部恢复默认」一次性还原所有绑定。</li>
+</ul>
+
+<div class="page-break"></div>
+<h2 id="accessibility">12. 无障碍模式与键盘编辑</h2>
+
+<p>在偏好设置 → 编辑中开启<strong>无障碍模式</strong>后，界面支持读屏软件播报，并可用键盘完成音符编辑。关闭时方向键只做最基础的音高移动与音符切换。</p>
+
+<h3>12.1 读屏播报内容</h3>
+<ul>
+    <li>界面控件名称与当前值：旋钮、下拉框、复选框、标签页。</li>
+    <li>操作结果：撤销与重做的项目、删除音符数量、分割与合并结果、自动校正是否应用。</li>
+    <li>音符信息：音名、音高变化量、起止时间、调制、漂移、音量。</li>
+    <li>播放位置与当前状态：暂停位置、播放中无法获取位置时的说明。</li>
+    <li>渲染状态与渲染进度。</li>
+</ul>
+
+<h3>12.2 键盘编辑音符</h3>
+<p>在钢琴卷帘中，用左右方向键选中音符后即可用键盘编辑。快捷键冲突时以偏好设置中的绑定为准。</p>
+<table class="shortcut-table">
+    <tr><th width="34%">按键</th><th>结果</th></tr>
+    <tr><td>← / →</td><td>选择前一个 / 后一个音符</td></tr>
+    <tr><td>Shift + ← / →</td><td>扩展选择范围</td></tr>
+    <tr><td>Home / End</td><td>选择第一个 / 最后一个音符</td></tr>
+    <tr><td>↑ / ↓</td><td>播报可用的编辑按键，不改变内容</td></tr>
+    <tr><td>Ctrl + ↑ / ↓</td><td>按音高网格升高 / 降低音高</td></tr>
+    <tr><td>Ctrl + Shift + ↑ / ↓</td><td>以 1 音分为步长精细调整音高</td></tr>
+    <tr><td>Alt + ↑ / ↓</td><td>按半音移动音高，即使目标音不在调式内</td></tr>
+    <tr><td>Ctrl + ← / →</td><td>调整音符结束位置</td></tr>
+    <tr><td>Ctrl + Shift + ← / →</td><td>调整音符开始位置</td></tr>
+    <tr><td>X</td><td>在音高变化处分割选中音符；没有明显变化时从中间分割</td></tr>
+    <tr><td>Shift + X</td><td>在播放光标处分割选中音符</td></tr>
+    <tr><td>J</td><td>与下一个相邻音符合并</td></tr>
+    <tr><td>R</td><td>恢复为原始演唱音高</td></tr>
+    <tr><td>I</td><td>播报当前选中音符的信息</td></tr>
+    <tr><td>Shift + I</td><td>播报当前播放位置</td></tr>
+    <tr><td>Enter</td><td>执行音符的默认操作：在 OpenDyne 方案下打开所选音符的编辑动作，在均衡器工具下打开该音符的均衡器</td></tr>
+    <tr><td>Shift + F10</td><td>打开工具菜单，等同鼠标右键</td></tr>
+</table>
+
+<p>在 OpenDyne 方案下，调制、漂移与音量包络工具被选中时，Ctrl + ↑ / ↓ 分别调整对应参数：调制与漂移每次约 5%，音量每次 1 dB；加上 Shift 则进入精细步长。</p>
+
+<div class="note">
+    <div class="note-title">插件中的位置来源</div>
+    <p>在支持 ARA 的宿主中，播放光标位置由宿主提供；停止播放后使用宿主当前的编辑光标位置。宿主不提供位置信息时，Shift + X 等依赖光标位置的操作会播报位置未知。</p>
+</div>
+
+<h2 id="themes">13. 主题与视觉</h2>
+
+<h3>13.1 界面主题</h3>
+<table>
+    <tr><th width="18%">主题</th><th>风格</th><th>适用场景</th></tr>
+    <tr><td><strong>极光玻璃</strong></td><td>深色背景、霓虹发光、毛玻璃质感、旋钮拟物化、模块边框精致化</td><td>长时间修音、追求科技感</td></tr>
+</table>
+
+<h3>13.2 界面缩放</h3>
+<p>视图菜单 → 界面缩放提供 75%、90%、100%、110%、125%、150% 六档。缩放后整套界面与字体同步放大或缩小，窗口内容随之重排。</p>
+
+<h3>13.3 背景亮度与曲线颜色</h3>
+<ul>
+    <li><strong>背景亮度</strong>：0%–200%，默认 100%，用于在明亮环境或暗色房间里调整对比度。</li>
+    <li><strong>原始音高曲线颜色</strong>：原始演唱音高的显示颜色，默认红色系。</li>
+    <li><strong>音高修正曲线颜色</strong>：修正结果的显示颜色，默认蓝色系。</li>
+</ul>
+
+<h3>13.4 音符颜色</h3>
+<p>音符块颜色除了区分轨道，还反映改动幅度：改动越大，升调的音符越偏冷蓝，降调的音符越偏暖橙。加了均衡器处理的音符会略微变暗。这样可以快速找出需要重新合成的音符。</p>
+
+<h3>13.5 鼠标轨迹特效（仅独立版）</h3>
+<table>
+    <tr><th width="20%">特效</th><th>风格</th></tr>
+    <tr><td>关闭</td><td>无拖尾</td></tr>
+    <tr><td>经典</td><td>蓝色经典拖尾（默认）</td></tr>
+    <tr><td>霓虹</td><td>洋红/青色霓虹渐变</td></tr>
+    <tr><td>火焰</td><td>橙红/金色火焰效果</td></tr>
+    <tr><td>海洋</td><td>蓝/蓝绿海洋波纹</td></tr>
+    <tr><td>星河</td><td>紫/粉星河效果</td></tr>
+    <tr><td>樱花</td><td>浅粉樱花飘落</td></tr>
+    <tr><td>矩阵</td><td>绿色矩阵数字雨</td></tr>
+</table>
+
+<h3>13.6 鼠标指针样式</h3>
+<p>可在视图菜单中选择系统默认、Adwaita、Capitaine、Breeze 四种指针样式。</p>
+
+<h3>13.7 悬浮动画</h3>
+<p>工具栏按钮在鼠标悬停时图标轻微放大并提亮，提供即时的交互确认。</p>
+
+<h2 id="gpu">14. GPU 加速</h2>
+
+<p>OpenTune 支持显卡加速音高分析与声码器推理，可显著提升处理速度。</p>
+
+<h3>14.1 支持的平台</h3>
+<ul>
+    <li><strong>Windows</strong>：通过 DirectML 支持 NVIDIA / AMD / Intel 显卡</li>
+    <li><strong>macOS</strong>：通过 CoreML 使用系统图形加速</li>
+    <li>没有可用显卡或显卡不支持时，自动改用 CPU 处理，功能不受影响</li>
+</ul>
+
+<h3>14.2 设置方法</h3>
+<p>在偏好设置 → 音频 → 渲染优先级中选择：</p>
+<ul>
+    <li><strong>GPU 优先</strong>（默认）：优先使用显卡加速</li>
+    <li><strong>CPU 优先</strong>：全部使用处理器处理，适合显卡驱动不稳定时使用</li>
+</ul>
+
+<div class="warning">
+    <div class="warning-title">切换后的处理</div>
+    <p>切换渲染优先级会重新加载处理引擎；切换混合模式会让已有片段按新方式重新合成，右上角徽章显示进度；切换音高检测模型只影响之后的音高分析，已分析的片段保持不变。</p>
 </div>
 
 <div class="page-break"></div>
-<h2 id="themes">12. 主题与视觉</h2>
+<h2 id="vst3">15. VST3/ARA 插件模式</h2>
 
-<h3>12.1 界面主题</h3>
+<p>OpenTune 插件通过 VST3 格式加载到 DAW，支持 ARA2 扩展时可以进行非破坏性编辑。macOS 版本另提供 AU 组件。</p>
+
+<h3>15.1 工作方式</h3>
+<ul>
+    <li>插件加载到兼容宿主（如 Studio One、Cubase、REAPER、Logic Pro）后，可在插件窗口内完成全部修音操作。</li>
+    <li>支持 ARA 的宿主直接提供音频数据，无需导入或导出文件；编辑结果实时反映到宿主时间线播放中。</li>
+    <li>支持宿主走带同步（播放/停止/定位）与速度跟随。</li>
+    <li>读取与编辑只作用于当前选中的音频段落，多段落工程互不干扰。</li>
+    <li>修改输入音频后，原始音高会自动刷新。</li>
+    <li>渲染完成前播放原始音高，完成后自动切换为修正后的声音。</li>
+</ul>
+
+<h3>15.2 读取音频</h3>
+<p>插件内所有音频读取都通过顶部工具栏的<strong>读取音频</strong>按钮（红色圆形图标）完成，两种宿主的行为不同：</p>
 <table>
-    <tr><th>主题</th><th>风格</th><th>适用场景</th></tr>
-    <tr><td><strong>Aurora</strong></td><td>深色背景、霓虹发光、毛玻璃质感、旋钮拟物化（金属银色+心形中心）、模块边框精致化</td><td>追求科技感、音乐制作、个性表达</td></tr>
+    <tr><th width="22%">宿主类型</th><th>操作</th><th>结果</th></tr>
+    <tr><td><strong>支持 ARA</strong></td><td>在宿主中选中音频事件，点击一次「读取音频」</td><td>读取当前选中段落的音频并开始分析，钢琴卷帘随后显示音高曲线。已读取过时提示「音频已读取过」</td></tr>
+    <tr><td><strong>不支持 ARA</strong></td><td>点击「读取音频」开始采集，再开始宿主播放，播放到所需位置后再次点击结束采集</td><td>采集期间按钮处于点亮状态，结束后自动分析并进入可编辑状态。每次采集生成新的录音段，已有段落保持不变；采集中来回定位造成的重叠部分会自动合并，不会出现重复的声音</td></tr>
 </table>
 
-<h3>12.2 鼠标拖尾特效（仅 Standalone）</h3>
+<h3>15.3 外部编辑</h3>
+<p>插件内的「外部编辑」按钮可把当前音高曲线交给 OpenTune 独立版精修：</p>
+<ol>
+    <li>点击<strong>外部编辑</strong>，独立版启动并打开该段音频的编辑界面。</li>
+    <li>在独立版中修改音高，点击<strong>保存并返回</strong>。</li>
+    <li>插件自动读回修改结果，界面播报「外部编辑已应用」。</li>
+</ol>
+<p>尚未读取音频时点击会提示先读取音频；返回的曲线文件损坏时会保持会话打开，可在独立版中修复后重新保存。</p>
+
+<h3>15.4 与独立版的区别</h3>
 <table>
-    <tr><th>特效</th><th>风格</th></tr>
-    <tr><td>关闭 (Off)</td><td>无拖尾</td></tr>
-    <tr><td>Classic</td><td>蓝色经典拖尾（默认）</td></tr>
-    <tr><td>Neon</td><td>洋红/青色霓虹渐变</td></tr>
-    <tr><td>Fire</td><td>橙红/金色火焰效果</td></tr>
-    <tr><td>Ocean</td><td>蓝/蓝绿海洋波纹</td></tr>
-    <tr><td>Galaxy</td><td>紫/粉星河效果</td></tr>
-    <tr><td>Cherry Blossom</td><td>浅粉/粉樱花飘落</td></tr>
-    <tr><td>Matrix</td><td>绿色矩阵数字雨</td></tr>
-</table>
-
-<h3>12.3 悬浮动画</h3>
-<p>所有工具栏按钮在鼠标悬浮时具有微妙的视觉反馈：图标轻微放大（1.08 倍）并提亮 15%，提供即时的交互确认感。</p>
-
-<h2 id="gpu">13. GPU 加速</h2>
-
-<p>OpenTune 支持 GPU 加速声码器推理，可显著提升渲染速度。</p>
-
-<h3>13.1 支持的平台</h3>
-<ul>
-    <li><strong>Windows</strong>：通过 DirectML 支持 NVIDIA / AMD / Intel GPU</li>
-    <li><strong>macOS</strong>：通过 CoreML 支持 Apple GPU</li>
-    <li>无独立显卡或 GPU 不兼容时自动回退 CPU，不影响使用</li>
-</ul>
-
-<h3>13.2 设置方法</h3>
-<p>在偏好设置 → 共享页面 → 渲染优先级中选择：</p>
-<ul>
-    <li><strong>GPU 优先</strong>（默认）：自动使用 GPU 加速</li>
-    <li><strong>CPU 优先</strong>：强制使用 CPU，适合 GPU 兼容性问题时使用</li>
-</ul>
-
-<h2 id="vst3">14. VST3/ARA 插件模式</h2>
-
-<p>OpenTune VST3 插件通过 ARA2 协议与 DAW 深度集成，实现非破坏性编辑。</p>
-
-<h3>14.1 工作方式</h3>
-<ul>
-    <li>以 VST3 + ARA2 扩展加载到兼容 DAW（如 Studio One、Cubase、Logic Pro）</li>
-    <li>DAW 通过 ARA 协议提供音频源数据，无需导入/导出文件</li>
-    <li>编辑结果实时反映到 DAW 时间线播放中</li>
-    <li>支持宿主传输同步（Play/Stop/Seek）和 BPM 跟随；跳转与播放跟随稳定，播放头不再抖动</li>
-    <li>宿主内连续播放更稳定：不再卡顿或重复同一片段；停止播放后输出立即清空</li>
-    <li>支持 ARA 多 region 绑定，同一 source 的多个 region 共享编辑状态</li>
-    <li>参考自动对齐：ARA 模式下多 region 之间自动对齐参考音高，提升多轨编辑一致性</li>
-    <li>读取与编辑只作用于当前选中的音频段落，多段落工程不再相互干扰；焦点段落就绪前读取按钮暂时不可用</li>
-    <li>修改输入音频后，原始音高曲线自动刷新</li>
-    <li>在宿主中采集的音频段会在音高分析就绪后自动完成渲染，段落不再缺失或延迟显示</li>
-    <li>VST3 插件模式下隐藏项目/导入/导出等 Standalone 专有菜单项</li>
-</ul>
-
-<h3>14.2 与 Standalone 的区别</h3>
-<table>
-    <tr><th>功能</th><th>Standalone</th><th>VST3/ARA</th></tr>
-    <tr><td>多轨道编辑</td><td>✓ 最多 12 轨</td><td>✗ 单素材编辑</td></tr>
-    <tr><td>文件导入/导出</td><td>✓</td><td>✗ （由 DAW 管理）</td></tr>
-    <tr><td>鼠标拖尾</td><td>✓ 8 种主题</td><td>✗</td></tr>
-    <tr><td>自定义快捷键</td><td>✓</td><td>✗（使用 DAW 快捷键）</td></tr>
-    <tr><td>音频设备设置</td><td>✓</td><td>✗（使用 DAW 音频引擎）</td></tr>
-    <tr><td>宿主传输同步</td><td>✗</td><td>✓</td></tr>
+    <tr><th width="30%">功能</th><th width="26%">独立版</th><th>插件</th></tr>
+    <tr><td>多轨道编辑</td><td>✓ 最多 12 轨</td><td>✗ 由宿主管理轨道</td></tr>
+    <tr><td>文件导入/导出</td><td>✓</td><td>✗ 由宿主完成</td></tr>
+    <tr><td>工程保存/打开</td><td>✓</td><td>✗ 随宿主工程保存</td></tr>
+    <tr><td>音频设备设置</td><td>✓</td><td>✗ 使用宿主音频引擎</td></tr>
+    <tr><td>鼠标轨迹</td><td>✓ 8 种可选</td><td>✗</td></tr>
+    <tr><td>实验性功能（时间工具）</td><td>✓</td><td>✗</td></tr>
+    <tr><td>走带控制（播放/停止）</td><td>✓</td><td>✗ 使用宿主走带</td></tr>
     <tr><td>ARA 非破坏性编辑</td><td>✗</td><td>✓</td></tr>
-    <tr><td>钢琴卷帘编辑</td><td>✓</td><td>✓</td></tr>
-    <tr><td>参数面板</td><td>✓</td><td>✓</td></tr>
-    <tr><td>Undo/Redo</td><td>✓</td><td>✓</td></tr>
-    <tr><td>主题切换</td><td>✓</td><td>✓</td></tr>
-    <tr><td>多语言界面</td><td>✓</td><td>✓</td></tr>
+    <tr><td>外部编辑</td><td>✗</td><td>✓</td></tr>
+    <tr><td>钢琴卷帘、参数面板、撤销重做、主题、多语言</td><td>✓</td><td>✓</td></tr>
 </table>
 
-<div class="page-break"></div>
-<h2 id="export">15. 导出音频</h2>
+<div class="note">
+    <div class="note-title">菜单与走带差异</div>
+    <p>插件模式下，文件菜单中与工程和文件相关的项目会隐藏；点击导入或导出会提示在宿主中完成。插件顶部不提供播放、暂停、停止按钮，只保留菜单、时间显示、读取音频、速度显示与更多菜单，播放由宿主走带控制，相关快捷键在插件内不生效。</p>
+</div>
 
-<h3>15.1 导出格式</h3>
+<h2 id="export">16. 导出音频</h2>
+
+<h3>16.1 导出格式</h3>
 <ul>
     <li><strong>格式</strong>：WAV</li>
-    <li><strong>采样率</strong>：44.1kHz</li>
-    <li><strong>位深度</strong>：32-bit Float</li>
-    <li><strong>声道</strong>：单声道（Clip/Track）/ 立体声（Master Mix）</li>
+    <li><strong>采样率</strong>：44.1 kHz</li>
+    <li><strong>位深度</strong>：32 位浮点</li>
+    <li><strong>声道</strong>：片段与轨道为单声道，总线混音为立体声</li>
 </ul>
 
-<h3>15.2 导出选项</h3>
+<h3>16.2 导出范围</h3>
 <table>
-    <tr><th>选项</th><th>说明</th></tr>
-    <tr><td>Export Selected Clip</td><td>仅导出当前选中的音频片段</td></tr>
-    <tr><td>Export Track</td><td>导出指定轨道的所有片段混合</td></tr>
-    <tr><td>Export Bus (Master Mix)</td><td>导出所有轨道的最终混音</td></tr>
+    <tr><th width="30%">选项</th><th>说明</th></tr>
+    <tr><td>导出选中的片段</td><td>只导出当前选中的音频片段，含该片段已应用的修音</td></tr>
+    <tr><td>导出轨道</td><td>导出指定轨道的所有片段混合结果</td></tr>
+    <tr><td>导出总线混音</td><td>导出所有轨道的最终混音</td></tr>
 </table>
 
-<h3>15.3 导出流程</h3>
+<h3>16.3 导出流程</h3>
 <ol>
-    <li>菜单 <strong>File → Export Audio</strong></li>
-    <li>选择导出范围</li>
-    <li>选择保存位置和文件名</li>
-    <li>等待后台渲染完成（进度显示在渲染徽章）</li>
+    <li>菜单 <strong>文件 → 导出音频</strong>，选择导出范围。</li>
+    <li>选择保存位置与文件名。</li>
+    <li>若目标文件已存在，会询问是否覆盖。</li>
+    <li>等待后台合成完成，完成后提示导出文件的完整路径；失败时提示原因。</li>
 </ol>
 
-<h2 id="faq">16. 常见问题</h2>
+<div class="tip">
+    <div class="tip-title">导出前先等渲染结束</div>
+    <p>导出会自动等待所有片段就绪后再写出文件，正在渲染时导出会先排队等待，因此导出前看到「渲染中」徽章属于正常现象。同一时间只能进行一个导出任务。</p>
+</div>
+
+<h2 id="faq">17. 常见问题</h2>
 
 <h3>Q1: 导入音频后没有显示音高曲线？</h3>
-<p><strong>A:</strong> 请确保 <code>models/rmvpe.onnx</code> 存在且完整。音频需包含明显的人声旋律内容。纯伴奏/打击乐无法提取 F0。</p>
+<p><strong>A:</strong> 请确认 <code>C:\ProgramData\OpenTune\Models\fcpe.onnx</code> 存在且完整。音频需要包含清晰的人声旋律，纯伴奏或打击乐无法得到有效的音高数据。若分析失败，界面上会有提示，重新导入音频即可重新分析。</p>
 
 <h3>Q2: GPU 加速没有生效？</h3>
-<p><strong>A:</strong> 检查以下几点：</p>
+<p><strong>A:</strong> 依次检查：</p>
 <ul>
-    <li>确保 <code>DirectML.dll</code> 在程序目录中</li>
-    <li>确认 GPU 驱动程序已更新到最新版本</li>
-    <li>在偏好设置中确认"渲染优先级"设为 GPU 优先</li>
-    <li>查看日志文件确认 DML provider 是否成功加载</li>
+    <li>程序目录中有 <code>DirectML.dll</code>，<code>D3D12</code> 文件夹完整</li>
+    <li>显卡驱动为最新版本</li>
+    <li>偏好设置 → 音频 → 渲染优先级为 GPU 优先</li>
+    <li>日志目录中的记录显示显卡加速已加载</li>
 </ul>
 
-<h3>Q3: 内存占用很高？</h3>
-<p><strong>A:</strong> v1.7 已优化内存管理——F0 模型用完自动释放。如仍偏高，可尝试：关闭 GPU 加速（GPU session 会占用额外显存）、减少同时打开的轨道数量。</p>
+<h3>Q3: 渲染中播放听到的还是原声？</h3>
+<p><strong>A:</strong> 这是正常状态。修改音高、移调或打开工程后需要重新合成，渲染完成前播放的是原始音高，右上角显示「渲染中（已完成/总数）」。徽章消失后播放即为修正后的声音。</p>
 
-<h3>Q4: 修正后的音质有异常？</h3>
-<p><strong>A:</strong> 可能原因：声码器模型文件损坏（重新下载）、Retune Speed 设置过高（降低到 30% 以下试试）、原始录音质量较差。</p>
+<h3>Q4: 找不到时间工具？</h3>
+<p><strong>A:</strong> 时间工具属于实验性功能，需在偏好设置 → 音频中勾选「启用实验性功能（伸缩工具）」，工具区才会出现时间工具按钮。该功能不提供插件版本。</p>
 
-<h3>Q5: 如何实现自然的修音效果？</h3>
+<h3>Q5: 修正后的音质有异常？</h3>
+<p><strong>A:</strong> 可能原因：模型文件损坏（重新安装即可恢复）、校正速度过高（可降到 30% 以下试试）、原始录音质量较差。改用较低的校正速度和较少的改动，声音会更接近原始演唱。</p>
+
+<h3>Q6: 如何实现自然的修音效果？</h3>
 <ul>
-    <li>使用较低的 Retune Speed（10–30%）</li>
-    <li>保留原始颤音，不添加人工 Vibrato</li>
-    <li>使用 LineAnchor 工具精细调整关键位置</li>
-    <li>选择"OpenTune 编辑"方案获得更精细的控制</li>
+    <li>使用较低的校正速度（10%–30%）</li>
+    <li>保留原始颤音，不额外添加人工颤音</li>
+    <li>用锚点工具精细调整关键位置，只改需要改的地方</li>
+    <li>开启混合模式，让小修正保留原始质感</li>
 </ul>
 
-<h3>Q6: VST3 插件在 DAW 中无法加载？</h3>
-<p><strong>A:</strong> 确保 <code>OpenTune.vst3</code> 文件夹完整（包含 Contents/x86_64-win/ 子目录），且 ONNX 运行时 DLL 和模型文件在正确位置。在 DAW 中重新扫描 VST3 目录。</p>
+<h3>Q7: 插件在 DAW 中无法加载？</h3>
+<p><strong>A:</strong> 确认 <code>OpenTune.vst3</code> 文件夹完整（包含 <code>Contents\x86_64-win\</code> 子目录），模型文件位于 <code>C:\ProgramData\OpenTune\Models</code>。安装后重新扫描宿主的 VST3 目录；使用 ARA 功能时宿主版本需支持 ARA2。</p>
 
-<h3>Q7: 如何切换界面语言？</h3>
-<p><strong>A:</strong> 偏好设置 → 语言（Language），选择目标语言后界面立即切换。支持中文、英文、日文、俄文、西班牙文。</p>
+<h3>Q8: 插件里点了读取音频没有反应？</h3>
+<p><strong>A:</strong> 支持 ARA 的宿主需要先在宿主中选中一个音频事件；未选中或事件尚未准备好时会提示重新选择。不支持 ARA 的宿主需要先点击「读取音频」再开始宿主播放，播放结束后再次点击停止采集。</p>
 
-<h3>Q8: 渲染或音高分析失败时怎么办？</h3>
-<p><strong>A:</strong> 软件会弹出诊断提示（如“渲染失败，可能回退干声”），其中包含日志文件路径与最近的日志内容，可直接复制反馈。日志目录：Windows <code>%APPDATA%\OpenTune\Logs</code>，macOS <code>~/Library/OpenTune/Logs/</code>。</p>
+<h3>Q9: 如何切换界面语言？</h3>
+<p><strong>A:</strong> 偏好设置 → 主题 → 界面语言，选择目标语言后界面立即切换。支持中文、英文、日文、俄文、西班牙文。</p>
+
+<h3>Q10: 渲染或音高分析失败时怎么办？</h3>
+<p><strong>A:</strong> 软件会弹出诊断提示（如「渲染失败，可能使用干声。原因：…」），其中包含日志文件路径与最近的日志内容，可直接复制反馈。日志目录：Windows <code>%APPDATA%\OpenTune\Logs</code>，macOS <code>~/Library/OpenTune/Logs/</code>。</p>
+
+<h3>Q11: 保存的工程换电脑后打不开音频？</h3>
+<p><strong>A:</strong> 保存工程时，软件会在工程文件旁建立同名的「工程名_Media」文件夹并复制用到的音频。移动工程时请把 <code>.otproj</code> 文件与同名 <code>_Media</code> 文件夹一起复制。</p>
+
+<h3>Q12: 快捷键没有反应？</h3>
+<p><strong>A:</strong> 先确认焦点在钢琴卷帘或编曲视图上；插件内播放、暂停、停止由宿主控制，这三个快捷键不响应。若某个按键与系统或其他软件冲突，可在偏好设置 → 快捷键中改用滚轮或鼠标侧键。</p>
 
 <hr>
 
 <footer>
-    <p>OpenTune v1.7 — AI 智能修音软件 | 开源免费 | AGPL v3.0 许可证</p>
+    <p>OpenTune v1.8.3 — AI 智能修音软件 | 开源免费 | AGPL v3.0 许可证</p>
     <p>感谢 DiffSinger 开源社区及所有贡献者</p>
 </footer>
 
