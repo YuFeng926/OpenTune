@@ -3473,20 +3473,40 @@ void OpenTuneAudioProcessorEditor::showPreferencesDialog()
         false);
 }
 
+namespace {
+
+// 帮助菜单按界面语言打开随包发布的对应手册；缺少对应文件时回退到中文版。
+juce::String userGuideFileNameFor(Language language)
+{
+    switch (language)
+    {
+        case Language::English:  return "UserGuide_en.html";
+        case Language::Japanese: return "UserGuide_ja.html";
+        case Language::Russian:  return "UserGuide_ru.html";
+        case Language::Spanish:  return "UserGuide_es.html";
+        default:                 return "UserGuide.html";
+    }
+}
+
+} // namespace
+
 void OpenTuneAudioProcessorEditor::helpRequested()
 {
+    auto exeFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+    auto exeDir = exeFile.getParentDirectory();
 #if JUCE_MAC
     // macOS: docs are in Contents/Resources/docs/ (executable is in Contents/MacOS/)
-    auto exeFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    auto exeDir = exeFile.getParentDirectory();
-    auto helpFile = exeDir.getParentDirectory().getChildFile("Resources").getChildFile("docs").getChildFile("UserGuide.html");
+    const auto docsDir = exeDir.getParentDirectory().getChildFile("Resources").getChildFile("docs");
 #else
     // Windows: docs are alongside the executable
-    auto exeFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
-    auto exeDir = exeFile.getParentDirectory();
-    auto helpFile = exeDir.getChildFile("docs").getChildFile("UserGuide.html");
+    const auto docsDir = exeDir.getChildFile("docs");
 #endif
-    
+
+    auto helpFile = docsDir.getChildFile(
+        userGuideFileNameFor(LocalizationManager::getInstance().resolveLanguage()));
+    if (!helpFile.exists())
+        helpFile = docsDir.getChildFile("UserGuide.html");
+
     if (helpFile.exists())
     {
         helpFile.startAsProcess();
