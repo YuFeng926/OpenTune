@@ -5,12 +5,12 @@
 #define MyAppName "OpenTune"
 #define MyAppShortName "OpenTune"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.8.2-beta"
+  #define MyAppVersion "1.8.3"
 #endif
 ; 数值核心版本：VERSION 资源、VersionInfoVersion 与装机校验基准必须纯数字，
 ; 与 CMake project() 的 VERSION 一致。
 #ifndef MyAppNumericVersion
-  #define MyAppNumericVersion "1.8.2"
+  #define MyAppNumericVersion "1.8.3"
 #endif
 #define MyAppPublisher "DAYA"
 #define MyAppURL "https://github.com/YuFeng926/OpenTune"

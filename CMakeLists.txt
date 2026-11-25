@@ -45,11 +45,11 @@ endif()
 # ==============================================================================
 # Project Definition
 # ==============================================================================
-project(OpenTune VERSION 1.8.2 LANGUAGES CXX C)
+project(OpenTune VERSION 1.8.3 LANGUAGES CXX C)
 
 # 产品版本串：上面的数值核心供给版本码与资源（必须纯数字），产品串携带
 # 预发布限定符，用于 Control API 自报、启动日志、工程持久化与安装包标识。
-set(OPENTUNE_PRODUCT_VERSION "1.8.2-beta")
+set(OPENTUNE_PRODUCT_VERSION "1.8.3")
 
 # 为 clangd/LSP 导出编译数据库（compile_commands.json）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
