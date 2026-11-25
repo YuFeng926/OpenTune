@@ -239,10 +239,13 @@ jobs:
       - name: Download and verify VC++ Redistributable
         shell: powershell
         run: |
+          # Microsoft Visual C++ Redistributable 14.52.37029.0, content-addressed by the Microsoft CDN.
+          # The aka.ms/vc14 short link is a floating alias that moves with every Visual Studio update.
+          $url = 'https://download.visualstudio.microsoft.com/download/pr/78d061c5-9ef3-42ab-98ed-3309d1095dc4/9C02C9ED120F671B900E6B9471D890E3B2414117A7E53F4AE2E855466FA2B7C9/VC_redist.x64.exe'
           New-Item -ItemType Directory -Force -Path Installer\redist | Out-Null
-          curl.exe -fsSL --retry 5 --retry-delay 2 -o Installer\redist\VC_redist.x64.exe https://aka.ms/vc14/vc_redist.x64.exe
+          curl.exe -fsSL --retry 5 --retry-delay 2 -o Installer\redist\VC_redist.x64.exe $url
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $expected = '843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c'
+          $expected = '9c02c9ed120f671b900e6b9471d890e3b2414117a7e53f4ae2e855466fa2b7c9'
           $actual = (Get-FileHash Installer\redist\VC_redist.x64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) {
             throw "VC_redist SHA-256 mismatch: expected $expected, got $actual"

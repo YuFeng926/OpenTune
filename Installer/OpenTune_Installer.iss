@@ -138,7 +138,8 @@ Source: "{#VST3BuildDir}\VST3\OpenTune.vst3\*"; DestDir: "{code:GetVST3Dir}\Open
 Source: "{#VST3BuildDir}\VST3\OpenTune.vst3\*"; DestDir: "{commoncf}\ARA\OpenTune.vst3"; Components: vst3plugin; Excludes: "Contents\x86_64-win\models"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Microsoft Visual C++ v14 x64 Redistributable prerequisite.
-; Official source: https://aka.ms/vc14/vc_redist.x64.exe
+; Source: Microsoft CDN, vc_redist.x64.exe 14.52.37029.0, downloaded by the release workflow
+; from https://download.visualstudio.microsoft.com/download/pr/78d061c5-9ef3-42ab-98ed-3309d1095dc4/
 ; Extracted and executed by PrepareToInstall before OpenTune files are installed.
 Source: "redist\VC_redist.x64.exe"; Flags: dontcopy
 
