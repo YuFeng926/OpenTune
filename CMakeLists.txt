@@ -302,10 +302,11 @@ elseif(OPENTUNE_IOS)
     endif()
 
 elseif(APPLE)
-    # ---- macOS: project-built ONNX Runtime 1.20.0 universal2 ----
-    # The runtime is built from the upstream v1.20.0 source with CoreML
-    # enabled and CMAKE_OSX_DEPLOYMENT_TARGET=12.0. The project-built package
-    # is required because the upstream prebuilt macOS package targets 13.3+.
+    # ---- macOS: ONNX Runtime 1.20.0 universal2 ----
+    # The runtime is assembled by scripts/build-onnxruntime-macos.sh from the
+    # 1.8.2 macOS package (built from upstream v1.20.0 with CoreML and a 12.0
+    # deployment target) plus the official 1.20.0 NuGet headers. The upstream
+    # prebuilt macOS package targets 13.3+, so it cannot be used here.
     set(OPENTUNE_ONNXRUNTIME_VERSION "1.20.0")
 
     set(OPENTUNE_DEFAULT_ONNXRUNTIME_ROOT
@@ -340,8 +341,8 @@ if(OPENTUNE_MACOS)
     if(NOT EXISTS "${ONNXRUNTIME_DYLIB}")
         message(FATAL_ERROR
             "ONNX Runtime dylib not found at ${ONNXRUNTIME_DYLIB}. "
-            "Place the project-built onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION} "
-            "package under ThirdParty/ (see scripts/build-onnxruntime-macos.sh).")
+            "Run scripts/build-onnxruntime-macos.sh to assemble "
+            "onnxruntime-osx-universal2-${OPENTUNE_ONNXRUNTIME_VERSION} under ThirdParty/.")
     endif()
 endif()
 

@@ -87,10 +87,12 @@ git clone --branch 2.3.2 https://codeberg.org/soundtouch/soundtouch.git ThirdPar
 
 | 包 | 链接 | 解压到 |
 |----|------|--------|
-| ONNX Runtime CPU | [onnxruntime-win-x64-1.24.4.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
+| ONNX Runtime CPU | [Microsoft.ML.OnnxRuntime.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.24.4) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
 | ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.24.4) | `ThirdParty/onnxruntime-dml-1.24.4/` |
 
 > **提示：** 将 `.nupkg` 改名为 `.zip` 后解压。
+>
+> CPU 包的上游 GitHub 发布件（`onnxruntime-win-x64-1.24.4.zip`）已不再提供，改为取 NuGet 包：把包内 `build/native/include/` 的内容放入 `include/`，`runtimes/win-x64/native/` 的内容放入 `lib/`。`scripts/github_actions/fetch-windows-deps.ps1` 会自动完成这一步并校验 SHA-256。
 
 **目录结构说明（关键路径）：**
 
@@ -117,28 +119,29 @@ ThirdParty/
 
 **macOS（Intel / Apple Silicon 通用）**：
 
-macOS 两个架构共用同一个 **universal2** 包（x86_64 + arm64 双架构，CoreML EP 已内置），版本固定为 **1.20.0**。项目不直接使用官方 macOS 预编译包，而是从 ORT v1.20.0 源码分别构建 arm64/x86_64，并以 `CMAKE_OSX_DEPLOYMENT_TARGET = 12.0` 合并为 universal2；这样保留 macOS 12 兼容性，同时包含 macOS 15 CoreML 配置初始化修复。
+macOS 两个架构共用同一个 **universal2** 包（x86_64 + arm64 双架构，CoreML EP 已内置），版本固定为 **1.20.0**。上游 ONNX Runtime 仓库与 macOS 预编译包已不可获取，官方 macOS 二进制要求 macOS 13.0 以上；为保留 macOS 12 支持，脚本从项目自己发布的 **OpenTune 1.8.2 macOS 安装包**（由 ONNX Runtime v1.20.0 以 CoreML 与 12.0 部署目标构建）中取出 universal2 动态库，公共头文件取自官方 **Microsoft.ML.OnnxRuntime 1.20.0** NuGet 包。两个输入都以 SHA-256 固定。该运行库由 ONNX Runtime v1.20.0 源码构建，包含 macOS 15 所需的 CoreML 初始化修复。
 
 ```bash
 ./scripts/build-onnxruntime-macos.sh
 ```
 
-首次构建需要下载 ORT 源码及子模块，耗时可能较长。若需清理该脚本创建的源码、构建和输出目录后重建：
+首次运行需要下载 1.8.2 macOS 安装包（约 403 MB）与 NuGet 包（约 104 MB），之后复用已校验的缓存。若需清理输入缓存与输出目录后重新组装：
 
 ```bash
 ./scripts/build-onnxruntime-macos.sh --clean
 ```
 
-解压后结构：
+组装后结构：
 ```
 ThirdParty/onnxruntime-osx-universal2-1.20.0/
 ├── include/
 │   └── onnxruntime_cxx_api.h
-└── lib/
-    └── libonnxruntime.1.20.0.dylib
+├── lib/
+│   └── libonnxruntime.1.20.0.dylib
+└── SOURCE.txt               ← 输入包来源与 SHA-256
 ```
 
-> **CoreML 注册路径**：macOS 12 使用 `NeuralNetwork` 格式，macOS 13+ 使用 `MLProgram` 格式；两者都使用 `MLComputeUnits=ALL`。项目通过 `Source/Inference/OnnxRuntimeProviderCompat.h` 直接调用 ORT 的 CoreML flag API 注册 provider。日志中会明确显示 `NeuralNetwork/macOS 12` 或 `MLProgram/macOS 13+`。
+> **CoreML 注册路径**：macOS 12 使用 `NeuralNetwork` 格式，macOS 13+ 使用 `MLProgram` 格式；两者都使用 `MLComputeUnits=ALL`。项目通过 `Source/Inference/OnnxRuntimeProviderCompat.h` 直接调用 ORT 的 CoreML flag API 注册 provider（该头文件内声明了 CoreML provider 的两个公开符号）。日志中会明确显示 `NeuralNetwork/macOS 12` 或 `MLProgram/macOS 13+`。
 
 ### 5. DirectML & DirectX Agility SDK（仅 Windows）
 

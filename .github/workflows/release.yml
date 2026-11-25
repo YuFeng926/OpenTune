@@ -140,7 +140,7 @@ jobs:
           path: ThirdParty/onnxruntime-osx-universal2-1.20.0
           key: onnxruntime-osx-universal2-1.20.0-${{ hashFiles('scripts/build-onnxruntime-macos.sh') }}
 
-      - name: Build ONNX Runtime universal2 from source
+      - name: Assemble ONNX Runtime universal2
         if: steps.ort-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-onnxruntime-macos.sh
 
@@ -148,10 +148,7 @@ jobs:
         if: always()
         run: |
           rm -rf \
-            ThirdParty/.onnxruntime-1.20.0-src \
-            ThirdParty/.onnxruntime-1.20.0-build \
-            ThirdParty/.eigen-e7248b26a1ed53fa030c5c459f7ea095dfd276ac \
-            ThirdParty/.eigen-e7248b26a1ed53fa030c5c459f7ea095dfd276ac.zip
+            ThirdParty/.onnxruntime-1.20.0-package
 
       - name: Import Developer ID certificates
         env:

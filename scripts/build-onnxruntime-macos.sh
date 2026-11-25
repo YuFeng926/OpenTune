@@ -1,27 +1,32 @@
 #!/bin/bash
-# Build the macOS ONNX Runtime dependency used by OpenTune.
+# Assemble the macOS ONNX Runtime dependency used by OpenTune.
 #
-# The upstream macOS 1.20.0 binary package has a macOS 13.3 deployment target.
-# OpenTune needs macOS 12.0, so this script builds the same upstream tag from
-# source twice and combines the arm64/x86_64 libraries into one universal2
-# package. v1.20.0 includes the CoreML MLModelConfiguration initialization fix
-# for macOS 15 and newer.
+# Microsoft no longer serves the ONNX Runtime source repository or its macOS
+# packages, and every published macOS ONNX Runtime binary requires macOS 13.0
+# or newer while OpenTune still supports macOS 12.0. The universal2 library is
+# therefore taken from the macOS package this project published for 1.8.2 —
+# built from ONNX Runtime v1.20.0 with CoreML and a macOS 12.0 deployment
+# target — and the public headers come from the official 1.20.0 NuGet package.
+#
+# Both inputs are pinned by SHA-256: the package digest published by GitHub for
+# the release asset, and the digest of the immutable NuGet package.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="1.20.0"
-TAG="v${VERSION}"
 THIRDPARTY_DIR="${ROOT_DIR}/ThirdParty"
-SOURCE_DIR="${THIRDPARTY_DIR}/.onnxruntime-${VERSION}-src"
-BUILD_ROOT="${THIRDPARTY_DIR}/.onnxruntime-${VERSION}-build"
+WORK_DIR="${THIRDPARTY_DIR}/.onnxruntime-${VERSION}-package"
 OUTPUT_DIR="${THIRDPARTY_DIR}/onnxruntime-osx-universal2-${VERSION}"
-EIGEN_REV="e7248b26a1ed53fa030c5c459f7ea095dfd276ac"
-# GitLab regenerated the archive metadata after ORT v1.20.0 was published;
-# this is the current archive hash for the same immutable Eigen revision.
-EIGEN_SHA1="32b145f525a8308d7ab1c09388b2e288312d8eba"
-EIGEN_DIR="${THIRDPARTY_DIR}/.eigen-${EIGEN_REV}"
-EIGEN_ARCHIVE="${THIRDPARTY_DIR}/.eigen-${EIGEN_REV}.zip"
-EIGEN_URL="https://gitlab.com/libeigen/eigen/-/archive/${EIGEN_REV}/eigen-${EIGEN_REV}.zip"
+
+PKG_NAME="OpenTune-1.8.2-macOS-Universal2.pkg"
+PKG_URL="https://github.com/YuFeng926/OpenTune/releases/download/OpenTuneV1.8.2/${PKG_NAME}"
+PKG_SHA256="ee602d3d2be09e1db18f475ac54e7d50ac8f33015f4830ba5ea58d8d2de3686f"
+
+NUPKG_NAME="microsoft.ml.onnxruntime.${VERSION}.nupkg"
+NUPKG_URL="https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/${VERSION}"
+NUPKG_SHA256="36dbafacb1bc532e92d02371bd70582a61105872561fc9982314854d1c7ebf72"
+
+MAX_MIN_OS="12.0"
 
 CLEAN=false
 for arg in "$@"; do
@@ -29,7 +34,7 @@ for arg in "$@"; do
         --clean) CLEAN=true ;;
         -h|--help)
             echo "用法: $0 [--clean]"
-            echo "  --clean  删除本脚本创建的 ORT 源码/构建/输出目录后重建"
+            echo "  --clean  删除缓存的输入包与输出目录后重新组装"
             exit 0
             ;;
         *)
@@ -44,7 +49,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
-for cmd in git python3 cmake curl unzip shasum lipo otool install_name_tool; do
+for cmd in curl shasum pkgutil unzip lipo otool install_name_tool codesign file find; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "❌ 缺少工具: $cmd"
         exit 1
@@ -54,146 +59,91 @@ done
 mkdir -p "$THIRDPARTY_DIR"
 
 if [ "$CLEAN" = true ]; then
-    rm -rf "$SOURCE_DIR" "$BUILD_ROOT" "$OUTPUT_DIR" "$EIGEN_DIR" "$EIGEN_ARCHIVE"
+    rm -rf "$WORK_DIR" "$OUTPUT_DIR"
 fi
+mkdir -p "$WORK_DIR"
 
-if [ ! -d "${SOURCE_DIR}/.git" ]; then
-    echo "▶ 获取 ONNX Runtime ${TAG} 源码（含子模块）"
-    rm -rf "$SOURCE_DIR"
-    git clone --depth 1 --branch "$TAG" --recurse-submodules \
-        https://github.com/microsoft/onnxruntime.git "$SOURCE_DIR"
-else
-    actual_tag="$(git -C "$SOURCE_DIR" describe --tags --exact-match HEAD 2>/dev/null || true)"
-    if [ "$actual_tag" != "$TAG" ]; then
-        echo "❌ ORT 源码目录不是 ${TAG}: ${SOURCE_DIR}"
-        echo "   请使用 --clean 重新获取固定版本。"
+fetch_verified() {
+    local url="$1"
+    local destination="$2"
+    local expected="$3"
+    local label="$4"
+
+    if [ -f "$destination" ]; then
+        local cached
+        cached="$(shasum -a 256 "$destination" | awk '{ print $1 }')"
+        if [ "$cached" = "$expected" ]; then
+            echo "▶ 复用已验证的 ${label}"
+            return 0
+        fi
+        echo "▶ ${label} 缓存校验失败，重新下载"
+        rm -f "$destination"
+    fi
+
+    echo "▶ 下载 ${label}"
+    curl -L --fail --retry 5 --retry-delay 2 --silent --show-error \
+        "$url" -o "$destination"
+    local actual
+    actual="$(shasum -a 256 "$destination" | awk '{ print $1 }')"
+    if [ "$actual" != "$expected" ]; then
+        echo "❌ ${label} SHA-256 校验失败: ${actual}"
+        rm -f "$destination"
         exit 1
     fi
-fi
-
-if [ ! -d "$EIGEN_DIR" ]; then
-    echo "▶ 获取 Eigen ${EIGEN_REV}（规避 CMake 4.x 对 GitLab 下载的兼容问题）"
-    if [ ! -f "$EIGEN_ARCHIVE" ]; then
-        curl -L --fail --retry 5 --retry-delay 2 --silent --show-error \
-            "$EIGEN_URL" -o "$EIGEN_ARCHIVE"
-    fi
-    actual_eigen_sha1="$(shasum -a 1 "$EIGEN_ARCHIVE" | awk '{ print $1 }')"
-    if [ "$actual_eigen_sha1" != "$EIGEN_SHA1" ]; then
-        echo "❌ Eigen SHA-1 校验失败: ${actual_eigen_sha1}"
-        rm -f "$EIGEN_ARCHIVE"
-        exit 1
-    fi
-    rm -rf "${THIRDPARTY_DIR}/eigen-${EIGEN_REV}" "$EIGEN_DIR"
-    unzip -q "$EIGEN_ARCHIVE" -d "$THIRDPARTY_DIR"
-    mv "${THIRDPARTY_DIR}/eigen-${EIGEN_REV}" "$EIGEN_DIR"
-fi
-
-# NCols4 is fixed at 4, but discarded "if constexpr (NCols4 == 8)" branches still
-# index acc[4..7]. Apple Clang reports that as -Werror,-Warray-bounds.
-python3 - "${SOURCE_DIR}/onnxruntime/core/mlas/lib/sqnbitgemm_kernel_avx2_int8_blklen32.h" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-marker = "OpenTune suppresses clang -Warray-bounds"
-if marker in text:
-    raise SystemExit(0)
-anchor = '#include "sqnbitgemm_kernel_avx_common.h"\n'
-pragma = (
-    anchor
-    + "\n// "
-    + marker
-    + " in discarded NCols4 == 8 branches.\n"
-    + "#if defined(__clang__)\n"
-    + '#pragma clang diagnostic ignored "-Warray-bounds"\n'
-    + "#endif\n"
-)
-if anchor not in text:
-    raise SystemExit(f"MLAS header layout changed: {path}")
-path.write_text(text.replace(anchor, pragma, 1))
-PY
-
-build_arch() {
-    local arch="$1"
-    local build_dir="${BUILD_ROOT}/${arch}"
-    local library
-
-    mkdir -p "$BUILD_ROOT"
-    echo "▶ 构建 ONNX Runtime ${VERSION} (${arch}, CoreML, macOS 12.0)"
-    python3 "${SOURCE_DIR}/tools/ci_build/build.py" \
-        --build_dir "$build_dir" \
-        --config Release \
-        --parallel 0 \
-        --skip_tests \
-        --build_shared_lib \
-        --use_coreml \
-        --osx_arch "$arch" \
-        --apple_deploy_target 12.0 \
-        --cmake_extra_defines \
-            onnxruntime_BUILD_UNIT_TESTS=OFF \
-            CMAKE_POLICY_VERSION_MINIMUM=3.5 \
-            onnxruntime_USE_PREINSTALLED_EIGEN=ON \
-            eigen_SOURCE_PATH="$EIGEN_DIR" \
-            CMAKE_CXX_FLAGS="-Wno-unknown-warning-option -Wno-deprecated-literal-operator -Wno-dangling-capture"
-
-    library="$(find "$build_dir" -type f \
-        \( -name "libonnxruntime.${VERSION}.dylib" -o -name "libonnxruntime.dylib" \) \
-        -print -quit)"
-    if [ -z "$library" ]; then
-        echo "❌ 未找到 ${arch} ONNX Runtime dylib: ${build_dir}"
-        exit 1
-    fi
-    printf '%s\n' "$library"
 }
 
-ARM64_LIB="$(build_arch arm64 | tail -1)"
-X86_64_LIB="$(build_arch x86_64 | tail -1)"
+PKG_FILE="${WORK_DIR}/${PKG_NAME}"
+NUPKG_FILE="${WORK_DIR}/${NUPKG_NAME}"
+fetch_verified "$PKG_URL" "$PKG_FILE" "$PKG_SHA256" "OpenTune 1.8.2 macOS 安装包"
+fetch_verified "$NUPKG_URL" "$NUPKG_FILE" "$NUPKG_SHA256" "ONNX Runtime ${VERSION} NuGet 包"
+
+EXPAND_DIR="${WORK_DIR}/expanded"
+if [ ! -d "$EXPAND_DIR" ]; then
+    echo "▶ 展开安装包"
+    rm -rf "$EXPAND_DIR"
+    pkgutil --expand-full "$PKG_FILE" "$EXPAND_DIR"
+fi
+
+SOURCE_LIB="$(find "$EXPAND_DIR" -type f -name "libonnxruntime.${VERSION}.dylib" -print -quit)"
+if [ -z "$SOURCE_LIB" ]; then
+    echo "❌ 安装包中未找到 libonnxruntime.${VERSION}.dylib"
+    exit 1
+fi
+
+NUGET_DIR="${WORK_DIR}/nuget"
+rm -rf "$NUGET_DIR"
+mkdir -p "$NUGET_DIR"
+unzip -q "$NUPKG_FILE" -d "$NUGET_DIR"
 
 echo "▶ 组装 universal2 包: ${OUTPUT_DIR}"
 rm -rf "$OUTPUT_DIR"
 mkdir -p "${OUTPUT_DIR}/include" "${OUTPUT_DIR}/lib"
 
-# The source tree keeps public headers in several subdirectories. The OpenTune
-# CMake target intentionally consumes the same flat include layout as the
-# upstream package; copy only the public headers required by the app so
-# internal headers with duplicate basenames cannot overwrite one another.
-for header_name in \
-        onnxruntime_c_api.h \
-        onnxruntime_cxx_api.h \
-        onnxruntime_cxx_inline.h \
-        onnxruntime_float16.h \
-        onnxruntime_lite_custom_op.h \
-        onnxruntime_run_options_config_keys.h \
-        onnxruntime_session_options_config_keys.h \
-        provider_options.h \
-        coreml_provider_factory.h; do
-    header="$(find "${SOURCE_DIR}/include/onnxruntime" -type f \
-        -name "$header_name" -print -quit)"
-    if [ -z "$header" ]; then
-        echo "❌ 未找到 ORT 公共头文件: ${header_name}"
-        exit 1
-    fi
-    cp "$header" "${OUTPUT_DIR}/include/${header_name}"
-done
-
-if [ ! -f "${OUTPUT_DIR}/include/onnxruntime_cxx_api.h" \
-        ] || [ ! -f "${OUTPUT_DIR}/include/coreml_provider_factory.h" ]; then
-    echo "❌ ORT public headers were not assembled correctly"
+cp "${NUGET_DIR}"/build/native/include/*.h "${OUTPUT_DIR}/include/"
+if [ ! -f "${OUTPUT_DIR}/include/onnxruntime_cxx_api.h" ]; then
+    echo "❌ ONNX Runtime 公共头文件未就位"
     exit 1
 fi
 
 UNIVERSAL_LIB="${OUTPUT_DIR}/lib/libonnxruntime.${VERSION}.dylib"
-lipo -create "$ARM64_LIB" "$X86_64_LIB" -output "$UNIVERSAL_LIB"
+cp "$SOURCE_LIB" "$UNIVERSAL_LIB"
+chmod u+w "$UNIVERSAL_LIB"
 install_name_tool -id "@rpath/libonnxruntime.${VERSION}.dylib" "$UNIVERSAL_LIB"
+codesign --force --sign - "$UNIVERSAL_LIB" >/dev/null 2>&1 || true
 ln -s "libonnxruntime.${VERSION}.dylib" "${OUTPUT_DIR}/lib/libonnxruntime.dylib"
 
-cp "${SOURCE_DIR}/LICENSE" "${OUTPUT_DIR}/LICENSE"
-if [ -f "${SOURCE_DIR}/ThirdPartyNotices.txt" ]; then
-    cp "${SOURCE_DIR}/ThirdPartyNotices.txt" "${OUTPUT_DIR}/ThirdPartyNotices.txt"
-fi
+for notice in LICENSE ThirdPartyNotices.txt; do
+    if [ -f "${NUGET_DIR}/${notice}" ]; then
+        cp "${NUGET_DIR}/${notice}" "${OUTPUT_DIR}/${notice}"
+    fi
+done
 printf '%s\n' "$VERSION" > "${OUTPUT_DIR}/VERSION_NUMBER"
-git -C "$SOURCE_DIR" rev-parse HEAD > "${OUTPUT_DIR}/GIT_COMMIT_ID"
+{
+    echo "onnxruntime=${VERSION}"
+    echo "package=${PKG_NAME}"
+    echo "package_sha256=${PKG_SHA256}"
+    echo "nuget_sha256=${NUPKG_SHA256}"
+} > "${OUTPUT_DIR}/SOURCE.txt"
 
 archs="$(lipo -archs "$UNIVERSAL_LIB")"
 if ! printf '%s\n' "$archs" | tr ' ' '\n' | grep -Fxq arm64 \
@@ -202,15 +152,31 @@ if ! printf '%s\n' "$archs" | tr ' ' '\n' | grep -Fxq arm64 \
     exit 1
 fi
 
+# Every slice must run on the oldest macOS this project supports.
+version_le() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        split(a, x, "."); split(b, y, ".");
+        for (i = 1; i <= 3; ++i) {
+            if (x[i] + 0 < y[i] + 0) exit 0;
+            if (x[i] + 0 > y[i] + 0) exit 1;
+        }
+        exit 0;
+    }'
+}
+
 min_versions="$(otool -l "$UNIVERSAL_LIB" | awk '$1 == "minos" { print $2 }')"
+if [ -z "$min_versions" ]; then
+    echo "❌ 无法读取 ONNX Runtime 最低系统版本"
+    exit 1
+fi
 while IFS= read -r min_version; do
-    if [ "$min_version" != "12.0" ]; then
-        echo "❌ ORT 最低系统版本不是 12.0: ${min_version}"
+    if ! version_le "$min_version" "$MAX_MIN_OS"; then
+        echo "❌ ONNX Runtime 最低系统版本 ${min_version} 高于项目支持的最低版本 ${MAX_MIN_OS}"
         exit 1
     fi
 done <<< "$min_versions"
 
-echo "✅ ONNX Runtime ${VERSION} universal2 已生成"
+echo "✅ ONNX Runtime ${VERSION} universal2 已组装"
 echo "   package: ${OUTPUT_DIR}"
 echo "   arch:    ${archs}"
 echo "   min OS:  ${min_versions//$'\n'/, }"

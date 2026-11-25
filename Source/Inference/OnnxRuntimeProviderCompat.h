@@ -3,10 +3,30 @@
 #if defined(__APPLE__)
 
 #include <onnxruntime_cxx_api.h>
-#include <coreml_provider_factory.h>
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+
+// ONNX Runtime's Core ML provider C API. The macOS dependency is assembled from
+// a released OpenTune package plus the official NuGet header set, and neither
+// carries this provider header, so the declarations OpenTune uses live here.
+// The values match ONNX Runtime 1.20.0's coreml_provider_factory.h.
+extern "C"
+{
+enum
+{
+    COREML_FLAG_USE_NONE = 0x000,
+    COREML_FLAG_USE_CPU_ONLY = 0x001,
+    COREML_FLAG_ENABLE_ON_SUBGRAPH = 0x002,
+    COREML_FLAG_ONLY_ENABLE_DEVICE_WITH_ANE = 0x004,
+    COREML_FLAG_ONLY_ALLOW_STATIC_INPUT_SHAPES = 0x008,
+    COREML_FLAG_CREATE_MLPROGRAM = 0x010,
+};
+
+ORT_EXPORT OrtStatus* ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_CoreML(
+    OrtSessionOptions* options, uint32_t coreml_flags);
+}
 
 namespace OpenTune {
 

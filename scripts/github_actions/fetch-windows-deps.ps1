@@ -14,7 +14,7 @@ $SoundTouchArchiveSha256 = "ed714f84a3e748de87b24f385ec69d3bdc51ca47b7f4710d2048
 $OnnxRuntimeDirectMlSha256 = "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681"
 $DirectMlSha256 = "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9"
 $Direct3DSha256 = "0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6"
-$OnnxRuntimeCpuSha256 = "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357"
+$OnnxRuntimeCpuPackageSha256 = "4b978d5065b85e7004b6c6f60ca494bd978fbe6836cbf0a0b52d82b61ab99638"
 $OnnxRuntimeDmlMtDllSha256 = "402856ef7f06a9c598eef0b14b62a6be242c63908b0811563f0d5d6a13ea2d51"
 
 $Work = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { Join-Path $env:TEMP "opentune-ci" }
@@ -250,25 +250,33 @@ Expand-Nupkg `
     (Join-Path $Root "ThirdParty\microsoft.direct3d.d3d12.1.619.5") `
     $Direct3DSha256
 
-$OrtZip = Join-Path $Work "onnxruntime-win-x64-1.24.4.zip"
+# ONNX Runtime CPU headers and import library. The upstream GitHub release asset
+# for 1.24.4 is no longer served, so take the immutable NuGet package and
+# assemble the same include/ + lib/ layout this repository expects.
+$OrtPackage = Join-Path $Work "microsoft.ml.onnxruntime.1.24.4.nupkg"
 $OrtExtract = Join-Path $Work "onnxruntime-win-x64-1.24.4"
-Save-Url "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip" $OrtZip
-Assert-Sha256 -Path $OrtZip -Expected $OnnxRuntimeCpuSha256 -Label "ONNX Runtime CPU archive"
+Save-Url "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.4" $OrtPackage
+Assert-Sha256 -Path $OrtPackage -Expected $OnnxRuntimeCpuPackageSha256 -Label "ONNX Runtime CPU package"
 if (Test-Path -LiteralPath $OrtExtract) {
     Remove-Item -LiteralPath $OrtExtract -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $OrtExtract | Out-Null
-Invoke-Checked "tar.exe" @("-xf", $OrtZip, "-C", $OrtExtract)
-$header = Get-ChildItem -Path $OrtExtract -Recurse -Filter "onnxruntime_cxx_api.h" | Select-Object -First 1
-if (-not $header) {
-    throw "ONNX Runtime CPU package has no include/onnxruntime_cxx_api.h"
+Invoke-Checked "tar.exe" @("-xf", $OrtPackage, "-C", $OrtExtract)
+$OrtHeaders = Join-Path $OrtExtract "build\native\include"
+$OrtNative = Join-Path $OrtExtract "runtimes\win-x64\native"
+if (-not (Test-Path -LiteralPath (Join-Path $OrtHeaders "onnxruntime_cxx_api.h"))) {
+    throw "ONNX Runtime NuGet package has no build/native/include/onnxruntime_cxx_api.h"
 }
-$packageRoot = $header.Directory.Parent.FullName
+if (-not (Test-Path -LiteralPath (Join-Path $OrtNative "onnxruntime.lib"))) {
+    throw "ONNX Runtime NuGet package has no runtimes/win-x64/native/onnxruntime.lib"
+}
 $ortTarget = Join-Path $Root "ThirdParty\onnxruntime-win-x64-1.24.4"
 if (Test-Path -LiteralPath $ortTarget) {
     Remove-Item -LiteralPath $ortTarget -Recurse -Force
 }
-Move-Item -LiteralPath $packageRoot -Destination $ortTarget
+New-Item -ItemType Directory -Force -Path (Join-Path $ortTarget "include"), (Join-Path $ortTarget "lib") | Out-Null
+Copy-Item -Path (Join-Path $OrtHeaders "*") -Destination (Join-Path $ortTarget "include") -Recurse -Force
+Copy-Item -Path (Join-Path $OrtNative "*") -Destination (Join-Path $ortTarget "lib") -Force
 
 # Replace the upstream NuGet onnxruntime.dll with the project-maintained
 # /MT RelWithDebInfo build tracked under scripts/github_actions/assets/.

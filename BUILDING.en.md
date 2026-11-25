@@ -90,10 +90,12 @@ This project requires **two** ONNX Runtime packages (Windows): the CPU version p
 
 | Package | Link | Extract to |
 |---------|------|------------|
-| ONNX Runtime CPU | [onnxruntime-win-x64-1.24.4.zip](https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
+| ONNX Runtime CPU | [Microsoft.ML.OnnxRuntime.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.24.4) | `ThirdParty/onnxruntime-win-x64-1.24.4/` |
 | ONNX Runtime DirectML | [Microsoft.ML.OnnxRuntime.DirectML.1.24.4.nupkg](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime.DirectML/1.24.4) | `ThirdParty/onnxruntime-dml-1.24.4/` |
 
 > **Tip:** Rename `.nupkg` to `.zip` before extracting.
+>
+> The upstream GitHub release asset for the CPU package (`onnxruntime-win-x64-1.24.4.zip`) is no longer served. Take the NuGet package instead: put the contents of `build/native/include/` into `include/` and the contents of `runtimes/win-x64/native/` into `lib/`. `scripts/github_actions/fetch-windows-deps.ps1` does this automatically and verifies the SHA-256.
 
 **Directory structure (key paths):**
 
@@ -120,20 +122,22 @@ ThirdParty/
 
 **macOS (Intel / Apple Silicon, shared)**:
 
-Both architectures use the same **universal2** package (x86_64 + arm64 slices, CoreML EP built in), pinned to **1.20.0** with a macOS 12.0 deployment target. This project-built runtime includes the CoreML initialization fix required by macOS 15+. Keep using this version; do not replace it with another ORT release.
+Both architectures use the same **universal2** package (x86_64 + arm64 slices, CoreML EP built in), pinned to **1.20.0** with a macOS 12.0 deployment target. The upstream ONNX Runtime repository and its macOS packages are no longer available, and every published macOS ONNX Runtime binary requires macOS 13.0 or newer. To keep macOS 12 support, `scripts/build-onnxruntime-macos.sh` takes the universal2 library from this project's own **OpenTune 1.8.2 macOS package** (built from ONNX Runtime v1.20.0 with CoreML and a 12.0 deployment target) and the public headers from the official **Microsoft.ML.OnnxRuntime 1.20.0** NuGet package. Both inputs are pinned by SHA-256. The runtime was built from ONNX Runtime v1.20.0 source and carries the CoreML initialization fix required by macOS 15 and newer.
 
-The package is located at `ThirdParty/onnxruntime-osx-universal2-1.20.0/`. The repository's `scripts/build-onnxruntime-macos.sh` describes how to recreate it if the dependency is missing.
+The package is assembled at `ThirdParty/onnxruntime-osx-universal2-1.20.0/`:
 
-Extracted structure:
 ```
 ThirdParty/onnxruntime-osx-universal2-1.20.0/
 ├── include/
 │   └── onnxruntime_cxx_api.h
-└── lib/
-    └── libonnxruntime.1.20.0.dylib
+├── lib/
+│   └── libonnxruntime.1.20.0.dylib
+└── SOURCE.txt               ← input package provenance and SHA-256
 ```
 
-> **CoreML registration path**: the project uses `Source/Inference/OnnxRuntimeProviderCompat.h` to register CoreML through ORT's flag-based C API. macOS 12 uses `NeuralNetwork`; macOS 13+ uses `MLProgram` (both with `MLComputeUnits=ALL`).
+Run `./scripts/build-onnxruntime-macos.sh` to assemble it (the first run downloads the 1.8.2 macOS package, about 403 MB, and the NuGet package, about 104 MB), or `./scripts/build-onnxruntime-macos.sh --clean` to discard the cached inputs and rebuild the package.
+
+> **CoreML registration path**: the project uses `Source/Inference/OnnxRuntimeProviderCompat.h` to register CoreML through ORT's flag-based C API; that header declares the two CoreML provider symbols because neither input ships the provider header. macOS 12 uses `NeuralNetwork`; macOS 13+ uses `MLProgram` (both with `MLComputeUnits=ALL`).
 
 ### 5. DirectML & DirectX Agility SDK (Windows only)
 
